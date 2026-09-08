@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <!-- HR module glyph: org-tree of nodes forming a person/org silhouette, coral rose line-art -->
+  <g stroke="#FB7185" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- head cluster -->
+    <circle cx="200" cy="86" r="26" opacity="0.9"/>
+    <circle cx="200" cy="86" r="7" fill="#FB7185" stroke="none"/>
+    <!-- edges head -> shoulders -->
+    <path d="M181 106 L146 158 M219 106 L254 158" opacity="0.75"/>
+    <!-- shoulder nodes -->
+    <circle cx="146" cy="170" r="18" opacity="0.9"/>
+    <circle cx="254" cy="170" r="18" opacity="0.9"/>
+    <circle cx="146" cy="170" r="5" fill="#FB7185" stroke="none"/>
+    <circle cx="254" cy="170" r="5" fill="#FB7185" stroke="none"/>
+    <!-- spine edges -->
+    <path d="M146 188 L146 240 M254 188 L254 240 M146 229 L254 229" opacity="0.55"/>
+    <!-- mid ring nodes (org middle layer) -->
+    <circle cx="146" cy="252" r="13" opacity="0.85"/>
+    <circle cx="254" cy="252" r="13" opacity="0.85"/>
+    <circle cx="200" cy="240" r="13" opacity="0.85"/>
+    <path d="M187 240 L159 246 M213 240 L241 246" opacity="0.55"/>
+    <!-- base row (reports) -->
+    <path d="M146 265 L112 306 M146 265 L180 306 M254 265 L220 306 M254 265 L288 306" opacity="0.5"/>
+    <circle cx="112" cy="316" r="9" opacity="0.8"/>
+    <circle cx="180" cy="316" r="9" opacity="0.8"/>
+    <circle cx="220" cy="316" r="9" opacity="0.8"/>
+    <circle cx="288" cy="316" r="9" opacity="0.8"/>
+  </g>
+</svg>

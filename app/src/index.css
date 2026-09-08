@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    --background: 222 47% 5%;
+    --foreground: 210 40% 96%;
+    --card: 218 39% 11%;
+    --card-foreground: 210 40% 96%;
+    --popover: 218 39% 11%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 239 84% 67%;
+    --radius: 0.625rem;
+    --sidebar-background: 218 39% 11%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-primary: 239 84% 67%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent-foreground: 210 40% 96%;
+    --sidebar-border: 217 33% 17%;
+    --sidebar-ring: 239 84% 67%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-bg-base text-text-primary font-sans antialiased;
+  }
+  ::selection {
+    background: rgba(99, 102, 241, 0.35);
+    color: #f1f5f9;
+  }
+  /* Slim dark scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0b111e;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 9999px;
+    border: 2px solid #0b111e;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #334155;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #1e293b #0b111e;
+  }
+}
+
+@layer utilities {
+  .text-gradient-iris {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(100deg, #818cf8 0%, #38bdf8 100%);
+  }
+  .bg-grid-hairline {
+    background-image:
+      linear-gradient(to right, rgba(30, 41, 59, 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(30, 41, 59, 0.5) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+}

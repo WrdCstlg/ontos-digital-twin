@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <!-- Digital Twin module glyph: a physical asset node mirrored by its glowing twin, linked by a live pulse edge -->
+  <g stroke="#2DD4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- physical asset (left, outline warehouse) -->
+    <path d="M76 268 v-52 l44 -32 l44 32 v52 z" opacity="0.85"/>
+    <path d="M98 268 v-26 h44 v26" opacity="0.55"/>
+    <circle cx="120" cy="184" r="6" fill="#2DD4BF" stroke="none" opacity="0.9"/>
+    <!-- mirror axis -->
+    <path d="M200 96 v208" stroke-dasharray="4 10" opacity="0.35"/>
+    <!-- twin (right, constellation copy) -->
+    <g opacity="0.95">
+      <path d="M236 268 v-52 l44 -32 l44 32 v52 z" stroke-dasharray="7 6" opacity="0.9"/>
+      <path d="M258 268 v-26 h44 v26" stroke-dasharray="5 5" opacity="0.6"/>
+      <circle cx="280" cy="184" r="6" fill="#2DD4BF" stroke="none"/>
+      <circle cx="280" cy="184" r="13" opacity="0.35"/>
+      <circle cx="280" cy="184" r="20" opacity="0.15"/>
+    </g>
+    <!-- live sync edges between asset and twin -->
+    <path d="M126 184 C 152 160, 176 152, 200 152 C 224 152, 248 160, 274 184" stroke-dasharray="8 7" opacity="0.7"/>
+    <path d="M126 268 C 158 292, 242 292, 274 268" stroke-dasharray="8 7" opacity="0.5"/>
+    <!-- telemetry satellites -->
+    <circle cx="200" cy="118" r="4" opacity="0.8"/>
+    <circle cx="164" cy="140" r="3" opacity="0.6"/>
+    <circle cx="236" cy="140" r="3" opacity="0.6"/>
+    <path d="M200 118 v-22 M192 96 h16" opacity="0.7"/>
+    <!-- state ticks -->
+    <path d="M316 220 h28 M316 236 h20 M316 252 h28" opacity="0.5"/>
+  </g>
+</svg>

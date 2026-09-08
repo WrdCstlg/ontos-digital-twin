@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <!-- Logistics module glyph: route polyline connecting three warehouse node clusters, sky line-art -->
+  <g stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- dashed motion route -->
+    <path d="M92 292 C 150 220, 168 200, 200 192 C 244 182, 268 160, 306 118" stroke-dasharray="9 8" opacity="0.6"/>
+    <!-- warehouse cluster 1 (bottom-left) -->
+    <path d="M56 330 v-44 l36 -26 l36 26 v44 z" opacity="0.9"/>
+    <path d="M74 330 v-22 h36 v22" opacity="0.6"/>
+    <circle cx="92" cy="260" r="5" fill="#38BDF8" stroke="none"/>
+    <!-- warehouse cluster 2 (center) -->
+    <path d="M164 224 v-40 l36 -26 l36 26 v40 z" opacity="0.9"/>
+    <path d="M182 224 v-20 h36 v20" opacity="0.6"/>
+    <circle cx="200" cy="158" r="5" fill="#38BDF8" stroke="none"/>
+    <!-- warehouse cluster 3 (top-right) -->
+    <path d="M272 152 v-40 l36 -26 l36 26 v40 z" opacity="0.9"/>
+    <path d="M290 152 v-20 h36 v20" opacity="0.6"/>
+    <circle cx="308" cy="86" r="5" fill="#38BDF8" stroke="none"/>
+    <!-- satellite nodes on route -->
+    <circle cx="148" cy="238" r="4" opacity="0.8"/>
+    <circle cx="252" cy="170" r="4" opacity="0.8"/>
+    <!-- direction arrowhead -->
+    <path d="M296 128 l14 -16 M306 112 h-14 M306 112 v14" opacity="0.9"/>
+  </g>
+</svg>

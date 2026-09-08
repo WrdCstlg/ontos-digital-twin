@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <!-- Compliance module glyph: shield of connected nodes with checkmark, emerald line-art -->
+  <g stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- shield outline segments between perimeter nodes -->
+    <path d="M200 64 L296 108 M296 108 L296 208 M296 208 C 296 268, 256 310, 200 336 M200 336 C 144 310, 104 268, 104 208 M104 208 L104 108 M104 108 L200 64" opacity="0.9"/>
+    <!-- perimeter nodes -->
+    <circle cx="200" cy="64" r="7" fill="#34D399" stroke="none"/>
+    <circle cx="296" cy="108" r="6" opacity="0.9"/>
+    <circle cx="296" cy="208" r="6" opacity="0.9"/>
+    <circle cx="200" cy="336" r="7" fill="#34D399" stroke="none"/>
+    <circle cx="104" cy="208" r="6" opacity="0.9"/>
+    <circle cx="104" cy="108" r="6" opacity="0.9"/>
+    <!-- inner spokes to center -->
+    <path d="M200 64 L200 120 M296 108 L244 148 M104 108 L156 148" opacity="0.4"/>
+    <circle cx="200" cy="120" r="4" opacity="0.8"/>
+    <circle cx="244" cy="148" r="4" opacity="0.8"/>
+    <circle cx="156" cy="148" r="4" opacity="0.8"/>
+    <!-- checkmark -->
+    <path d="M156 208 L188 242 L252 164" stroke-width="6" opacity="0.95"/>
+  </g>
+</svg>

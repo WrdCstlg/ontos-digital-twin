@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Ontos mark: hexagon of 6 nodes, 5 edges, top-right node glowing iris -->
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <!-- 5 edges (gap between bottom-left and left vertices) -->
+    <path d="M32 10 L51.05 21 M51.05 21 L51.05 43 M51.05 43 L32 54 M32 54 L12.95 43" stroke="#64748B" stroke-width="2"/>
+    <!-- nodes: slate-500 outline -->
+    <circle cx="32" cy="10" r="4.5" stroke="#64748B" stroke-width="2" fill="#0B111E"/>
+    <circle cx="51.05" cy="43" r="4.5" stroke="#64748B" stroke-width="2" fill="#0B111E"/>
+    <circle cx="32" cy="54" r="4.5" stroke="#64748B" stroke-width="2" fill="#0B111E"/>
+    <circle cx="12.95" cy="43" r="4.5" stroke="#64748B" stroke-width="2" fill="#0B111E"/>
+    <circle cx="12.95" cy="21" r="4.5" stroke="#64748B" stroke-width="2" fill="#0B111E"/>
+    <!-- glowing iris node (top-right) -->
+    <circle cx="51.05" cy="21" r="8" fill="#818CF8" opacity="0.18"/>
+    <circle cx="51.05" cy="21" r="4.5" stroke="#818CF8" stroke-width="2" fill="#818CF8"/>
+  </g>
+</svg>

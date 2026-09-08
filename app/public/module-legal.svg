@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <!-- Legal module glyph: two overlapping document outlines linked by an edge, violet line-art -->
+  <g stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- back document -->
+    <path d="M118 92 h112 l40 40 v176 h-152 z" opacity="0.55"/>
+    <path d="M230 92 v40 h40" opacity="0.55"/>
+    <path d="M140 140 h84 M140 168 h84 M140 196 h60" opacity="0.35"/>
+    <!-- front document -->
+    <path d="M158 128 h112 l40 40 v176 h-152 z" opacity="0.9"/>
+    <path d="M270 128 v40 h40" opacity="0.9"/>
+    <path d="M180 176 h84 M180 204 h84 M180 232 h84 M180 260 h56" opacity="0.45"/>
+    <!-- node hinges -->
+    <circle cx="158" cy="128" r="5" fill="#A78BFA" stroke="none"/>
+    <circle cx="310" cy="168" r="5" fill="#A78BFA" stroke="none"/>
+    <!-- linking edge between documents -->
+    <path d="M134 240 C 120 300, 150 330, 200 336" stroke-dasharray="6 6" opacity="0.7"/>
+    <circle cx="134" cy="240" r="4.5" fill="#A78BFA" stroke="none"/>
+    <circle cx="200" cy="336" r="4.5" fill="#A78BFA" stroke="none"/>
+  </g>
+</svg>
