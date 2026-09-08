@@ -10,7 +10,7 @@ import {
   ontologyModules,
   syncJobs,
 } from "@db/schema";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery, authedMutation, adminMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
 
@@ -81,7 +81,7 @@ async function nextSnapshotLabel(workspaceId: number) {
 /* ── router ──────────────────────────────────────────────────── */
 
 export const mappingRouter = createRouter({
-  listConnectors: publicQuery.query(async () => {
+  listConnectors: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     const rows = await db
@@ -100,7 +100,7 @@ export const mappingRouter = createRouter({
     });
   }),
 
-  createConnector: publicQuery
+  createConnector: adminMutation
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -134,7 +134,7 @@ export const mappingRouter = createRouter({
       return row;
     }),
 
-  listMappings: publicQuery.query(async () => {
+  listMappings: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     const conns = await db
@@ -160,7 +160,7 @@ export const mappingRouter = createRouter({
     }));
   }),
 
-  upsertMapping: publicQuery
+  upsertMapping: authedMutation
     .input(
       z.object({
         id: z.number().int().positive().optional(),
@@ -252,7 +252,7 @@ export const mappingRouter = createRouter({
       return row;
     }),
 
-  previewCsv: publicQuery
+  previewCsv: authedQuery
     .input(
       z.object({
         filename: z.string().min(1).max(255),
@@ -304,7 +304,7 @@ export const mappingRouter = createRouter({
       return { filename: input.filename, headers, sampleRows: rows, instances };
     }),
 
-  runSync: publicQuery
+  runSync: authedMutation
     .input(z.object({ mappingId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const ws = await getDemoWorkspace();
@@ -441,7 +441,7 @@ export const mappingRouter = createRouter({
       }
     }),
 
-  listSyncJobs: publicQuery
+  listSyncJobs: authedQuery
     .input(z.object({ limit: z.number().int().min(1).max(100).default(25) }).optional())
     .query(async ({ input }) => {
       const ws = await getDemoWorkspace();

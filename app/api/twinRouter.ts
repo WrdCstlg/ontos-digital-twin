@@ -2,7 +2,7 @@ import { z } from "zod";
 import { and, desc, eq, inArray, isNull, like, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { kgEdges, kgNodes, ontologyClasses, ontologyModules, twinStateLog } from "@db/schema";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery, authedMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
 import {
@@ -72,7 +72,7 @@ async function fetchTwinByIri(workspaceId: number, iri: string): Promise<KgNodeR
 
 export const twinRouter = createRouter({
   /** Twins grouped by class, with current-state summary + zone/equipment counts. */
-  listTwins: publicQuery.input(listInput).query(async ({ input }) => {
+  listTwins: authedQuery.input(listInput).query(async ({ input }) => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     const conds = [
@@ -147,7 +147,7 @@ export const twinRouter = createRouter({
   }),
 
   /** One twin: node, model (class + hasModel target), state, topology subgraph, twinOf target. */
-  getTwin: publicQuery
+  getTwin: authedQuery
     .input(z.object({ iri: z.string().min(1).max(512) }))
     .query(async ({ input }) => {
       const ws = await getDemoWorkspace();
@@ -260,7 +260,7 @@ export const twinRouter = createRouter({
     }),
 
   /** Time-ordered telemetry series from twin_state_log (ascending recordedAt). */
-  getStateHistory: publicQuery
+  getStateHistory: authedQuery
     .input(
       z.object({
         iri: z.string().min(1).max(512),
@@ -297,7 +297,7 @@ export const twinRouter = createRouter({
    * cold-chain drift toward 2-6°C, shipment ETA countdown + delivery flip,
    * equipment battery drain. Persists propsJson + appends twin_state_log.
    */
-  tick: publicQuery
+  tick: authedMutation
     .input(z.object({ iri: z.string().min(1).max(512).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
       const ws = await getDemoWorkspace();
@@ -375,7 +375,7 @@ export const twinRouter = createRouter({
     }),
 
   /** DTDL v3 export: one twin's model (by twin IRI) or every twin model. */
-  exportDtdl: publicQuery
+  exportDtdl: authedQuery
     .input(z.object({ iri: z.string().min(1).max(512).optional() }).optional())
     .query(async ({ input }) => {
       const ws = await getDemoWorkspace();

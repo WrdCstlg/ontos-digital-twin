@@ -26,6 +26,7 @@ interface NavItem {
   to: string;
   icon: typeof LayoutDashboard;
   end?: boolean;
+  requiredRole?: string;
 }
 
 interface NavSection {
@@ -60,7 +61,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'System',
     items: [
       { label: 'Audit Log', to: '/app/admin#audit', icon: ScrollText },
-      { label: 'Admin', to: '/app/admin', icon: ShieldCheck, end: true },
+      { label: 'Admin', to: '/app/admin', icon: ShieldCheck, end: true, requiredRole: 'admin' },
       { label: 'Decisions & Architecture', to: '/app/decisions', icon: Split },
     ],
   },
@@ -140,7 +141,9 @@ export function AppShell() {
                 </div>
               )}
               <ul className="space-y-0.5">
-                {section.items.map((item) => {
+                {section.items
+                  .filter((item) => !item.requiredRole || user?.role === item.requiredRole)
+                  .map((item) => {
                   const [path, hash] = item.to.split('#');
                   return (
                     <li key={item.label}>
@@ -207,7 +210,9 @@ export function AppShell() {
                   {isLoading ? '…' : isAuthenticated ? (user?.name ?? 'Signed in') : 'Guest viewer'}
                 </span>
                 <span className="mt-0.5 inline-block rounded-full border border-iris/30 bg-iris/15 px-1.5 py-0 text-[9.5px] font-medium uppercase tracking-[0.08em] text-text-accent">
-                  {isAuthenticated ? (user?.role === 'admin' ? 'Admin' : 'Ontologist') : 'Viewer'}
+                  {isAuthenticated && user?.role
+                    ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
+                    : 'Viewer'}
                 </span>
               </span>
             )}

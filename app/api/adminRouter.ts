@@ -3,7 +3,12 @@ import { and, desc, eq, lt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { auditLog, users, workspaceMembers } from "@db/schema";
 import { LLM_PROVIDERS } from "@contracts/providers";
-import { createRouter, publicQuery } from "./middleware";
+import {
+  createRouter,
+  authedQuery,
+  adminQuery,
+  adminMutation,
+} from "./middleware";
 import { getDb } from "./queries/connection";
 import {
   actorLabelFor,
@@ -13,12 +18,12 @@ import {
 } from "./services/audit";
 
 export const adminRouter = createRouter({
-  getWorkspace: publicQuery.query(async () => {
+  getWorkspace: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     return ws;
   }),
 
-  listMembers: publicQuery.query(async () => {
+  listMembers: adminQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     const rows = await db
@@ -33,7 +38,7 @@ export const adminRouter = createRouter({
     return withUsers;
   }),
 
-  updateMemberRole: publicQuery
+  updateMemberRole: adminMutation
     .input(
       z.object({
         memberId: z.number().int().positive(),
@@ -63,7 +68,7 @@ export const adminRouter = createRouter({
       return row;
     }),
 
-  listAudit: publicQuery
+  listAudit: authedQuery
     .input(
       z
         .object({
@@ -90,5 +95,6 @@ export const adminRouter = createRouter({
       return { entries, nextCursor, chainValid };
     }),
 
-  getProviders: publicQuery.query(() => LLM_PROVIDERS),
+  getProviders: adminQuery.query(() => LLM_PROVIDERS),
 });
+

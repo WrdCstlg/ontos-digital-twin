@@ -10,7 +10,11 @@ function required(name: string): string {
 
 export const env = {
   appId: required("APP_ID"),
-  appSecret: required("APP_SECRET"),
+  appSecret:
+    process.env.APP_SECRET ||
+    (process.env.NODE_ENV === "production"
+      ? required("APP_SECRET")
+      : "ontos-development-jwt-signing-secret-key-32b!"),
   isProduction: process.env.NODE_ENV === "production",
   databaseUrl: required("DATABASE_URL"),
   adminEmail: process.env.ADMIN_EMAIL ?? "admin@acme-ontology.com",

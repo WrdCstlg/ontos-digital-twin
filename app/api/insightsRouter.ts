@@ -11,8 +11,9 @@ import {
   auditLog,
 } from "@db/schema";
 import type { KgEdge, KgNode } from "@db/schema";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery, authedMutation } from "./middleware";
 import { getDb } from "./queries/connection";
+import { scanRateLimiter } from "./lib/rateLimit";
 import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
 
 type Evidence = {
@@ -288,7 +289,7 @@ export function runRules(nodes: KgNode[], edges: KgEdge[]): RuleFinding[] {
 }
 
 export const insightsRouter = createRouter({
-  list: publicQuery
+  list: authedQuery
     .input(
       z
         .object({
@@ -314,7 +315,7 @@ export const insightsRouter = createRouter({
         .limit(input?.limit ?? 50);
     }),
 
-  acknowledge: publicQuery
+  acknowledge: authedMutation
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const ws = await getDemoWorkspace();
@@ -337,7 +338,14 @@ export const insightsRouter = createRouter({
       return { ok: true };
     }),
 
-  runScan: publicQuery.mutation(async ({ ctx }) => {
+  runScan: authedMutation.mutation(async ({ ctx }) => {
+    const rateCheck = scanRateLimiter.check(String(ctx.user?.id ?? "anon"));
+    if (!rateCheck.allowed) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: `Insight scan rate limit exceeded. Please wait ${Math.ceil(rateCheck.resetMs / 1000)} seconds.`,
+      });
+    }
     const ws = await getDemoWorkspace();
     const db = getDb();
     const { nodes, edges } = await loadGraph(ws.id);
@@ -384,7 +392,7 @@ export const insightsRouter = createRouter({
     return { scanned: { nodes: nodes.length, edges: edges.length }, findings: results };
   }),
 
-  narrative: publicQuery
+  narrative: authedQuery
     .input(z.object({ period: z.enum(["week", "month"]).default("week") }))
     .query(async ({ input }) => {
       // Deterministic, template-based narrative grounded in live DB numbers.

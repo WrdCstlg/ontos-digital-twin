@@ -8,7 +8,7 @@ import {
   ontologyProperties,
   ontologyVersions,
 } from "@db/schema";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery, ontologistMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import {
   actorLabelFor,
@@ -62,7 +62,7 @@ function bumpMinor(version: string): string {
 }
 
 export const ontologyRouter = createRouter({
-  listModules: publicQuery.query(async () => {
+  listModules: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     const mods = await db
@@ -91,7 +91,7 @@ export const ontologyRouter = createRouter({
     return out;
   }),
 
-  getModule: publicQuery
+  getModule: authedQuery
     .input(z.object({ key: moduleKeySchema }))
     .query(async ({ input }) => {
       const { mod } = await requireModule(input.key);
@@ -113,7 +113,7 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  listClasses: publicQuery
+  listClasses: authedQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
     .query(async ({ input }) => {
       const { mod } = await requireModule(input.moduleKey);
@@ -143,7 +143,7 @@ export const ontologyRouter = createRouter({
       }));
     }),
 
-  listProperties: publicQuery
+  listProperties: authedQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
     .query(async ({ input }) => {
       const { mod } = await requireModule(input.moduleKey);
@@ -174,7 +174,7 @@ export const ontologyRouter = createRouter({
       }));
     }),
 
-  listVersions: publicQuery
+  listVersions: authedQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
     .query(async ({ input }) => {
       const { mod } = await requireModule(input.moduleKey);
@@ -186,7 +186,7 @@ export const ontologyRouter = createRouter({
         .orderBy(desc(ontologyVersions.publishedAt));
     }),
 
-  createClass: publicQuery
+  createClass: ontologistMutation
     .input(
       z.object({
         moduleKey: moduleKeySchema,
@@ -373,7 +373,7 @@ export const ontologyRouter = createRouter({
       return { class: cls, properties: createdProps, newVersion, auditId: audit.id };
     }),
 
-  deprecateClass: publicQuery
+  deprecateClass: ontologistMutation
     .input(z.object({ classIri: z.string().min(1).max(512) }))
     .mutation(async ({ ctx, input }) => {
       const ws = await getDemoWorkspace();
@@ -416,7 +416,7 @@ export const ontologyRouter = createRouter({
       return { ok: true, auditId: audit.id };
     }),
 
-  diffVersions: publicQuery
+  diffVersions: authedQuery
     .input(
       z.object({
         moduleKey: moduleKeySchema,
@@ -477,7 +477,7 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  exportModule: publicQuery
+  exportModule: authedQuery
     .input(
       z.object({
         moduleKey: moduleKeySchema,
@@ -517,7 +517,7 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  runReasoner: publicQuery
+  runReasoner: authedQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
     .query(async ({ input }) => {
       // DETERMINISTIC SIMULATED REASONER — computes the transitive subclass

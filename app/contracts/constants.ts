@@ -1,6 +1,7 @@
 export const Session = {
   cookieName: "ontos_session",
-  maxAgeMs: 30 * 24 * 60 * 60 * 1000, // 30 days
+  prodCookieName: "__Host-ontos_session",
+  maxAgeMs: 7 * 24 * 60 * 60 * 1000, // 7 days
 } as const;
 
 export const ErrorMessages = {

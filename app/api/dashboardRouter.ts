@@ -11,12 +11,12 @@ import {
   mappings,
   connectors,
 } from "@db/schema";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { getDemoWorkspace } from "./services/audit";
 
 export const dashboardRouter = createRouter({
-  overview: publicQuery.query(async () => {
+  overview: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     const [n] = await db
@@ -73,7 +73,7 @@ export const dashboardRouter = createRouter({
     };
   }),
 
-  moduleHealth: publicQuery.query(async () => {
+  moduleHealth: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     const mods = await db
@@ -104,7 +104,7 @@ export const dashboardRouter = createRouter({
     }));
   }),
 
-  recentActivity: publicQuery.query(async () => {
+  recentActivity: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     return db
@@ -115,7 +115,7 @@ export const dashboardRouter = createRouter({
       .limit(20);
   }),
 
-  insightPreview: publicQuery.query(async () => {
+  insightPreview: authedQuery.query(async () => {
     const ws = await getDemoWorkspace();
     const db = getDb();
     return db

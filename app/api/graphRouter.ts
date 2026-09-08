@@ -9,7 +9,7 @@ import {
   mappings,
   ontologyModules,
 } from "@db/schema";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { getDemoWorkspace } from "./services/audit";
 
@@ -26,7 +26,7 @@ async function resolveWorkspace(workspaceKey?: string) {
 }
 
 export const graphRouter = createRouter({
-  stats: publicQuery
+  stats: authedQuery
     .input(z.object({ workspaceKey: z.string().max(255).optional() }).optional())
     .query(async ({ input }) => {
       const ws = await resolveWorkspace(input?.workspaceKey);
@@ -69,7 +69,7 @@ export const graphRouter = createRouter({
       };
     }),
 
-  searchNodes: publicQuery
+  searchNodes: authedQuery
     .input(
       z.object({
         q: z.string().min(1).max(255),
@@ -96,7 +96,7 @@ export const graphRouter = createRouter({
       return rows;
     }),
 
-  getSubgraph: publicQuery
+  getSubgraph: authedQuery
     .input(
       z.object({
         centerIri: z.string().min(1).max(512),
@@ -170,7 +170,7 @@ export const graphRouter = createRouter({
       };
     }),
 
-  getNode: publicQuery
+  getNode: authedQuery
     .input(z.object({ iri: z.string().min(1).max(512) }))
     .query(async ({ input }) => {
       const ws = await getDemoWorkspace();

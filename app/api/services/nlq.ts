@@ -36,7 +36,7 @@ type IntentDef = {
 };
 
 const UNSAFE_RE =
-  /\b(delete|drop|update|insert|truncate|alter|remove|purge|fire|terminate|salary of|salaries|password|ssn|social security|credit card|diagnos|medical record)\b/i;
+  /\b(delete|drop|update|insert|truncate|alter|remove|purge|fire|terminate|salaries|salary( of)?|passwords?|ssn|social security|credit card|diagnos|medical record|union(\s+all)?|exec(ute)?|script|<script|javascript:|xp_|sp_|eval|benchmark|sleep\()\b/i;
 
 const INTENTS: IntentDef[] = [
   {
@@ -237,6 +237,13 @@ function extractBindings(intentId: string, raw: string, norm: string): NlqBindin
 }
 
 export function translate(question: string): NlqResult {
+  if (question.length > 500) {
+    return {
+      recognized: false,
+      refusal: "Natural language queries are capped at 500 characters for query parsing security.",
+    };
+  }
+
   const norm = normalize(question);
 
   if (UNSAFE_RE.test(norm)) {
