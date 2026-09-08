@@ -1,20 +1,31 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router'
 import Layout from './components/Layout'
 import AppShell from './components/AppShell'
 import AuthGuard from './components/AuthGuard'
 import ErrorBoundary from './components/ErrorBoundary'
 import Home from './pages/Home'
-import Dashboard from './pages/Dashboard'
-import Library from './pages/Library'
-import Studio from './pages/Studio'
-import Mapping from './pages/Mapping'
-import Explorer from './pages/Explorer'
-import Insights from './pages/Insights'
-import Twins from './pages/Twins'
-import Decisions from './pages/Decisions'
-import Admin from './pages/Admin'
 import Login from './pages/Login'
 import NotFound from './pages/NotFound'
+
+// Lazy-load complex pages for code splitting & faster initial page paint
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Library = lazy(() => import('./pages/Library'))
+const Studio = lazy(() => import('./pages/Studio'))
+const Mapping = lazy(() => import('./pages/Mapping'))
+const Explorer = lazy(() => import('./pages/Explorer'))
+const Insights = lazy(() => import('./pages/Insights'))
+const Twins = lazy(() => import('./pages/Twins'))
+const Decisions = lazy(() => import('./pages/Decisions'))
+const Admin = lazy(() => import('./pages/Admin'))
+
+function PageFallback() {
+  return (
+    <div className="flex min-h-[50vh] w-full items-center justify-center">
+      <div className="size-8 animate-spin rounded-full border-2 border-iris/20 border-t-iris" />
+    </div>
+  )
+}
 
 export default function App() {
   return (
@@ -41,15 +52,78 @@ export default function App() {
               </AuthGuard>
             }
           >
-            <Route index element={<Dashboard />} />
-            <Route path="library" element={<Library />} />
-            <Route path="studio" element={<Studio />} />
-            <Route path="mapping" element={<Mapping />} />
-            <Route path="explorer" element={<Explorer />} />
-            <Route path="insights" element={<Insights />} />
-            <Route path="twins" element={<Twins />} />
-            <Route path="decisions" element={<Decisions />} />
-            <Route path="admin" element={<Admin />} />
+            <Route
+              index
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Dashboard />
+                </Suspense>
+              }
+            />
+            <Route
+              path="library"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Library />
+                </Suspense>
+              }
+            />
+            <Route
+              path="studio"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Studio />
+                </Suspense>
+              }
+            />
+            <Route
+              path="mapping"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Mapping />
+                </Suspense>
+              }
+            />
+            <Route
+              path="explorer"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Explorer />
+                </Suspense>
+              }
+            />
+            <Route
+              path="insights"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Insights />
+                </Suspense>
+              }
+            />
+            <Route
+              path="twins"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Twins />
+                </Suspense>
+              }
+            />
+            <Route
+              path="decisions"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Decisions />
+                </Suspense>
+              }
+            />
+            <Route
+              path="admin"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Admin />
+                </Suspense>
+              }
+            />
           </Route>
 
           {/* Catch-all 404 route */}

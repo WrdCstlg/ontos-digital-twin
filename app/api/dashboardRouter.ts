@@ -1,4 +1,4 @@
-import { and, count, desc, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull } from "drizzle-orm";
 import {
   auditLog,
   graphSnapshots,
@@ -31,13 +31,14 @@ export const dashboardRouter = createRouter({
       .select()
       .from(ontologyModules)
       .where(eq(ontologyModules.workspaceId, ws.id));
+    const moduleIds = mods.map((m) => m.id);
     let classTotal = 0;
-    for (const m of mods) {
+    if (moduleIds.length) {
       const [cc] = await db
         .select({ n: count() })
         .from(ontologyClasses)
-        .where(eq(ontologyClasses.moduleId, m.id));
-      classTotal += Number(cc.n);
+        .where(inArray(ontologyClasses.moduleId, moduleIds));
+      classTotal = Number(cc?.n ?? 0);
     }
     const [openInsights] = await db
       .select({ n: count() })

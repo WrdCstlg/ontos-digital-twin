@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { auditLog, users, workspaceMembers } from "@db/schema";
 import { LLM_PROVIDERS } from "@contracts/providers";
@@ -30,12 +30,15 @@ export const adminRouter = createRouter({
       .select()
       .from(workspaceMembers)
       .where(eq(workspaceMembers.workspaceId, ws.id));
-    const withUsers = [];
-    for (const m of rows) {
-      const [u] = await db.select().from(users).where(eq(users.id, m.userId)).limit(1);
-      withUsers.push({ ...m, user: u ?? null });
-    }
-    return withUsers;
+    const userIds = rows.map((m) => m.userId);
+    const userRows = userIds.length
+      ? await db.select().from(users).where(inArray(users.id, userIds))
+      : [];
+    const userMap = new Map(userRows.map((u) => [u.id, u]));
+    return rows.map((m) => ({
+      ...m,
+      user: userMap.get(m.userId) ?? null,
+    }));
   }),
 
   updateMemberRole: adminMutation

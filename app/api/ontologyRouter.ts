@@ -71,24 +71,31 @@ export const ontologyRouter = createRouter({
       .where(eq(ontologyModules.workspaceId, ws.id))
       .orderBy(asc(ontologyModules.key));
     const inst = await instanceCountsByModule(ws.id);
-    const out = [];
-    for (const m of mods) {
-      const [c] = await db
-        .select({ n: count() })
-        .from(ontologyClasses)
-        .where(eq(ontologyClasses.moduleId, m.id));
-      const [p] = await db
-        .select({ n: count() })
-        .from(ontologyProperties)
-        .where(eq(ontologyProperties.moduleId, m.id));
-      out.push({
-        ...m,
-        classCount: Number(c.n),
-        propertyCount: Number(p.n),
-        instanceCount: inst.get(m.key) ?? 0,
-      });
-    }
-    return out;
+    const moduleIds = mods.map((m) => m.id);
+    const classCountRows = moduleIds.length
+      ? await db
+          .select({ moduleId: ontologyClasses.moduleId, n: count() })
+          .from(ontologyClasses)
+          .where(inArray(ontologyClasses.moduleId, moduleIds))
+          .groupBy(ontologyClasses.moduleId)
+      : [];
+    const classCountMap = new Map(classCountRows.map((r) => [r.moduleId, Number(r.n)]));
+
+    const propCountRows = moduleIds.length
+      ? await db
+          .select({ moduleId: ontologyProperties.moduleId, n: count() })
+          .from(ontologyProperties)
+          .where(inArray(ontologyProperties.moduleId, moduleIds))
+          .groupBy(ontologyProperties.moduleId)
+      : [];
+    const propCountMap = new Map(propCountRows.map((r) => [r.moduleId, Number(r.n)]));
+
+    return mods.map((m) => ({
+      ...m,
+      classCount: classCountMap.get(m.id) ?? 0,
+      propertyCount: propCountMap.get(m.id) ?? 0,
+      instanceCount: inst.get(m.key) ?? 0,
+    }));
   }),
 
   getModule: authedQuery

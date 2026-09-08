@@ -45,7 +45,9 @@ export default function Twins() {
   const [log, setLog] = useState<LogEntry[]>([]);
 
   const selectedRef = useRef(selectedIri);
-  selectedRef.current = selectedIri;
+  useEffect(() => {
+    selectedRef.current = selectedIri;
+  }, [selectedIri]);
   const tickCountRef = useRef(0);
 
   const handleTick = useCallback(
@@ -126,7 +128,9 @@ export default function Twins() {
   }, [tick]);
 
   const tickRef = useRef(doTick);
-  tickRef.current = doTick;
+  useEffect(() => {
+    tickRef.current = doTick;
+  }, [doTick]);
 
   useEffect(() => {
     if (!autoTick) return;

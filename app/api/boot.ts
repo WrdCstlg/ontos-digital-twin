@@ -30,7 +30,7 @@ app.use(
   "*",
   cors({
     origin: (origin) => {
-      if (!origin) return "*";
+      if (!origin) return "";
       if (
         origin.startsWith("http://localhost:") ||
         origin.startsWith("http://127.0.0.1:") ||
@@ -51,16 +51,19 @@ app.use(
 app.use(
   "*",
   csrf({
-    origin: (origin) => {
-      if (!origin) return true;
-      if (
+    origin: (origin, c) => {
+      if (!origin) return false;
+      try {
+        const reqOrigin = new URL(c.req.url).origin;
+        if (origin === reqOrigin) return true;
+      } catch {
+        // malformed URL
+      }
+      return (
         origin.startsWith("http://localhost:") ||
         origin.startsWith("http://127.0.0.1:") ||
         origin.startsWith("https://localhost:")
-      ) {
-        return true;
-      }
-      return true;
+      );
     },
   }),
 );
