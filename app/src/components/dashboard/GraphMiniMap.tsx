@@ -23,7 +23,8 @@ function useModuleSamples(limit: number) {
   const compliance = trpc.graph.searchNodes.useQuery({ q: ':', moduleKey: 'compliance', limit });
   const finance = trpc.graph.searchNodes.useQuery({ q: ':', moduleKey: 'finance', limit });
   const logistics = trpc.graph.searchNodes.useQuery({ q: ':', moduleKey: 'logistics', limit });
-  const queries = [hr, legal, compliance, finance, logistics];
+  const twin = trpc.graph.searchNodes.useQuery({ q: ':', moduleKey: 'twin', limit });
+  const queries = [hr, legal, compliance, finance, logistics, twin];
   const isLoading = queries.some((q) => q.isLoading);
   const isError = queries.some((q) => q.isError);
   const byModule = useMemo(() => {
@@ -31,12 +32,12 @@ function useModuleSamples(limit: number) {
     MODULES.forEach((m, i) => {
       out.set(
         m.key,
-        (queries[i].data ?? []).map((n) => ({ id: n.id, iri: n.iri, label: n.label, moduleKey: n.moduleKey })),
+        (queries[i]?.data ?? []).map((n) => ({ id: n.id, iri: n.iri, label: n.label, moduleKey: n.moduleKey })),
       );
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hr.data, legal.data, compliance.data, finance.data, logistics.data]);
+  }, [hr.data, legal.data, compliance.data, finance.data, logistics.data, twin.data]);
   return { byModule, isLoading, isError };
 }
 

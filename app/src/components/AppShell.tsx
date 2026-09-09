@@ -4,6 +4,7 @@ import {
   Bell,
   BookCopy,
   ChevronDown,
+  Compass,
   DatabaseZap,
   LayoutDashboard,
   PanelLeftClose,
@@ -40,6 +41,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { label: 'Dashboard', to: '/app', icon: LayoutDashboard, end: true },
       { label: 'Insights', to: '/app/insights', icon: Sparkles },
+      { label: 'Field Guide', to: '/app/guide', icon: Compass },
     ],
   },
   {
@@ -76,6 +78,7 @@ const CRUMB_NAMES: Record<string, string> = {
   insights: 'Insights',
   decisions: 'Decisions & Architecture',
   admin: 'Admin',
+  guide: 'Field Guide',
 };
 
 /**
