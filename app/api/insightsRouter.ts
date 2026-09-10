@@ -261,7 +261,7 @@ export function runRules(nodes: KgNode[], edges: KgEdge[]): RuleFinding[] {
     const COLD_MAX = 6;
     const twinNodes = nodes.filter(
       (n) =>
-        n.classIri === "dtwin:ZoneTwin" ||
+        (n.classIri === "dtwin:ZoneTwin" && props(n).zoneType === "cold-chain") ||
         n.classIri === "dtwin:ShipmentTwin",
     );
     const excursions = twinNodes.filter((n) => {
@@ -285,7 +285,222 @@ export function runRules(nodes: KgNode[], edges: KgEdge[]): RuleFinding[] {
     }
   }
 
+  // R8: cost centers whose booked transactions exceed their FY2025 budget
+  {
+    const budgets = nodes.filter((n) => n.classIri === "fin:Budget");
+    const ccTotals = new Map<number, number>();
+    for (const t of nodes.filter((n) => n.classIri === "fin:Transaction")) {
+      const ccEdge = (out.get(t.id) ?? []).find((e) => e.predicateIri === "fin:bookedTo");
+      if (!ccEdge) continue;
+      ccTotals.set(ccEdge.toNodeId, (ccTotals.get(ccEdge.toNodeId) ?? 0) + (Number(props(t).amount) || 0));
+    }
+    const over: { budget: KgNode; cc: KgNode; spent: number; budgeted: number }[] = [];
+    for (const b of budgets) {
+      const ccEdge = (out.get(b.id) ?? []).find((e) => e.predicateIri === "fin:budgetFor");
+      const cc = ccEdge && nodes.find((n) => n.id === ccEdge.toNodeId);
+      if (!cc) continue;
+      const spent = ccTotals.get(cc.id) ?? 0;
+      const budgeted = Number(props(b).amount) || 0;
+      if (budgeted > 0 && spent > budgeted) over.push({ budget: b, cc, spent, budgeted });
+    }
+    if (over.length) {
+      const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+      findings.push({
+        ruleId: "budget-overrun",
+        severity: "risk",
+        title: `${over.length} cost center${over.length === 1 ? "" : "s"} exceeded their FY2025 budget`,
+        summary: over
+          .map((o) => `${o.cc.label}: booked ${money(o.spent)} against a ${money(o.budgeted)} budget (+${money(o.spent - o.budgeted)})`)
+          .join("; "),
+        evidence: {
+          nodeIds: over.flatMap((o) => [o.budget.id, o.cc.id]),
+          edgeIds: [],
+          missingEdges: [],
+        },
+      });
+    }
+  }
+
+  // R9: high-severity risks (likelihood × impact ≥ 16) with no mitigating control
+  {
+    const highRisks = nodes.filter((n) => {
+      if (n.classIri !== "cmp:Risk") return false;
+      const p = props(n);
+      return (Number(p.likelihood) || 0) * (Number(p.impact) || 0) >= 16;
+    });
+    const unmitigated = highRisks.filter(
+      (r) => !(inc.get(r.id) ?? []).some((e) => e.predicateIri === "cmp:mitigates"),
+    );
+    if (unmitigated.length) {
+      findings.push({
+        ruleId: "unmitigated-high-risk",
+        severity: "risk",
+        title: `${unmitigated.length} high-severity risk${unmitigated.length === 1 ? "" : "s"} have no mitigating control`,
+        summary: `No cmp:Control —mitigates→ edge: ${unmitigated.map((r) => r.label).join(", ")}.`,
+        evidence: {
+          nodeIds: unmitigated.map((r) => r.id),
+          edgeIds: [],
+          missingEdges: unmitigated.map((r) => ({
+            fromIri: "cmp:Control",
+            toIri: r.iri,
+            predicate: "cmp:mitigates",
+          })),
+        },
+      });
+    }
+  }
+
+  // R10: active contracts expiring within 30 days with no renewal matter tracked
+  {
+    const now = Date.now();
+    const soon = now + 30 * 24 * 3600 * 1000;
+    const expiring = nodes.filter((n) => {
+      if (n.classIri !== "lgl:Contract" || props(n).status !== "active") return false;
+      const end = Date.parse(String(props(n).endDate ?? ""));
+      if (!Number.isFinite(end) || end > soon || end < now) return false;
+      return !(out.get(n.id) ?? []).some((e) => e.predicateIri === "lgl:relatesToMatter");
+    });
+    if (expiring.length) {
+      findings.push({
+        ruleId: "contract-expiring-without-renewal",
+        severity: "warn",
+        title: `${expiring.length} contract${expiring.length === 1 ? "" : "s"} expire within 30 days with no renewal in progress`,
+        summary: `Active, no lgl:relatesToMatter link: ${expiring
+          .map((c) => `${c.label} (expires ${props(c).endDate})`)
+          .join("; ")}.`,
+        evidence: {
+          nodeIds: expiring.map((c) => c.id),
+          edgeIds: [],
+          missingEdges: expiring.map((c) => ({
+            fromIri: c.iri,
+            toIri: "lgl:Matter",
+            predicate: "lgl:relatesToMatter",
+          })),
+        },
+      });
+    }
+  }
+
+  // R11: vendor spend concentration — one vendor over 20% of total vendor spend
+  {
+    const spendByVendor = new Map<number, number>();
+    let total = 0;
+    for (const t of nodes.filter((n) => n.classIri === "fin:Transaction")) {
+      const vEdge = (out.get(t.id) ?? []).find((e) => e.predicateIri === "fin:paidTo");
+      if (!vEdge) continue;
+      const amt = Number(props(t).amount) || 0;
+      spendByVendor.set(vEdge.toNodeId, (spendByVendor.get(vEdge.toNodeId) ?? 0) + amt);
+      total += amt;
+    }
+    const concentrated: { v: KgNode; amount: number; share: number }[] = [];
+    if (total > 0) {
+      for (const [vId, amount] of spendByVendor) {
+        const share = amount / total;
+        if (share >= 0.2) {
+          const v = nodes.find((n) => n.id === vId);
+          if (v) concentrated.push({ v, amount, share });
+        }
+      }
+    }
+    if (concentrated.length) {
+      const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+      findings.push({
+        ruleId: "vendor-spend-concentration",
+        severity: "warn",
+        title: `${concentrated.length} vendor${concentrated.length === 1 ? "" : "s"} account${concentrated.length === 1 ? "s" : ""} for over 20% of total vendor spend`,
+        summary: concentrated
+          .map((c) => `${c.v.label}: ${money(c.amount)} (${Math.round(c.share * 100)}% of total vendor spend)`)
+          .join("; "),
+        evidence: {
+          nodeIds: concentrated.map((c) => c.v.id),
+          edgeIds: [],
+          missingEdges: [],
+        },
+      });
+    }
+  }
+
+  // R12: carrier shipment concentration — one carrier over half of all shipments
+  {
+    const shipments = nodes.filter((n) => n.classIri === "log:Shipment");
+    const byCarrier = new Map<number, number>();
+    for (const s of shipments) {
+      const cEdge = (out.get(s.id) ?? []).find((e) => e.predicateIri === "log:shippedBy");
+      if (!cEdge) continue;
+      byCarrier.set(cEdge.toNodeId, (byCarrier.get(cEdge.toNodeId) ?? 0) + 1);
+    }
+    const concentrated: { c: KgNode; count: number; share: number }[] = [];
+    if (shipments.length > 0) {
+      for (const [cId, cnt] of byCarrier) {
+        const share = cnt / shipments.length;
+        if (share >= 0.5) {
+          const c = nodes.find((n) => n.id === cId);
+          if (c) concentrated.push({ c, count: cnt, share });
+        }
+      }
+    }
+    if (concentrated.length) {
+      findings.push({
+        ruleId: "carrier-shipment-concentration",
+        severity: "warn",
+        title: `${concentrated.length} carrier${concentrated.length === 1 ? "" : "s"} handle${concentrated.length === 1 ? "s" : ""} over half of all shipments`,
+        summary: concentrated
+          .map((c) => `${c.c.label}: ${c.count} of ${shipments.length} shipments (${Math.round(c.share * 100)}%) — single point of failure`)
+          .join("; "),
+        evidence: {
+          nodeIds: concentrated.map((c) => c.c.id),
+          edgeIds: [],
+          missingEdges: [],
+        },
+      });
+    }
+  }
+
   return findings;
+}
+
+/**
+ * Recompute all rule findings and upsert them into `insights` by ruleId.
+ * Shared by the runScan mutation and the seed scripts, so the persisted
+ * insight set always matches whatever's actually in the graph.
+ */
+export type ReconcileResult = { ruleId: string; status: "created" | "updated"; insightId: number };
+
+export async function reconcileInsights(
+  workspaceId: number,
+): Promise<{ scanned: { nodes: number; edges: number }; results: ReconcileResult[] }> {
+  const db = getDb();
+  const { nodes, edges } = await loadGraph(workspaceId);
+  const findings = runRules(nodes, edges);
+  const existing = await db.select().from(insights).where(eq(insights.workspaceId, workspaceId));
+  const byRule = new Map(existing.map((i) => [i.ruleId, i]));
+  const results: ReconcileResult[] = [];
+  for (const f of findings) {
+    const ex = f.ruleId ? byRule.get(f.ruleId) : undefined;
+    if (ex) {
+      await db
+        .update(insights)
+        .set({ title: f.title, summary: f.summary, severity: f.severity, evidenceJson: f.evidence })
+        .where(eq(insights.id, ex.id));
+      results.push({ ruleId: f.ruleId, status: "updated", insightId: ex.id });
+    } else {
+      const [{ id }] = await db
+        .insert(insights)
+        .values({
+          workspaceId,
+          type: "anomaly",
+          severity: f.severity,
+          ruleId: f.ruleId,
+          title: f.title,
+          summary: f.summary,
+          evidenceJson: f.evidence,
+          status: "open",
+        })
+        .$returningId();
+      results.push({ ruleId: f.ruleId, status: "created", insightId: id });
+    }
+  }
+  return { scanned: { nodes: nodes.length, edges: edges.length }, results };
 }
 
 export const insightsRouter = createRouter({
@@ -347,49 +562,16 @@ export const insightsRouter = createRouter({
       });
     }
     const ws = await getDemoWorkspace();
-    const db = getDb();
-    const { nodes, edges } = await loadGraph(ws.id);
-    const findings = runRules(nodes, edges);
-    const existing = await db
-      .select()
-      .from(insights)
-      .where(eq(insights.workspaceId, ws.id));
-    const byRule = new Map(existing.map((i) => [i.ruleId, i]));
-    const results: { ruleId: string; status: "created" | "updated" | "unchanged"; insightId: number }[] = [];
-    for (const f of findings) {
-      const ex = f.ruleId ? byRule.get(f.ruleId) : undefined;
-      if (ex) {
-        await db
-          .update(insights)
-          .set({ title: f.title, summary: f.summary, severity: f.severity, evidenceJson: f.evidence })
-          .where(eq(insights.id, ex.id));
-        results.push({ ruleId: f.ruleId, status: "updated", insightId: ex.id });
-      } else {
-        const [{ id }] = await db
-          .insert(insights)
-          .values({
-            workspaceId: ws.id,
-            type: "anomaly",
-            severity: f.severity,
-            ruleId: f.ruleId,
-            title: f.title,
-            summary: f.summary,
-            evidenceJson: f.evidence,
-            status: "open",
-          })
-          .$returningId();
-        results.push({ ruleId: f.ruleId, status: "created", insightId: id });
-      }
-    }
+    const { scanned, results } = await reconcileInsights(ws.id);
     await writeAudit({
       workspaceId: ws.id,
       actor: actorLabelFor(ctx.user),
-      action: `Insight engine scan — ${findings.length} rules fired`,
+      action: `Insight engine scan — ${results.length} rules fired`,
       entityType: "insight_scan",
       entityId: null,
-      payload: { fired: findings.map((f) => f.ruleId) },
+      payload: { fired: results.map((f) => f.ruleId) },
     });
-    return { scanned: { nodes: nodes.length, edges: edges.length }, findings: results };
+    return { scanned, findings: results };
   }),
 
   narrative: authedQuery

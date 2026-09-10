@@ -24,7 +24,7 @@ const VALUE_PROPS = [
   {
     n: '01',
     title: 'Cross-system risk, found for you',
-    body: 'Six standing rules re-check the whole graph on every sync. They only fire on contradictions that span two or more source systems — the class of problem no single team’s dashboard was ever built to catch.',
+    body: 'Twelve standing rules re-check the whole graph on every sync — spend concentration, budget overruns, unmitigated risk, expiring contracts, cold-chain breaches, and more. Each one only fires on a contradiction that spans two or more source systems — the class of problem no single team’s dashboard was ever built to catch.',
   },
   {
     n: '02',
@@ -57,9 +57,9 @@ const ROLE_CARDS = [
     chip: 'Viewer',
     question: '“Are we paying anyone we shouldn’t be, or losing track of spend?”',
     sees:
-      '3 vendors received payments but have no active contract (Fontaine Industries, Webb Group, Eriksen Consulting), and 5 transactions with no cost center — $111,361 unallocated.',
+      '5 vendors received payments but have no active contract (Castillo Logistics, Jimenez Logistics, Park Supply Co, Beaumont Consulting, Sørensen Supply Co), 9 transactions with no cost center — $178,405 unallocated — and one vendor alone accounts for 24% of total vendor spend.',
     decision:
-      'Freezes payment runs to the three unsigned vendors, and forces the $111K into a cost center before the books close.',
+      'Freezes payment runs to the five unsigned vendors, forces the $178K into a cost center before the books close, and opens a second-source review for the concentrated vendor.',
   },
   {
     color: '#A78BFA',
@@ -102,7 +102,7 @@ const SCREENS = [
     color: '#FBBF24',
     title: 'Insights',
     path: '/app/insights',
-    body: 'The standing rule engine, in full. Six rules — each spanning two or more source systems — re-run on every sync. Every hit carries an evidence trail, and can be acknowledged or turned into a watch rule that re-alerts if it recurs.',
+    body: 'The standing rule engine, in full. Twelve rules — each spanning two or more source systems — re-run on every sync. Every hit carries an evidence trail, and can be acknowledged or turned into a watch rule that re-alerts if it recurs.',
   },
   {
     icon: BookCopy,
@@ -336,7 +336,7 @@ export default function Guide() {
           with evidence attached.
         </p>
         <p className="mt-4 font-mono text-[12px] text-text-muted">
-          4 roles · 6 standing rules · snapshot v48 · Acme Corp demo
+          4 roles · 12 standing rules · snapshot v48 · Acme Corp demo
         </p>
       </motion.header>
 
@@ -355,7 +355,7 @@ export default function Guide() {
               knows what’s been paid. Each system is confidently correct about its own slice — and none of the
               three has ever compared notes with the other two. That gap is exactly where the expensive surprises
               live: a vendor still getting paid with no signed contract on file, a contract sitting under a policy
-              with an audit finding nobody closed out, a $111K transaction with no cost center to charge it to. No
+              with an audit finding nobody closed out, $178K in transactions with no cost center to charge them to. No
               single source system can see any of that, because seeing it requires reading two or three systems as
               one. Ontos is that one system.
             </p>
@@ -450,7 +450,7 @@ export default function Guide() {
           <footer className="border-t border-border-hairline pt-6">
             <p className="max-w-[640px] text-[12.5px] leading-[1.6] text-text-muted">
               Written against workspace snapshot v48 on the Acme Corp demo build. Point it at real HRIS, contracts,
-              and ERP sources and the same six rules run on your own data.
+              and ERP sources and the same twelve rules run on your own data.
             </p>
           </footer>
         </div>

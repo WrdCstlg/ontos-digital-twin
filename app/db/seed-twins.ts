@@ -25,6 +25,7 @@ import {
   twinStateLog,
 } from "@db/schema";
 import { getDemoWorkspace, writeAudit } from "../api/services/audit";
+import { reconcileInsights } from "../api/insightsRouter";
 import {
   SIMULATED_TWIN_CLASSES,
   TELEMETRY_UNITS,
@@ -321,10 +322,13 @@ async function main() {
     for (const zt of zoneTypes) {
       const cold = zt === "cold-chain";
       const zIri = `${whIri}/zone-${zt}`;
+      // planted anomaly: the first warehouse's cold-chain zone is mid-breach
+      // right now (live temperature outside the 2-6°C target), not just in history
+      const liveBreach = cold && w === 0;
       addTwin(zIri, "dtwin:ZoneTwin", `${wh.label} — ${zt} zone`, {
-        status: "operational",
+        status: liveBreach ? "alert" : "operational",
         zoneType: zt,
-        temperature: cold ? round1(rf(2.5, 5.5)) : round1(rf(15, 22)),
+        temperature: liveBreach ? round1(rf(7.2, 8.8)) : cold ? round1(rf(2.5, 5.5)) : round1(rf(15, 22)),
         humidity: round1(rf(30, 60)),
         utilization: round1(rf(30, 95)),
         ...(cold ? { tempTargetMin: 2, tempTargetMax: 6 } : {}),
@@ -394,7 +398,8 @@ async function main() {
     addTwin(sIri, "dtwin:ShipmentTwin", `Twin — ${sid}`, {
       status,
       etaMinutes: delivered ? 0 : ri(45, 3200),
-      ...(perishable ? { temperature: round1(rf(2, 8)) } : {}),
+      // mostly in-band (2-6°C); ~15% naturally drift into excursion territory
+      ...(perishable ? { temperature: round1(rf(2.8, 6.6)) } : {}),
       lat: round1(olat + rf(-2, 2)),
       lng: round1(olng + rf(-2, 2)),
       lastTickAt: nowIso(),
@@ -571,6 +576,10 @@ async function main() {
     },
   });
   console.log("audit entries chained");
+
+  /* ── reconcile insights over the FULL graph (now including twins) ── */
+  const { results: fired } = await reconcileInsights(workspaceId);
+  console.log("rules fired (full graph):", fired.map((f) => f.ruleId).join(", "));
 
   console.log("TWIN SEED COMPLETE", {
     twinNodes: twinRows.length,

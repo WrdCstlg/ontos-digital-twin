@@ -58,6 +58,42 @@ export const RULE_META: Record<string, RuleMeta> = {
     modules: ['hr'],
     ruleText: '?u a hr:OrgUnit .\nFILTER NOT EXISTS { ?u hr:parentUnit ?p . }\nFILTER(?u.isRoot != true)',
   },
+  'twin-cold-chain-excursion': {
+    typeChip: 'RULE-ALERT',
+    modules: ['twin', 'logistics'],
+    ruleText:
+      '?z a dtwin:ZoneTwin ; dtwin:temperature ?t .\nFILTER(?t < 2 || ?t > 6)\n# also checked on dtwin:ShipmentTwin',
+  },
+  'budget-overrun': {
+    typeChip: 'RULE-ALERT',
+    modules: ['finance'],
+    ruleText:
+      '?b a fin:Budget ; fin:budgetFor ?cc ; fin:amount ?budgeted .\n?tx a fin:Transaction ; fin:bookedTo ?cc .\nFILTER(SUM(?tx.amount) > ?budgeted)',
+  },
+  'unmitigated-high-risk': {
+    typeChip: 'ORPHAN-DETECTION',
+    modules: ['compliance'],
+    ruleText:
+      '?r a cmp:Risk .\nFILTER(?r.likelihood * ?r.impact >= 16)\nFILTER NOT EXISTS { ?control cmp:mitigates ?r . }',
+  },
+  'contract-expiring-without-renewal': {
+    typeChip: 'RULE-ALERT',
+    modules: ['legal'],
+    ruleText:
+      '?c a lgl:Contract ; lgl:status "active" .\nFILTER(?c.endDate <= NOW() + "P30D"^^xsd:duration)\nFILTER NOT EXISTS { ?c lgl:relatesToMatter ?m . }',
+  },
+  'vendor-spend-concentration': {
+    typeChip: 'RULE-ALERT',
+    modules: ['finance'],
+    ruleText:
+      '?tx a fin:Transaction ; fin:paidTo ?v .\n# GROUP BY ?v; FILTER(SUM(?tx.amount) / total >= 0.20)',
+  },
+  'carrier-shipment-concentration': {
+    typeChip: 'RULE-ALERT',
+    modules: ['logistics'],
+    ruleText:
+      '?s a log:Shipment ; log:shippedBy ?c .\n# GROUP BY ?c; FILTER(COUNT(?s) / total >= 0.50)',
+  },
 };
 
 export const DEFAULT_RULE_META: RuleMeta = {

@@ -19,7 +19,7 @@
  *      (rule: contract-governed-by-policy-with-open-finding)
  */
 import { createHash } from "crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../api/queries/connection";
 import {
   auditLog,
@@ -34,10 +34,11 @@ import {
   ontologyProperties,
   ontologyVersions,
   syncJobs,
+  twinStateLog,
   workspaceMembers,
   workspaces,
 } from "@db/schema";
-import { runRules } from "../api/insightsRouter";
+import { reconcileInsights } from "../api/insightsRouter";
 
 /* ── deterministic RNG ───────────────────────────────────────── */
 function mulberry32(seed: number) {
@@ -333,6 +334,7 @@ async function main() {
   await db.delete(syncJobs);
   await db.delete(mappings);
   await db.delete(connectors);
+  await db.delete(twinStateLog); // twin data from a prior db/seed-twins.ts run, if any
   await db.delete(kgEdges);
   await db.delete(kgNodes);
   await db.delete(ontologyVersions);
@@ -480,6 +482,7 @@ async function main() {
     ["OU-40", "People & Culture", "OU-00"],
     ["OU-50", "Logistics Operations", "OU-00"],
     ["OU-90", "Special Projects", null],
+    ["OU-91", "Innovation Lab", null], // planted anomaly (e2) — also no parent
   ];
   for (const [code, name, parent] of UNITS) {
     node({
@@ -501,7 +504,8 @@ async function main() {
   for (const b of BANDS)
     node({ iri: `hr:CompensationBand/${b}`, moduleKey: "hr", classIri: "hr:CompensationBand", label: `Band ${b}`, props: { min: 52000 + ri(0, 4) * 12000, max: 98000 + ri(0, 8) * 14000 }, createdAt: daysAgo(25) });
 
-  /* HR: 220 persons — org tree with CEO on top */
+  /* HR: 340 persons — org tree with CEO on top */
+  const HEADCOUNT = 340;
   const CEO = { id: "E-0001", name: "Marcus Webb" };
   usedNames.add(CEO.name);
   const people: { id: string; name: string; unit: string; manager: string | null; title: string; band: string }[] = [];
@@ -513,10 +517,10 @@ async function main() {
     people.push({ id: `E-${String(2 + i).padStart(4, "0")}`, name: personName(), unit: VP_UNITS[i], manager: CEO.id, title: `VP ${UNITS.find((u) => u[0] === VP_UNITS[i])![1]}`, band: "B5" });
   }
   // rest of the org: assign manager = random earlier person in same unit, else VP of unit
-  const ORPHAN_IDS = new Set(["E-0173", "E-0201"]); // planted anomaly (b)
-  for (let i = 8; i <= 220; i++) {
+  const ORPHAN_IDS = new Set(["E-0173", "E-0201", "E-0287", "E-0312"]); // planted anomaly (b)
+  for (let i = 8; i <= HEADCOUNT; i++) {
     const id = `E-${String(i).padStart(4, "0")}`;
-    const unit = i >= 200 ? "OU-90" : pick(VP_UNITS);
+    const unit = i >= HEADCOUNT - 20 ? (i % 2 === 0 ? "OU-90" : "OU-91") : pick(VP_UNITS);
     const unitPool = people.filter((p) => p.unit === unit && p.id !== id);
     const vp = people.find((p) => p.unit === unit && p.manager === CEO.id);
     const manager = ORPHAN_IDS.has(id) ? null : (unitPool.length && rng() < 0.7 ? pick(unitPool) : vp)?.id ?? CEO.id;
@@ -546,8 +550,8 @@ async function main() {
     for (let k = 0; k < ri(1, 3); k++) edge(`hr:Person/${p.id}`, "hr:hasSkill", `hr:Skill/${pick(SKILLS).replace(/\s+/g, "-")}`, "hr");
   }
 
-  /* HR: ~30 contractors (custom class hr:Contractor, added in v2.3) */
-  for (let i = 1; i <= 30; i++) {
+  /* HR: ~45 contractors (custom class hr:Contractor, added in v2.3) */
+  for (let i = 1; i <= 45; i++) {
     const id = `C-${String(i).padStart(4, "0")}`;
     const unit = pick(VP_UNITS);
     const vp = people.find((p) => p.unit === unit && p.manager === CEO.id)!;
@@ -565,8 +569,8 @@ async function main() {
 
   /* HR: sample employment contracts + performance reviews */
   const sampled = new Set<string>();
-  for (let i = 0; i < 60; i++) {
-    const p = people[ri(1, 219)];
+  for (let i = 0; i < 90; i++) {
+    const p = people[ri(1, HEADCOUNT - 1)];
     if (sampled.has(p.id)) continue;
     sampled.add(p.id);
     const ec = `hr:EmploymentContract/EC-${p.id}`;
@@ -585,27 +589,29 @@ async function main() {
   const LGL_REGULATIONS = ["GDPR", "CCPA", "SOX", "HIPAA", "DORA"];
   for (const r of LGL_REGULATIONS)
     node({ iri: `lgl:Regulation/${r}`, moduleKey: "legal", classIri: "lgl:Regulation", label: r, createdAt: daysAgo(24) });
-  for (let i = 1; i <= 15; i++)
+  for (let i = 1; i <= 22; i++)
     node({ iri: `lgl:Matter/M-${String(i).padStart(3, "0")}`, moduleKey: "legal", classIri: "lgl:Matter", label: `Matter M-${String(i).padStart(3, "0")}`, props: { opened: iso(daysAgo(ri(10, 300))), status: pick(["open", "closed"]) }, createdAt: daysAgo(20) });
-  for (let i = 1; i <= 10; i++)
+  for (let i = 1; i <= 15; i++)
     node({ iri: `lgl:Precedent/P-${String(i).padStart(2, "0")}`, moduleKey: "legal", classIri: "lgl:Precedent", label: `Precedent ${pick(["Roe", "Peak", "Halcyon", "Meridian", "Vortex"])} v. ${pick(["State", "Global Inc", "Union", "Board"])} (${ri(1998, 2024)})`, createdAt: daysAgo(20) });
-  for (let i = 1; i <= 40; i++)
+  for (let i = 1; i <= 60; i++)
     node({ iri: `lgl:Party/PTY-${String(i).padStart(3, "0")}`, moduleKey: "legal", classIri: "lgl:Party", label: `${pick(LAST)} ${pick(["Ltd.", "GmbH", "Inc.", "BV", "SAS"])}`, createdAt: daysAgo(22) });
 
   const CLAUSE_KINDS = ["Liability Cap", "Termination for Convenience", "Data Processing", "IP Assignment", "Governing Law", "Indemnification", "Confidentiality", "Force Majeure"];
-  // contracts: 60. Vendor-linked contracts cover all vendors EXCEPT the 3 planted bad ones.
-  const BAD_VENDORS = new Set(["V-2291", "V-2410", "V-2555"]); // planted anomaly (a)
+  // contracts: 95. Vendor-linked contracts cover all vendors EXCEPT the 5 planted bad ones.
+  const BAD_VENDORS = new Set(["V-2291", "V-2410", "V-2555", "V-2618", "V-2734"]); // planted anomaly (a)
   const vendorIds: string[] = [];
-  for (let i = 0; i < 30; i++) vendorIds.push(`V-${2200 + ri(0, 400)}`);
-  // make vendor ids deterministic + include the planted three
-  const VENDORS = [...new Set([...BAD_VENDORS, ...vendorIds])].slice(0, 30);
-  while (VENDORS.length < 30) VENDORS.push(`V-${2600 + VENDORS.length}`);
+  for (let i = 0; i < 48; i++) vendorIds.push(`V-${2200 + ri(0, 600)}`);
+  // make vendor ids deterministic + include the planted five
+  const VENDORS = [...new Set([...BAD_VENDORS, ...vendorIds])].slice(0, 48);
+  while (VENDORS.length < 48) VENDORS.push(`V-${2800 + VENDORS.length}`);
   const goodVendors = VENDORS.filter((v) => !BAD_VENDORS.has(v));
+  const MEGA_VENDOR = goodVendors[0]; // planted anomaly (g): vendor spend concentration
 
-  for (let i = 1; i <= 60; i++) {
+  const NUM_CONTRACTS = 95;
+  for (let i = 1; i <= NUM_CONTRACTS; i++) {
     const num = `ACME-CTR-${String(i).padStart(4, "0")}`;
-    const status = i <= 44 ? "active" : i <= 54 ? "expired" : "draft";
-    const signer = people[ri(1, 219)];
+    const status = i <= 69 ? "active" : i <= 85 ? "expired" : "draft";
+    const signer = people[ri(1, HEADCOUNT - 1)];
     const jur = pick(JURISDICTIONS);
     node({
       iri: `lgl:Contract/${num}`,
@@ -621,7 +627,7 @@ async function main() {
     if (status === "active" && i <= goodVendors.length) {
       edge(`lgl:Contract/${num}`, "lgl:withParty", `fin:Vendor/${goodVendors[i - 1]}`, "legal");
     } else {
-      edge(`lgl:Contract/${num}`, "lgl:withParty", `lgl:Party/PTY-${String(ri(1, 40)).padStart(3, "0")}`, "legal");
+      edge(`lgl:Contract/${num}`, "lgl:withParty", `lgl:Party/PTY-${String(ri(1, 60)).padStart(3, "0")}`, "legal");
     }
     for (let c = 0; c < ri(2, 4); c++) {
       const cl = `lgl:Clause/${num}-CL${c + 1}`;
@@ -634,7 +640,25 @@ async function main() {
       edge(`lgl:Contract/${num}`, "lgl:hasObligation", ob, "legal");
     }
     if (rng() < 0.3)
-      edge(`lgl:Contract/${num}`, "lgl:relatesToMatter", `lgl:Matter/M-${String(ri(1, 15)).padStart(3, "0")}`, "legal");
+      edge(`lgl:Contract/${num}`, "lgl:relatesToMatter", `lgl:Matter/M-${String(ri(1, 22)).padStart(3, "0")}`, "legal");
+  }
+
+  // planted anomaly (h): 5 extra active contracts expiring within 5-25 days,
+  // deliberately given NO lgl:relatesToMatter (no renewal in progress)
+  for (let k = 0; k < 5; k++) {
+    const num = `ACME-CTR-${String(NUM_CONTRACTS + 1 + k).padStart(4, "0")}`;
+    const signer = people[ri(1, HEADCOUNT - 1)];
+    node({
+      iri: `lgl:Contract/${num}`,
+      moduleKey: "legal",
+      classIri: "lgl:Contract",
+      label: `Contract ${num}`,
+      props: { number: num, status: "active", value: ri(40, 600) * 1000, startDate: iso(daysAgo(ri(200, 700))), endDate: iso(daysAgo(-ri(5, 25))) },
+      createdAt: daysAgo(ri(15, 24)),
+    });
+    edge(`hr:Person/${signer.id}`, "hr:signs", `lgl:Contract/${num}`, "hr");
+    edge(`lgl:Contract/${num}`, "lgl:inJurisdiction", `lgl:Jurisdiction/${pick(JURISDICTIONS).replace(/[\s&]+/g, "-")}`, "legal");
+    edge(`lgl:Contract/${num}`, "lgl:withParty", `lgl:Party/PTY-${String(ri(1, 60)).padStart(3, "0")}`, "legal");
   }
 
   /* ── Compliance ────────────────────────────────────────────── */
@@ -657,12 +681,26 @@ async function main() {
     for (let k = 0; k < 4; k++) edge(`cmp:Policy/${pid}`, "cmp:governs", `lgl:Contract/ACME-CTR-${String(ri(5, 44)).padStart(4, "0")}`, "compliance");
   }
 
-  for (let i = 1; i <= 15; i++)
-    node({ iri: `cmp:Risk/RISK-${String(i).padStart(2, "0")}`, moduleKey: "compliance", classIri: "cmp:Risk", label: `Risk ${pick(["vendor concentration", "data leakage", "fraud", "outage", "regulatory drift"])} #${i}`, props: { likelihood: ri(1, 5), impact: ri(1, 5) }, createdAt: daysAgo(17) });
+  // RISK-20..22 reserved as high-severity + deliberately unmitigated (anomaly i)
+  const UNMITIGATED_HIGH_RISKS = new Set(["RISK-20", "RISK-21", "RISK-22"]);
+  for (let i = 1; i <= 22; i++) {
+    const rid = `RISK-${String(i).padStart(2, "0")}`;
+    const high = UNMITIGATED_HIGH_RISKS.has(rid);
+    node({
+      iri: `cmp:Risk/${rid}`,
+      moduleKey: "compliance",
+      classIri: "cmp:Risk",
+      label: `Risk ${pick(["vendor concentration", "data leakage", "fraud", "outage", "regulatory drift"])} #${i}`,
+      props: { likelihood: high ? 5 : ri(1, 5), impact: high ? 5 : ri(1, 5) },
+      createdAt: daysAgo(17),
+    });
+  }
 
-  const STALE_CONTROLS = new Set(["CMP-118", "CMP-131"]); // planted anomaly (c)
+  const STALE_NO_EVIDENCE = new Set(["CMP-131", "CMP-150"]); // planted anomaly (c1)
+  const STALE_OLD_EVIDENCE = new Set(["CMP-118", "CMP-142"]); // planted anomaly (c2)
   const CONTROL_NAMES = ["Access recertification", "Change approval", "Vendor due diligence", "Backup verification", "Log review", "Segregation of duties", "Encryption at rest", "Incident drills", "Data deletion SLA", "Penetration testing"];
-  for (let i = 1; i <= 40; i++) {
+  const NUM_CONTROLS = 60;
+  for (let i = 1; i <= NUM_CONTROLS; i++) {
     const cid = `CMP-${100 + i}`;
     node({
       iri: `cmp:Control/${cid}`,
@@ -677,29 +715,28 @@ async function main() {
     node({ iri: cm, moduleKey: "compliance", classIri: "cmp:ControlMapping", label: `${cid} ↔ ${pick(CMP_REGS)}`, createdAt: daysAgo(16) });
     edge(`cmp:Control/${cid}`, "cmp:mappedVia", cm, "compliance");
     edge(cm, "cmp:mapsToRegulation", `cmp:Regulation/${pick(CMP_REGS)}`, "compliance");
-    if (rng() < 0.4) edge(`cmp:Control/${cid}`, "cmp:mitigates", `cmp:Risk/RISK-${String(ri(1, 15)).padStart(2, "0")}`, "compliance");
+    // random mitigation links only ever target RISK-01..19 — RISK-20..22 stay unmitigated (anomaly i)
+    if (rng() < 0.5) edge(`cmp:Control/${cid}`, "cmp:mitigates", `cmp:Risk/RISK-${String(ri(1, 19)).padStart(2, "0")}`, "compliance");
     if (rng() < 0.35) {
       const at = `cmp:Attestation/ATT-${cid}`;
       node({ iri: at, moduleKey: "compliance", classIri: "cmp:Attestation", label: `Attestation ${cid} 2025-Q3`, props: { signedBy: pick(people).name, signedAt: iso(daysAgo(ri(5, 60))) }, createdAt: daysAgo(15) });
       edge(`cmp:Control/${cid}`, "cmp:attestedBy", at, "compliance");
     }
-    // evidence: CMP-131 gets NONE; CMP-118's latest is 94 days old; others fresh
-    if (cid === "CMP-131") continue;
+    // evidence: STALE_NO_EVIDENCE get NONE; STALE_OLD_EVIDENCE's latest is 94+ days old; others fresh
+    if (STALE_NO_EVIDENCE.has(cid)) continue;
     const evCount = ri(1, 3);
     for (let e = 0; e < evCount; e++) {
-      const ageDays = cid === "CMP-118" ? 94 + e : ri(2, 80); // CMP-118: ALL evidence ≥94d old (anomaly c)
+      const ageDays = STALE_OLD_EVIDENCE.has(cid) ? 94 + e : ri(2, 80); // ALL evidence ≥94d old (anomaly c2)
       const ev = `cmp:Evidence/${cid}-EV${e + 1}`;
       node({ iri: ev, moduleKey: "compliance", classIri: "cmp:Evidence", label: `Evidence ${cid}.${e + 1}`, props: { collectedAt: iso(daysAgo(ageDays)), kind: pick(["screenshot", "log extract", "signed PDF", "ticket export"]) }, createdAt: daysAgo(ageDays) });
       edge(`cmp:Control/${cid}`, "cmp:hasEvidence", ev, "compliance");
     }
   }
-  // CMP-118 evidence list must have NOTHING newer than 94d: ensure its extra items are old too
-  // (handled above: e===0 is 94d; other items use ri(2,80) — force old for CMP-118)
 
-  /* audit findings: 25, 8 open; exactly one (AF-2025-014) against POL-07 */
-  for (let i = 1; i <= 25; i++) {
+  /* audit findings: 35, 12 open; exactly one (AF-2025-014) against POL-07 */
+  for (let i = 1; i <= 35; i++) {
     const fid = `AF-2025-${String(i).padStart(3, "0")}`;
-    const open = i <= 7 || i === 14; // 8 open; AF-2025-014 is the planted open finding vs POL-07 (anomaly f)
+    const open = i <= 11 || i === 14; // 12 open; AF-2025-014 is the planted open finding vs POL-07 (anomaly f)
     node({
       iri: `cmp:AuditFinding/${fid}`,
       moduleKey: "compliance",
@@ -739,7 +776,9 @@ async function main() {
     node({ iri: `fin:CostCenter/${code}`, moduleKey: "finance", classIri: "fin:CostCenter", label: `${name} (${code})`, props: { code, name }, createdAt: daysAgo(14) });
   for (const [code, name] of COST_CENTERS) {
     const b = `fin:Budget/BUD-2025-${code}`;
-    node({ iri: b, moduleKey: "finance", classIri: "fin:Budget", label: `FY2025 budget — ${name}`, props: { amount: ri(200, 2400) * 1000, fiscalYear: 2025 }, createdAt: daysAgo(13) });
+    // calibrated so most (not all) of the 12 cost centers land under budget:
+    // ~1500 txns / 12 CCs * ~$24k avg ≈ $3M avg booked per CC
+    node({ iri: b, moduleKey: "finance", classIri: "fin:Budget", label: `FY2025 budget — ${name}`, props: { amount: ri(3200, 5200) * 1000, fiscalYear: 2025 }, createdAt: daysAgo(13) });
     edge(b, "fin:budgetFor", `fin:CostCenter/${code}`, "finance");
   }
   for (let i = 1; i <= 10; i++)
@@ -753,9 +792,10 @@ async function main() {
   for (const per of PERIODS)
     node({ iri: `fin:FiscalPeriod/${per}`, moduleKey: "finance", classIri: "fin:FiscalPeriod", label: per, createdAt: daysAgo(13) });
 
-  // 820 transactions; TXN-000801..805 have NO cost-center edge (planted anomaly d)
-  const NO_CC = new Set([801, 802, 803, 804, 805]);
-  for (let i = 1; i <= 820; i++) {
+  // 1500 transactions; TXN-000801..809 have NO cost-center edge (planted anomaly d)
+  const NO_CC = new Set([801, 802, 803, 804, 805, 806, 807, 808, 809]);
+  const NUM_TXNS = 1500;
+  for (let i = 1; i <= NUM_TXNS; i++) {
     const tid = `TXN-${String(i).padStart(6, "0")}`;
     const vendor = rng() < 0.38 ? pick(VENDORS) : null;
     node({
@@ -771,7 +811,7 @@ async function main() {
     edge(`fin:Transaction/${tid}`, "fin:inPeriod", `fin:FiscalPeriod/${pick(PERIODS)}`, "finance");
   }
   // guarantee each planted bad vendor has payments (anomaly a): 3-5 payment txns each
-  let extraTxn = 900;
+  let extraTxn = NUM_TXNS + 100;
   for (const bv of BAD_VENDORS) {
     for (let k = 0; k < ri(3, 5); k++) {
       const tid = `TXN-${String(extraTxn++).padStart(6, "0")}`;
@@ -788,12 +828,52 @@ async function main() {
       edge(`fin:Transaction/${tid}`, "fin:inPeriod", `fin:FiscalPeriod/2025-Q3`, "finance");
     }
   }
+  // planted anomaly (g): MEGA_VENDOR gets a burst of large payments — spend concentration
+  for (let k = 0; k < 50; k++) {
+    const tid = `TXN-${String(extraTxn++).padStart(6, "0")}`;
+    node({
+      iri: `fin:Transaction/${tid}`,
+      moduleKey: "finance",
+      classIri: "fin:Transaction",
+      label: tid,
+      props: { txnId: tid, amount: ri(60000, 110000), currency: "USD", date: iso(daysAgo(ri(1, 90))), vendorRef: MEGA_VENDOR },
+      createdAt: daysAgo(6),
+    });
+    edge(`fin:Transaction/${tid}`, "fin:bookedTo", `fin:CostCenter/${pick(COST_CENTERS)[0]}`, "finance");
+    edge(`fin:Transaction/${tid}`, "fin:paidTo", `fin:Vendor/${MEGA_VENDOR}`, "finance");
+    edge(`fin:Transaction/${tid}`, "fin:inPeriod", `fin:FiscalPeriod/2025-Q4`, "finance");
+  }
   // invoices
-  for (let i = 1; i <= 80; i++) {
+  for (let i = 1; i <= 130; i++) {
     const inv = `fin:Invoice/INV-${String(i).padStart(4, "0")}`;
     const v = pick(goodVendors);
     node({ iri: inv, moduleKey: "finance", classIri: "fin:Invoice", label: `INV-${String(i).padStart(4, "0")}`, props: { amount: ri(500, 60000), issued: iso(daysAgo(ri(2, 90))), status: pick(["paid", "open", "overdue"]) }, createdAt: daysAgo(ri(1, 12)) });
     edge(inv, "fin:billedTo", `fin:Vendor/${v}`, "finance");
+  }
+
+  // safety net (anomaly j): the budget range above is calibrated so a
+  // handful of cost centers naturally exceed their budget from the random
+  // transaction distribution alone — but if RNG happens to leave none over,
+  // guarantee the single top spender still is, so the rule never goes empty.
+  {
+    const bookedByCC = new Map<string, number>();
+    const ccOfTxn = new Map<string, string>();
+    for (const e of edgeSpecs) {
+      if (e.predicate === "fin:bookedTo") ccOfTxn.set(e.from, e.to.replace("fin:CostCenter/", ""));
+    }
+    for (const n of nodeSpecs) {
+      if (n.classIri !== "fin:Transaction") continue;
+      const cc = ccOfTxn.get(n.iri);
+      if (!cc) continue;
+      bookedByCC.set(cc, (bookedByCC.get(cc) ?? 0) + (Number(n.props?.amount) || 0));
+    }
+    const [topCC, topSpent] = [...bookedByCC.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+    if (topCC) {
+      const budgetNode = nodeSpecs.find((n) => n.iri === `fin:Budget/BUD-2025-${topCC}`);
+      if (budgetNode?.props && Number(budgetNode.props.amount) > topSpent) {
+        budgetNode.props.amount = Math.round(topSpent * 0.92);
+      }
+    }
   }
 
   /* ── Logistics ─────────────────────────────────────────────── */
@@ -811,19 +891,20 @@ async function main() {
     node({ iri: `log:Incoterm/${t}`, moduleKey: "logistics", classIri: "log:Incoterm", label: t, createdAt: daysAgo(12) });
   for (let i = 1; i <= 10; i++)
     node({ iri: `log:DeliveryWindow/DW-${String(i).padStart(2, "0")}`, moduleKey: "logistics", classIri: "log:DeliveryWindow", label: `Window ${iso(daysAgo(-ri(1, 21)))} ${pick(["08-12", "12-16", "16-20"])}`, createdAt: daysAgo(11) });
-  for (let i = 1; i <= 40; i++) {
+  for (let i = 1; i <= 55; i++) {
     const it = `log:InventoryItem/SKU-${String(1000 + i)}`;
     node({ iri: it, moduleKey: "logistics", classIri: "log:InventoryItem", label: `SKU-${1000 + i} ${pick(["brackets", "sensors", "packaging", "cabling", "fasteners"])}`, props: { onHand: ri(0, 4000) }, createdAt: daysAgo(11) });
     edge(pick(WAREHOUSES.map((w) => `log:Warehouse/${w}`)), "log:stocks", it, "logistics");
   }
-  for (let i = 1; i <= 60; i++) {
+  const NUM_POS = 95;
+  for (let i = 1; i <= NUM_POS; i++) {
     const po = `log:PurchaseOrder/PO-${String(i).padStart(4, "0")}`;
     node({ iri: po, moduleKey: "logistics", classIri: "log:PurchaseOrder", label: `PO-${String(i).padStart(4, "0")}`, props: { amount: ri(800, 90000), issued: iso(daysAgo(ri(2, 100))) }, createdAt: daysAgo(10) });
     edge(po, "log:poVendor", `fin:Vendor/${pick(goodVendors)}`, "logistics");
   }
-  for (let i = 1; i <= 45; i++) {
+  for (let i = 1; i <= 75; i++) {
     const sid = `SHP-${String(i).padStart(3, "0")}`;
-    const status = i <= 6 ? "delayed" : pick(["delivered", "delivered", "in_transit"]);
+    const status = i <= 10 ? "delayed" : pick(["delivered", "delivered", "in_transit"]);
     const s = `log:Shipment/${sid}`;
     node({
       iri: s,
@@ -834,16 +915,16 @@ async function main() {
       createdAt: daysAgo(ri(1, 9)),
     });
     edge(s, "log:onRoute", `log:Route/${pick(ROUTES)}`, "logistics");
-    // carrier C-08 carries ~2/3 of shipments (centrality demo)
+    // carrier C-08 carries ~2/3 of shipments (centrality demo + planted anomaly (k): carrier concentration)
     edge(s, "log:shippedBy", `log:Carrier/${rng() < 0.66 ? "C-08" : pick(CARRIERS)}`, "logistics");
     edge(s, "log:fromWarehouse", `log:Warehouse/${pick(WAREHOUSES)}`, "logistics");
     edge(s, "log:underIncoterm", `log:Incoterm/${pick(INCOTERMS)}`, "logistics");
-    if (rng() < 0.7) edge(s, "log:fulfills", `log:PurchaseOrder/PO-${String(ri(1, 60)).padStart(4, "0")}`, "logistics");
+    if (rng() < 0.7) edge(s, "log:fulfills", `log:PurchaseOrder/PO-${String(ri(1, NUM_POS)).padStart(4, "0")}`, "logistics");
     if (rng() < 0.5) edge(s, "log:hasWindow", `log:DeliveryWindow/DW-${String(ri(1, 10)).padStart(2, "0")}`, "logistics");
   }
-  // cross-module axiom: a few controls monitor transactions
-  for (let i = 0; i < 12; i++)
-    edge(`cmp:Control/CMP-${100 + ri(1, 40)}`, "cmp:monitors", `fin:Transaction/TXN-${String(ri(1, 800)).padStart(6, "0")}`, "compliance");
+  // cross-module axiom: a handful of controls monitor transactions
+  for (let i = 0; i < 20; i++)
+    edge(`cmp:Control/CMP-${100 + ri(1, NUM_CONTROLS)}`, "cmp:monitors", `fin:Transaction/TXN-${String(ri(1, NUM_TXNS)).padStart(6, "0")}`, "compliance");
 
   console.log("all instances planned:", nodeSpecs.length, "nodes,", edgeSpecs.length, "edges");
 
@@ -861,7 +942,7 @@ async function main() {
       workspaceId,
       name: "HRIS Export",
       type: "csv",
-      configJson: { filename: "hris-export.csv", schedule: "hourly", rows: 212, csvText: HRIS_CSV },
+      configJson: { filename: "hris-export.csv", schedule: "hourly", rows: HEADCOUNT, csvText: HRIS_CSV },
       status: "connected",
       createdAt: daysAgo(21),
     })
@@ -996,12 +1077,12 @@ async function main() {
   /* ── sync job history ──────────────────────────────────────── */
   const SYNC_HISTORY: [number, "succeeded" | "failed", number, string, number][] = [
     // [mappingId, status, rows, snapshotLabel, daysAgo]
-    [hrisMapId, "succeeded", 212, "v44", 6],
-    [contractsMapId, "succeeded", 58, "v45", 5],
-    [hrisMapId, "succeeded", 213, "v46", 3],
+    [hrisMapId, "succeeded", HEADCOUNT, "v44", 6],
+    [contractsMapId, "succeeded", NUM_CONTRACTS - 5, "v45", 5],
+    [hrisMapId, "succeeded", HEADCOUNT + 1, "v46", 3],
     [contractsMapId, "failed", 0, "", 2],
-    [contractsMapId, "succeeded", 60, "v47", 2],
-    [hrisMapId, "succeeded", 212, "v48", 1],
+    [contractsMapId, "succeeded", NUM_CONTRACTS, "v47", 2],
+    [hrisMapId, "succeeded", HEADCOUNT, "v48", 1],
   ];
   for (const [mid, status, rows, snap, ago] of SYNC_HISTORY) {
     await db.insert(syncJobs).values({
@@ -1014,24 +1095,18 @@ async function main() {
     });
   }
 
-  /* ── insight engine: run rules over the real KG ────────────── */
+  /* ── insight engine: run rules over the real KG (twin module included
+     once db/seed-twins.ts has run — reconcileInsights is safe to re-run) ── */
   const allNodes = await db.select().from(kgNodes).where(eq(kgNodes.workspaceId, workspaceId));
   const allEdges = await db.select().from(kgEdges).where(eq(kgEdges.workspaceId, workspaceId));
-  const findings = runRules(allNodes, allEdges);
-  console.log("rules fired:", findings.map((f) => `${f.ruleId}(${f.severity})`).join(", "));
-  for (const f of findings) {
-    await db.insert(insights).values({
-      workspaceId,
-      type: "anomaly",
-      severity: f.severity,
-      ruleId: f.ruleId,
-      title: f.title,
-      summary: f.summary,
-      evidenceJson: f.evidence,
-      status: "open",
-      createdAt: daysAgo(1, 12),
-    });
-  }
+  const { results: fired } = await reconcileInsights(workspaceId);
+  console.log("rules fired:", fired.map((f) => f.ruleId).join(", "));
+  const [topRisk] = await db
+    .select()
+    .from(insights)
+    .where(and(eq(insights.workspaceId, workspaceId), eq(insights.type, "anomaly"), eq(insights.severity, "risk")))
+    .orderBy(insights.id)
+    .limit(1);
   const txCount = allNodes.filter((n) => n.classIri === "fin:Transaction").length;
   await db.insert(insights).values({
     workspaceId,
@@ -1041,8 +1116,8 @@ async function main() {
     title: "What changed this week — Acme Corp",
     summary:
       `The living graph now holds ${allNodes.length.toLocaleString()} instances and ${allEdges.length.toLocaleString()} edges across 5 modules. ` +
-      `Finance recorded ${txCount} transactions; the HRIS sync upserted 212 people records. ` +
-      `The insight engine raised ${findings.length} findings, including ${findings.find((f) => f.ruleId === "vendor-payment-without-contract")?.title ?? "vendor anomalies"} — all traceable to evidence.`,
+      `Finance recorded ${txCount} transactions; the HRIS sync upserted ${HEADCOUNT} people records. ` +
+      `The insight engine raised ${fired.length} findings, including ${topRisk?.title ?? "several risk-level anomalies"} — all traceable to evidence.`,
     evidenceJson: { nodeIds: [], edgeIds: [], missingEdges: [] },
     status: "open",
     createdAt: daysAgo(0, 6),
@@ -1149,7 +1224,7 @@ async function main() {
   console.log("SEED COMPLETE", {
     nodes: allNodes.length,
     edges: allEdges.length,
-    insights: findings.length + 1,
+    insights: fired.length + 1,
   });
   process.exit(0);
 }
