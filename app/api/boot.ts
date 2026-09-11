@@ -13,6 +13,7 @@ import { csrf } from "hono/csrf";
 
 import { sql } from "drizzle-orm";
 import { getDb } from "./queries/connection";
+import { semanticEngine } from "./services/semanticEngine";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -105,11 +106,18 @@ const healthCheck = async (c: Context<{ Bindings: HttpBindings }>) => {
   try {
     const db = getDb();
     await db.execute(sql`SELECT 1`);
+    const engineHealth = await semanticEngine.checkHealth();
     return c.json({
       status: "ok",
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
       database: "connected",
+      semanticEngine: {
+        status: engineHealth.alive ? "connected" : "offline",
+        version: engineHealth.version,
+        url: engineHealth.url,
+        latencyMs: engineHealth.latencyMs,
+      },
     });
   } catch (err) {
     return c.json(
@@ -126,6 +134,55 @@ const healthCheck = async (c: Context<{ Bindings: HttpBindings }>) => {
 };
 app.get("/health", healthCheck);
 app.get("/api/health", healthCheck);
+
+// SPARQL 1.1 Query Endpoint
+app.post("/api/sparql", async (c) => {
+  let queryText = "";
+  const contentType = c.req.header("content-type") || "";
+  if (contentType.includes("application/sparql-query")) {
+    queryText = await c.req.text();
+  } else if (contentType.includes("application/json")) {
+    const body = (await c.req.json().catch(() => ({}))) as { query?: string };
+    queryText = body.query || "";
+  } else {
+    const body = (await c.req.parseBody().catch(() => ({}))) as { query?: unknown };
+    queryText = String(body.query || "");
+  }
+
+  if (!queryText.trim()) {
+    return c.json({ error: "Missing SPARQL query string (parameter 'query')" }, 400);
+  }
+
+  const isAlive = await semanticEngine.ensureEngineRunning();
+  if (!isAlive) {
+    return c.json(
+      { error: "Semantic engine is currently unavailable. Ensure open-ontologies service is active." },
+      503,
+    );
+  }
+
+  try {
+    const res = await semanticEngine.querySparql(queryText);
+    return c.json({
+      head: { vars: res.variables },
+      results: {
+        bindings: res.results.map((r) => {
+          const row: Record<string, { type: string; value: string }> = {};
+          for (const [k, v] of Object.entries(r)) {
+            const clean = v.replace(/^<|>$/g, "");
+            row[k] = {
+              type: v.startsWith("<") && v.endsWith(">") ? "uri" : "literal",
+              value: clean,
+            };
+          }
+          return row;
+        }),
+      },
+    });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
+});
 
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({

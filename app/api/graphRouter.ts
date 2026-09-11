@@ -12,6 +12,7 @@ import {
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { getDemoWorkspace } from "./services/audit";
+import { semanticEngine } from "./services/semanticEngine";
 
 async function resolveWorkspace(workspaceKey?: string) {
   if (!workspaceKey) return getDemoWorkspace();
@@ -276,4 +277,53 @@ export const graphRouter = createRouter({
         },
       };
     }),
+
+  sparqlQuery: authedQuery
+    .input(
+      z.object({
+        query: z.string().min(1).max(50000),
+        autoSync: z.boolean().default(false),
+      }),
+    )
+    .query(async ({ input }) => {
+      const ws = await getDemoWorkspace();
+      const isAlive = await semanticEngine.ensureEngineRunning();
+      if (!isAlive) {
+        throw new TRPCError({
+          code: "SERVICE_UNAVAILABLE",
+          message:
+            "Semantic engine is currently offline. Please ensure open-ontologies is running.",
+        });
+      }
+
+      if (input.autoSync) {
+        await semanticEngine.syncWorkspace(ws.id);
+      }
+
+      try {
+        const res = await semanticEngine.querySparql(input.query);
+        return {
+          variables: res.variables,
+          results: res.results,
+          count: res.results.length,
+        };
+      } catch (err) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `SPARQL execution failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }),
+
+  syncStore: authedQuery.query(async () => {
+    const ws = await getDemoWorkspace();
+    const isAlive = await semanticEngine.ensureEngineRunning();
+    if (!isAlive) {
+      throw new TRPCError({
+        code: "SERVICE_UNAVAILABLE",
+        message: "Semantic engine is currently offline.",
+      });
+    }
+    return semanticEngine.syncWorkspace(ws.id);
+  }),
 });

@@ -7,12 +7,19 @@ import {
   kgEdges,
   kgNodes,
   mappings,
+  ontologyClasses,
   ontologyModules,
   syncJobs,
 } from "@db/schema";
 import { createRouter, authedQuery, adminMutation, ontologistMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
+import { semanticEngine } from "./services/semanticEngine";
+import {
+  buildPrefixMap,
+  knowledgeGraphToTurtle,
+  shaclJsonToTurtle,
+} from "./services/rdfBridge";
 
 /* ── CSV helpers ─────────────────────────────────────────────── */
 
@@ -341,6 +348,69 @@ export const mappingRouter = createRouter({
       try {
         const { rows } = parseCsv(cfg.csvText);
         const moduleKey = (await db.select().from(ontologyModules).where(eq(ontologyModules.id, m.moduleId)).limit(1))[0]?.key ?? "custom";
+
+        // Pre-validate mapped data against W3C SHACL shapes if defined on class
+        const [targetClass] = await db
+          .select()
+          .from(ontologyClasses)
+          .where(
+            and(
+              eq(ontologyClasses.moduleId, m.moduleId),
+              eq(ontologyClasses.iri, m.classIri),
+            ),
+          )
+          .limit(1);
+
+        let shaclReport: {
+          conforms: boolean;
+          violationCount: number;
+          violations: unknown[];
+        } | null = null;
+
+        if (targetClass?.shaclJson && (await semanticEngine.ensureEngineRunning())) {
+          try {
+            const prefixMap = buildPrefixMap();
+            const shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);
+            if (shapesTtl.trim()) {
+              const candidateNodes: (typeof kgNodes.$inferSelect)[] = [];
+              let tempId = 1;
+              for (const row of rows) {
+                const iri = renderTemplate(columnMap.subject, row);
+                if (!iri || iri.includes("{}")) continue;
+                const props: Record<string, string> = {};
+                for (const [col, propIri] of Object.entries(columnMap.fields ?? {})) {
+                  if (row[col]) props[propIri] = row[col];
+                }
+                candidateNodes.push({
+                  id: tempId++,
+                  workspaceId: ws.id,
+                  moduleKey,
+                  classIri: m.classIri,
+                  iri,
+                  label: columnMap.label ? row[columnMap.label] ?? iri : iri,
+                  propsJson: props,
+                  sourceMappingId: m.id,
+                  createdAt: new Date(),
+                  updatedAt: new Date(),
+                  deletedAt: null,
+                });
+              }
+
+              const dataTtl = knowledgeGraphToTurtle(candidateNodes, [], prefixMap);
+              await semanticEngine.clearStore();
+              await semanticEngine.loadTurtle(dataTtl);
+              const valRes = await semanticEngine.validateShacl(shapesTtl);
+              shaclReport = {
+                conforms: valRes.conforms,
+                violationCount: valRes.violationCount,
+                violations: valRes.violations,
+              };
+            }
+          } catch (shaclErr) {
+            console.warn("[mappingRouter] SHACL pre-validation encountered error:", shaclErr);
+          }
+        }
+
         let processed = 0;
         const iriToId = new Map<string, number>();
         const pendingEdges: { from: number; toIri: string; predicate: string }[] = [];
@@ -430,18 +500,32 @@ export const mappingRouter = createRouter({
 
         await db
           .update(syncJobs)
-          .set({ status: "succeeded", rowsProcessed: processed, snapshotLabel: snapLabel, finishedAt: new Date() })
+          .set({
+            status: "succeeded",
+            rowsProcessed: processed,
+            snapshotLabel: snapLabel,
+            finishedAt: new Date(),
+          })
           .where(eq(syncJobs.id, jobId));
         await writeAudit({
           workspaceId: ws.id,
           actor: actorLabelFor(ctx.user),
-          action: `Sync '${m.name}' upserted ${processed} instances, ${edgesCreated} edges (${snapLabel})`,
+          action: `Sync '${m.name}' upserted ${processed} instances, ${edgesCreated} edges (${snapLabel})${
+            shaclReport ? ` [SHACL ${shaclReport.conforms ? "PASSED" : `${shaclReport.violationCount} violations`}]` : ""
+          }`,
           entityType: "sync_job",
           entityId: jobId,
-          payload: { mappingId: m.id, rowsProcessed: processed, edgesCreated, snapshot: snapLabel },
+          payload: { mappingId: m.id, processed, edgesCreated, snapshot: snapLabel, shaclReport },
         });
+
         const [job] = await db.select().from(syncJobs).where(eq(syncJobs.id, jobId));
-        return { job, nodesUpserted: processed, edgesCreated, snapshot: snapLabel };
+        return {
+          job,
+          nodesUpserted: processed,
+          edgesCreated,
+          snapshot: snapLabel,
+          shaclReport,
+        };
       } catch (err) {
         await db
           .update(syncJobs)

@@ -28,3 +28,11 @@ app/node_modules/.tmp/
 # Logs
 *.log
 npm-debug.log*
+
+# Binaries & Semantic Engine
+bin/
+app/bin/
+*.exe
+
+# Temp test files
+app/.tmp-ui-test/

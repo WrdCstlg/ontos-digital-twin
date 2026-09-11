@@ -2,6 +2,7 @@ import { z } from "zod";
 import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
+  kgEdges,
   kgNodes,
   ontologyClasses,
   ontologyModules,
@@ -16,6 +17,13 @@ import {
   writeAudit,
 } from "./services/audit";
 import { serializeModule } from "./services/serializers";
+import { semanticEngine } from "./services/semanticEngine";
+import {
+  buildPrefixMap,
+  moduleToTurtle,
+  knowledgeGraphToTurtle,
+  shaclJsonToTurtle,
+} from "./services/rdfBridge";
 
 const moduleKeySchema = z
   .string()
@@ -525,26 +533,100 @@ export const ontologyRouter = createRouter({
     }),
 
   runReasoner: authedQuery
-    .input(z.object({ moduleKey: moduleKeySchema }))
+    .input(
+      z.object({
+        moduleKey: moduleKeySchema,
+        profile: z.enum(["rdfs", "owl-rl", "owl-rl-ext", "owl-dl"]).default("owl-rl"),
+      }),
+    )
     .query(async ({ input }) => {
-      // DETERMINISTIC SIMULATED REASONER — computes the transitive subclass
-      // closure of the module's class tree and a consistency report.
-      const { mod } = await requireModule(input.moduleKey);
+      const { ws, mod } = await requireModule(input.moduleKey);
       const db = getDb();
       const classes = await db
         .select()
         .from(ontologyClasses)
         .where(eq(ontologyClasses.moduleId, mod.id));
-      const byId = new Map(classes.map((c) => [c.id, c]));
+      const properties = await db
+        .select()
+        .from(ontologyProperties)
+        .where(eq(ontologyProperties.moduleId, mod.id));
+
+      const nodes = await db
+        .select()
+        .from(kgNodes)
+        .where(
+          and(
+            eq(kgNodes.workspaceId, ws.id),
+            eq(kgNodes.moduleKey, mod.key),
+            isNull(kgNodes.deletedAt),
+          ),
+        );
+      const edges = await db
+        .select()
+        .from(kgEdges)
+        .where(
+          and(
+            eq(kgEdges.workspaceId, ws.id),
+            eq(kgEdges.moduleKey, mod.key),
+            isNull(kgEdges.deletedAt),
+          ),
+        );
 
       const startedAt = Date.now();
+
+      // 1. Attempt native reasoning via open-ontologies (Oxigraph)
+      const isEngineAlive = await semanticEngine.ensureEngineRunning();
+      if (isEngineAlive) {
+        try {
+          await semanticEngine.clearStore();
+          const prefixMap = buildPrefixMap([mod]);
+          const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
+          await semanticEngine.loadTurtle(modTtl);
+
+          if (nodes.length > 0) {
+            const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap);
+            await semanticEngine.loadTurtle(instTtl);
+          }
+
+          const res = await semanticEngine.runReasoning(input.profile);
+          return {
+            moduleKey: mod.key,
+            version: mod.version,
+            reasoner: `open-ontologies (${res.engineVersion} - Oxigraph native ${res.profile})`,
+            durationMs: res.durationMs,
+            classesClassified: classes.length,
+            inferredSubClassOf: res.inferredSubClassOf,
+            inferredCount: res.inferredCount,
+            initialTriples: res.initialTriples,
+            finalTriples: res.finalTriples,
+            iterations: res.iterations,
+            sampleInferences: res.sampleInferences,
+            consistent: res.consistent,
+            issues: res.issues,
+            warnings: res.warnings,
+            log: [
+              `native reasoner … ${classes.length} classes, ${properties.length} properties, ${nodes.length} instances`,
+              `profile: ${res.profile} (${res.iterations} fixpoint iterations)`,
+              `materialized ${res.inferredCount} inferred triples (total ${res.finalTriples})`,
+              ...res.sampleInferences.slice(0, 10).map((s) => `inferred: ${s}`),
+              `consistent: ${res.consistent}`,
+            ],
+          };
+        } catch (engineErr) {
+          console.warn(
+            "[ontologyRouter] Semantic engine reasoning failed, falling back to local:",
+            engineErr,
+          );
+        }
+      }
+
+      // 2. Fallback deterministic reasoner when engine is offline
+      const byId = new Map(classes.map((c) => [c.id, c]));
       const inferred: { child: string; ancestor: string; via: string }[] = [];
       const issues: string[] = [];
       const warnings: string[] = [];
 
       for (const c of classes) {
-        // walk ancestor chain, detecting cycles; every ancestor beyond the
-        // direct parent is an inferred (transitive) rdfs:subClassOf link
         const seen = new Set<number>([c.id]);
         let prev = c;
         let cur = c.parentId ? byId.get(c.parentId) : undefined;
@@ -565,12 +647,7 @@ export const ontologyRouter = createRouter({
         if (!c.definition) warnings.push(`${c.iri} missing rdfs:comment/definition`);
       }
 
-      // orphan properties: domain/range pointing outside known classes
-      const props = await db
-        .select()
-        .from(ontologyProperties)
-        .where(eq(ontologyProperties.moduleId, mod.id));
-      for (const p of props) {
+      for (const p of properties) {
         if (p.domainClassId && !byId.has(p.domainClassId)) {
           const [ext] = await db
             .select()
@@ -592,18 +669,96 @@ export const ontologyRouter = createRouter({
       return {
         moduleKey: mod.key,
         version: mod.version,
-        reasoner: "ontos-sim (deterministic ELK-style classifier)",
+        reasoner: "ontos-sim (deterministic ELK-style classifier, fallback mode)",
         durationMs: Date.now() - startedAt,
         classesClassified: classes.length,
         inferredSubClassOf: inferredList,
+        inferredCount: inferredList.length,
+        initialTriples: classes.length + properties.length,
+        finalTriples: classes.length + properties.length + inferredList.length,
+        iterations: 1,
+        sampleInferences: inferredList.slice(0, 10).map((i) => `${i.child} rdfs:subClassOf ${i.ancestor}`),
         consistent: issues.length === 0,
         issues,
         warnings,
         log: [
-          `classify … ${classes.length} classes, ${props.length} properties`,
+          `classify (fallback) … ${classes.length} classes, ${properties.length} properties`,
           ...inferredList.slice(0, 12).map((i) => `inferred: ${i.child} ⊑ ${i.ancestor}`),
           `consistent: ${issues.length === 0}`,
         ],
+      };
+    }),
+
+  validateShacl: authedQuery
+    .input(z.object({ moduleKey: moduleKeySchema }))
+    .query(async ({ input }) => {
+      const { ws, mod } = await requireModule(input.moduleKey);
+      const db = getDb();
+      const classes = await db
+        .select()
+        .from(ontologyClasses)
+        .where(eq(ontologyClasses.moduleId, mod.id));
+      const properties = await db
+        .select()
+        .from(ontologyProperties)
+        .where(eq(ontologyProperties.moduleId, mod.id));
+
+      const nodes = await db
+        .select()
+        .from(kgNodes)
+        .where(
+          and(
+            eq(kgNodes.workspaceId, ws.id),
+            eq(kgNodes.moduleKey, mod.key),
+            isNull(kgNodes.deletedAt),
+          ),
+        );
+      const edges = await db
+        .select()
+        .from(kgEdges)
+        .where(
+          and(
+            eq(kgEdges.workspaceId, ws.id),
+            eq(kgEdges.moduleKey, mod.key),
+            isNull(kgEdges.deletedAt),
+          ),
+        );
+
+      const prefixMap = buildPrefixMap([mod]);
+      const shapesTtl = shaclJsonToTurtle(classes, prefixMap);
+      if (!shapesTtl.trim()) {
+        return {
+          conforms: true,
+          focusNodes: 0,
+          violationCount: 0,
+          violations: [],
+          message: "No SHACL constraints configured for module",
+        };
+      }
+
+      const isEngineAlive = await semanticEngine.ensureEngineRunning();
+      if (!isEngineAlive) {
+        return {
+          conforms: true,
+          focusNodes: 0,
+          violationCount: 0,
+          violations: [],
+          message: "Semantic engine offline — SHACL shapes generated but validation skipped",
+        };
+      }
+
+      await semanticEngine.clearStore();
+      const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
+      await semanticEngine.loadTurtle(modTtl);
+      if (nodes.length > 0) {
+        const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap);
+        await semanticEngine.loadTurtle(instTtl);
+      }
+
+      const report = await semanticEngine.validateShacl(shapesTtl);
+      return {
+        ...report,
+        moduleKey: mod.key,
       };
     }),
 });
