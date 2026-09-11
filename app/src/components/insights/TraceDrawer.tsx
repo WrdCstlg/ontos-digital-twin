@@ -20,7 +20,7 @@ import { EvidenceCanvas, type EvidenceEdge, type EvidenceNode } from './Evidence
 import type { InsightRow, KgNodeRow, SubgraphResult } from './types';
 import {
   SEVERITY_COLOR,
-  extractFirstIri,
+  resolveInstanceIri,
   iriLocalName,
   moduleKeyForIri,
   parseEvidence,
@@ -33,11 +33,10 @@ export type TraceTarget =
 
 function resolveCenterIri(target: TraceTarget): string | null {
   if (target.kind === 'grounding') return target.centerIri;
-  const ev = parseEvidence(target.insight.evidenceJson);
-  return (
-    ev.missingEdges[0]?.fromIri ??
-    extractFirstIri(target.insight.summary) ??
-    extractFirstIri(target.insight.title)
+  return resolveInstanceIri(
+    target.insight.evidenceJson,
+    target.insight.summary,
+    target.insight.title,
   );
 }
 

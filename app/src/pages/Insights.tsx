@@ -28,9 +28,8 @@ import {
   RULE_META,
   SEVERITY_ORDER,
   SEVERITY_COLOR,
-  extractFirstIri,
   insightModules,
-  parseEvidence,
+  resolveInstanceIri,
   type Severity,
 } from '@/components/insights/ruleMeta';
 
@@ -111,8 +110,7 @@ export default function Insights() {
       (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity),
     );
     for (const i of sorted) {
-      const ev = parseEvidence(i.evidenceJson);
-      const iri = ev.missingEdges[0]?.fromIri ?? extractFirstIri(i.summary) ?? extractFirstIri(i.title);
+      const iri = resolveInstanceIri(i.evidenceJson, i.summary, i.title);
       if (iri) return iri;
     }
     return null;

@@ -229,9 +229,13 @@ export function ExplorerGraph({
     cy.on('viewport layoutstop add remove', scheduleMm);
     scheduleMm();
 
-    const pausable = cy as unknown as { start(): void; stop(): void };
+    // Halt in-flight animations while offscreen; Cytoscape's core has no resume
+    // (start() belongs to layouts), and none is needed — animations restart with
+    // the next interaction or layout run.
     const io = new IntersectionObserver(
-      ([entry]) => (entry.isIntersecting ? pausable.start() : pausable.stop()),
+      ([entry]) => {
+        if (!entry.isIntersecting) cy.stop();
+      },
       { threshold: 0.05 },
     );
     io.observe(el);

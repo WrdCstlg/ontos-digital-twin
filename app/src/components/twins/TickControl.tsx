@@ -32,7 +32,10 @@ export function TickControl({
         type="button"
         onClick={onTick}
         disabled={ticking}
-        key={tickCount}
+        // Keyed by tick so the pulse replays on every tick. The key must be
+        // namespaced: this and the counter below are siblings, and a bare
+        // tickCount made both of them key `0` on first render.
+        key={`tick-button-${tickCount}`}
         initial={{ boxShadow: '0 0 0 0 #2DD4BF55' }}
         animate={{ boxShadow: '0 0 0 8px #2DD4BF00' }}
         transition={{ duration: 0.7, ease: 'easeOut' }}
@@ -61,7 +64,7 @@ export function TickControl({
       <span className="h-4 w-px bg-border-hairline" aria-hidden />
 
       <motion.span
-        key={tickCount}
+        key={`tick-count-${tickCount}`}
         initial={{ opacity: 0.3, y: 3 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}

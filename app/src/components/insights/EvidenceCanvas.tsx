@@ -246,11 +246,12 @@ export function EvidenceCanvas({
       padding: 40,
     } as unknown as LayoutOptions).run();
 
-    const pausable = cy as unknown as { start(): void; stop(): void };
+    // Halt in-flight animations while offscreen; Cytoscape's core has no resume
+    // (start() belongs to layouts), and none is needed — animations restart with
+    // the next interaction or layout run.
     const io = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) pausable.start();
-        else pausable.stop();
+        if (!entry.isIntersecting) cy.stop();
       },
       { threshold: 0.05 },
     );

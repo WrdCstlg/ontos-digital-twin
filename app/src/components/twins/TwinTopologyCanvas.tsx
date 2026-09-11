@@ -264,12 +264,13 @@ export function TwinTopologyCanvas({
       cy.style().selector('edge.flow').style('line-dash-offset', -offset).update();
     }, 84);
 
-    const pausable = cy as unknown as { start(): void; stop(): void };
+    // `visible` already gates the flow-animation interval above. Beyond that,
+    // halt in-flight animations while offscreen; Cytoscape's core has no resume
+    // (start() belongs to layouts) and none is needed here.
     const io = new IntersectionObserver(
       ([entry]) => {
         visible = entry.isIntersecting;
-        if (visible) pausable.start();
-        else pausable.stop();
+        if (!visible) cy.stop();
       },
       { threshold: 0.05 },
     );

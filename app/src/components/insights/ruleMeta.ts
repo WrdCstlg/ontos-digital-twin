@@ -137,7 +137,7 @@ export function parseEvidence(json: unknown): InsightEvidence {
 
 /* ── IRI helpers ──────────────────────────────────────────────── */
 
-const IRI_RE = /\b(?:hr|lgl|legal|cmp|fin|log|ext):[A-Za-z][\w./-]*/;
+const IRI_RE = /\b(?:hr|lgl|legal|cmp|fin|log|lgx|dtwin|ext):[A-Za-z][\w./-]*/;
 
 /** First compact IRI found in a free-text string (summaries carry them). */
 export function extractFirstIri(text?: string | null): string | null {
@@ -150,6 +150,34 @@ export function extractFirstIri(text?: string | null): string | null {
 export function extractIris(text?: string | null): string[] {
   if (!text) return [];
   return text.match(new RegExp(IRI_RE, 'g')) ?? [];
+}
+
+/**
+ * Instance IRIs carry a local id after the class segment (`hr:Person/E-0173`).
+ * A bare `cmp:Control` is a *class* IRI — it appears in rule prose but has no
+ * corresponding kgNode, so graph.getSubgraph answers NOT_FOUND for it.
+ */
+export function isInstanceIri(iri?: string | null): boolean {
+  return !!iri && /^[A-Za-z][\w-]*:[A-Za-z][\w.-]*\/[\w.:/-]+$/.test(iri);
+}
+
+/**
+ * The first IRI on an insight that actually resolves to a graph node. Evidence
+ * is preferred, then the summary, then the title — skipping class IRIs, which
+ * would otherwise be handed to the graph and 404.
+ */
+export function resolveInstanceIri(
+  evidenceJson: unknown,
+  summary?: string | null,
+  title?: string | null,
+): string | null {
+  const ev = parseEvidence(evidenceJson);
+  const candidates = [
+    ev.missingEdges[0]?.fromIri,
+    ...extractIris(summary),
+    ...extractIris(title),
+  ];
+  return candidates.find(isInstanceIri) ?? null;
 }
 
 /** Map an IRI prefix to a module key — seed data uses `lgl:` for Legal. */

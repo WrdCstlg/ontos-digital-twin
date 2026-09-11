@@ -194,12 +194,13 @@ export function GraphCanvas({
       } as unknown as LayoutOptions).run();
     }
 
-    // Pause rendering offscreen / tab hidden
-    const pausable = cy as unknown as { start(): void; stop(): void };
+    // Halt in-flight animations while offscreen. Cytoscape renders reactively
+    // rather than on a continuous loop and its core has no resume — start()
+    // exists only on layouts — so there is nothing to call on the way back in;
+    // animations restart with the next interaction or layout run.
     const io = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) pausable.start();
-        else pausable.stop();
+        if (!entry.isIntersecting) cy.stop();
       },
       { threshold: 0.05 },
     );
