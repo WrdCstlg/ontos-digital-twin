@@ -95,9 +95,10 @@ export default function Explorer() {
     { enabled: !!browseCenter && !exec },
   );
 
-  useEffect(() => {
-    if (!browseCenter && hubQ.data?.[0]) setBrowseCenter(hubQ.data[0].iri);
-  }, [hubQ.data, browseCenter]);
+  // Set default browse center once hub data arrives
+  if (!browseCenter && hubQ.data?.[0]) {
+    setBrowseCenter(hubQ.data[0].iri);
+  }
 
   const persistHistory = (entries: HistoryEntry[]) => {
     setHistory(entries);

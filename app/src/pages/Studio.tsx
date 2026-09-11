@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -107,13 +107,10 @@ export default function Studio() {
   const reasoner = (reasonerQ.data ?? null) as ReasonerResult | null;
 
   // default diff range: previous published → latest
-  useEffect(() => {
-    if (versions.length && (!fromVersion || !toVersion)) {
-      setToVersion(versions[0].version);
-      setFromVersion(versions[1]?.version ?? versions[0].version);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [versions]);
+  if (versions.length && (!fromVersion || !toVersion)) {
+    setToVersion(versions[0].version);
+    setFromVersion(versions[1]?.version ?? versions[0].version);
+  }
 
   const diffQ = trpc.ontology.diffVersions.useQuery(
     { moduleKey, fromVersion: fromVersion ?? '0.0', toVersion: toVersion ?? '0.0' },

@@ -189,7 +189,9 @@ export function EvidenceCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const clickRef = useRef(onNodeClick);
-  clickRef.current = onNodeClick;
+  useEffect(() => {
+    clickRef.current = onNodeClick;
+  });
   const highlightKey = (highlightIds ?? []).join(',');
 
   useEffect(() => {

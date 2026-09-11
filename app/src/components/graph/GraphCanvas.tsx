@@ -144,7 +144,9 @@ export function GraphCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const clickRef = useRef(onNodeClick);
-  clickRef.current = onNodeClick;
+  useEffect(() => {
+    clickRef.current = onNodeClick;
+  });
 
   useEffect(() => {
     const el = containerRef.current;

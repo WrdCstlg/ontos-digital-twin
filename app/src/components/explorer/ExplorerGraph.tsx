@@ -159,7 +159,9 @@ export function ExplorerGraph({
   const minimapRef = useRef<HTMLCanvasElement>(null);
   const cyRef = useRef<Core | null>(null);
   const clickRef = useRef(onNodeClick);
-  clickRef.current = onNodeClick;
+  useEffect(() => {
+    clickRef.current = onNodeClick;
+  });
 
   const dataKey = `${nodes.map((n) => n.iri).join('|')}::${edges.map((e) => e.id).join('|')}`;
 

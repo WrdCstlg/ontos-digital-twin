@@ -50,13 +50,16 @@ function TurtleBlock({ text }: { text: string }) {
 
 /** Fast typewriter (2ms/char) for the selected triple block. */
 function useTypewriter(text: string, active: boolean) {
-  const [n, setN] = useState(0);
+  const [n, setN] = useState(() => (active ? 0 : text.length));
+  const [prevKey, setPrevKey] = useState(`${active}:${text}`);
+  const currentKey = `${active}:${text}`;
+  if (prevKey !== currentKey) {
+    setPrevKey(currentKey);
+    setN(active ? 0 : text.length);
+  }
+
   useEffect(() => {
-    if (!active) {
-      setN(text.length);
-      return;
-    }
-    setN(0);
+    if (!active) return;
     const id = setInterval(() => {
       setN((v) => {
         if (v >= text.length) {
@@ -85,9 +88,13 @@ export function PreviewDrawer({ open, csvData, mappingId, mappingName, onClose, 
   );
   const headers = query.data?.headers ?? [];
 
-  useEffect(() => {
-    if (open) setSelected(0);
-  }, [open, csvData]);
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (!prevOpen && open) {
+    setPrevOpen(open);
+    setSelected(0);
+  } else if (prevOpen && !open) {
+    setPrevOpen(open);
+  }
 
   const current = instances[Math.min(selected, Math.max(0, instances.length - 1))];
   const { shown, done } = useTypewriter(current?.triples ?? '', open && !!current);

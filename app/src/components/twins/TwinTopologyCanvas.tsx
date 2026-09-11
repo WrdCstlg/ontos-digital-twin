@@ -180,11 +180,9 @@ export function TwinTopologyCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const clickRef = useRef(onNodeClick);
-  clickRef.current = onNodeClick;
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('force');
   const [showMirrors, setShowMirrors] = useState(true);
   const layoutModeRef = useRef(layoutMode);
-  layoutModeRef.current = layoutMode;
 
   const runLayout = (cy: Core, mode: LayoutMode) => {
     const root = cy.getElementById(centerIri);
@@ -202,7 +200,12 @@ export function TwinTopologyCanvas({
     cy.layout(opts).run();
   };
   const runLayoutRef = useRef(runLayout);
-  runLayoutRef.current = runLayout;
+
+  useEffect(() => {
+    clickRef.current = onNodeClick;
+    layoutModeRef.current = layoutMode;
+    runLayoutRef.current = runLayout;
+  });
 
   useEffect(() => {
     const el = containerRef.current;

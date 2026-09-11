@@ -154,7 +154,13 @@ export const graphRouter = createRouter({
         const nodes = await db
           .select()
           .from(kgNodes)
-          .where(and(inArray(kgNodes.id, ids), isNull(kgNodes.deletedAt)));
+          .where(
+            and(
+              eq(kgNodes.workspaceId, ws.id),
+              inArray(kgNodes.id, ids),
+              isNull(kgNodes.deletedAt),
+            ),
+          );
         for (const n of nodes) nodeMap.set(n.id, n);
         frontier = ids;
       }

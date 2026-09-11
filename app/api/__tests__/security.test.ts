@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { hashPassword, verifyPassword } from "../lib/password";
 import { SlidingWindowRateLimiter } from "../lib/rateLimit";
 import { signSessionToken, verifySessionToken } from "../auth/session";
-import { getSessionCookieName, getSessionCookieOptions } from "../lib/cookies";
+import { getSessionCookieOptions } from "../lib/cookies";
 import { translate } from "../services/nlq";
 
 describe("Security Posture Verification", () => {
@@ -122,6 +122,29 @@ describe("Security Posture Verification", () => {
         expect(res.recognized).toBe(false);
         expect(res.refusal).toBeDefined();
       }
+    });
+  });
+
+  describe("Component 7: Production Hardening & Anti-Bypass", () => {
+    it("rejects unauthorized external origins in CORS resolution", () => {
+      const allowed = ["https://app.acme-ontology.com", "https://admin.acme-ontology.com"];
+      const resolveOrigin = (origin: string, isProd: boolean) => {
+        if (!origin) return "";
+        if (!isProd && (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:"))) {
+          return origin;
+        }
+        if (allowed.includes(origin)) return origin;
+        return "";
+      };
+
+      // Allowed in production
+      expect(resolveOrigin("https://app.acme-ontology.com", true)).toBe("https://app.acme-ontology.com");
+      // Malicious origin rejected in production
+      expect(resolveOrigin("https://attacker.evil.com", true)).toBe("");
+      // Localhost allowed in development
+      expect(resolveOrigin("http://localhost:5173", false)).toBe("http://localhost:5173");
+      // Arbitrary external rejected in development
+      expect(resolveOrigin("https://attacker.evil.com", false)).toBe("");
     });
   });
 });

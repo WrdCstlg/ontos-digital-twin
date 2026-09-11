@@ -376,7 +376,7 @@ async function main() {
   const classIdByIri = new Map<string, number>();
   for (const m of MODULES) {
     const mid = moduleIdByKey.get(m.key)!;
-    for (const [label, _parent, def] of CLASS_DEFS[m.key]) {
+    for (const [label, , def] of CLASS_DEFS[m.key]) {
       const iri = `${m.prefix}:${label}`;
       const [{ id }] = await db
         .insert(ontologyClasses)
@@ -406,7 +406,6 @@ async function main() {
   }
 
   /* properties */
-  const moduleIdByPrefix = new Map(MODULES.map((m) => [m.prefix, moduleIdByKey.get(m.key)!]));
   for (const m of MODULES) {
     const mid = moduleIdByKey.get(m.key)!;
     for (const [name, kind, domain, range, datatype, card, def] of PROP_DEFS[m.key]) {

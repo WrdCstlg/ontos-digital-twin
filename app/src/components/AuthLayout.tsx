@@ -117,11 +117,9 @@ function AuthLayoutContent({
   const activeMenuItem = menuItems.find(item => item.path === location.pathname);
   const isMobile = useIsMobile();
 
-  useEffect(() => {
-    if (isCollapsed) {
-      setIsResizing(false);
-    }
-  }, [isCollapsed]);
+  if (isCollapsed && isResizing) {
+    setIsResizing(false);
+  }
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {

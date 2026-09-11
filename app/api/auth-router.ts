@@ -1,5 +1,6 @@
 import * as cookie from "cookie";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { Session } from "@contracts/constants";
 import { getSessionCookieName, getSessionCookieOptions } from "./lib/cookies";
 import { createRouter, authedQuery, publicQuery } from "./middleware";
@@ -8,7 +9,7 @@ import { loginDemoUser, loginWithCredentials } from "./auth/service";
 export const authRouter = createRouter({
   me: authedQuery.query((opts) => opts.ctx.user),
 
-  /** One-click demo login — instantly creates a session for the chosen persona */
+  /** One-click demo login — instantly creates a session for the chosen persona (development only) */
   demoLogin: publicQuery
     .input(
       z.object({
@@ -16,6 +17,12 @@ export const authRouter = createRouter({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      if (process.env.NODE_ENV === "production") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Demo login is disabled in production environments.",
+        });
+      }
       const { user, token } = await loginDemoUser(input.role);
       const cookieName = getSessionCookieName(ctx.req.headers);
       const opts = getSessionCookieOptions(ctx.req.headers);

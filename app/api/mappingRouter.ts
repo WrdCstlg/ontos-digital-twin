@@ -10,7 +10,7 @@ import {
   ontologyModules,
   syncJobs,
 } from "@db/schema";
-import { createRouter, authedQuery, authedMutation, adminMutation } from "./middleware";
+import { createRouter, authedQuery, adminMutation, ontologistMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
 
@@ -160,7 +160,7 @@ export const mappingRouter = createRouter({
     }));
   }),
 
-  upsertMapping: authedMutation
+  upsertMapping: ontologistMutation
     .input(
       z.object({
         id: z.number().int().positive().optional(),
@@ -211,7 +211,12 @@ export const mappingRouter = createRouter({
 
       let id = input.id;
       if (id) {
-        const [existing] = await db.select().from(mappings).where(eq(mappings.id, id)).limit(1);
+        const [existing] = await db
+          .select({ mapping: mappings })
+          .from(mappings)
+          .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+          .where(and(eq(mappings.id, id), eq(connectors.workspaceId, ws.id)))
+          .limit(1);
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${id} not found` });
         await db
           .update(mappings)
@@ -304,15 +309,20 @@ export const mappingRouter = createRouter({
       return { filename: input.filename, headers, sampleRows: rows, instances };
     }),
 
-  runSync: authedMutation
+  runSync: ontologistMutation
     .input(z.object({ mappingId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const ws = await getDemoWorkspace();
       const db = getDb();
-      const [m] = await db.select().from(mappings).where(eq(mappings.id, input.mappingId)).limit(1);
-      if (!m) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${input.mappingId} not found` });
-      const [conn] = await db.select().from(connectors).where(eq(connectors.id, m.connectorId)).limit(1);
-      if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: `Connector ${m.connectorId} not found` });
+      const [record] = await db
+        .select({ mapping: mappings, connector: connectors })
+        .from(mappings)
+        .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+        .where(and(eq(mappings.id, input.mappingId), eq(connectors.workspaceId, ws.id)))
+        .limit(1);
+      if (!record) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${input.mappingId} not found` });
+      const m = record.mapping;
+      const conn = record.connector;
       const cfg = (conn.configJson ?? {}) as Record<string, unknown>;
       if (conn.type !== "csv" || typeof cfg.csvText !== "string")
         throw new TRPCError({

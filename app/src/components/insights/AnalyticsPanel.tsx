@@ -194,10 +194,10 @@ export function AnalyticsPanel({ hubIri }: { hubIri: string | null }) {
     setRanAt((r) => r + 1);
   };
   // auto-run once the sample first arrives
-  useEffect(() => {
-    if (data && ranAt === 0) run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+  if (data && ranAt === 0) {
+    setRunning(true);
+    setRanAt(1);
+  }
 
   const activeTab = TABS.find((t) => t.key === tab)!;
   const toggleScope = (k: ModuleKey) =>

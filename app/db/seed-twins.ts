@@ -150,7 +150,7 @@ async function main() {
 
   /* classes (two passes: insert, then wire parents) */
   const classIdByIri = new Map<string, number>();
-  for (const [label, _parent, def] of TWIN_CLASS_DEFS) {
+  for (const [label, , def] of TWIN_CLASS_DEFS) {
     const iri = `${TWIN_PREFIX}:${label}`;
     const [{ id }] = await db
       .insert(ontologyClasses)
@@ -495,7 +495,7 @@ async function main() {
     // one historical cold-chain breach excursion per cold-chain zone
     const breachHour = coldChain ? ri(14, 30) : -1;
     for (const key of LOG_KEYS[t.classIri] ?? []) {
-      let cur = state[key];
+      const cur = state[key];
       if (typeof cur !== "number") continue;
       const series: number[] = new Array(HISTORY_POINTS);
       series[HISTORY_POINTS - 1] = cur;

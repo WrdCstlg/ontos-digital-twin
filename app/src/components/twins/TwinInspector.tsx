@@ -94,11 +94,15 @@ function DtdlTab({ iri, classIri }: { iri: string; classIri: string }) {
   const q = trpc.twin.exportDtdl.useQuery({ iri }, { staleTime: 60_000 });
   const content = q.data?.content ?? '';
   const [shown, setShown] = useState(0);
+  const [prevContent, setPrevContent] = useState(content);
+  if (prevContent !== content) {
+    setPrevContent(content);
+    setShown(0);
+  }
   const [copied, setCopied] = useState(false);
 
   // fast typewriter stream (~24 chars per 8ms — full doc in ~1.5s)
   useEffect(() => {
-    setShown(0);
     if (!content) return;
     const iv = window.setInterval(() => {
       setShown((s) => {

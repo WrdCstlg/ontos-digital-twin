@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronLeft, ChevronRight, Database, FileSpreadsheet, Globe, Loader2, PlugZap, Upload } from 'lucide-react';
 import { trpc } from '@/providers/trpc';
@@ -60,19 +60,21 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
   );
 
   // reset when opened
-  useEffect(() => {
-    if (open) {
-      setStep(0);
-      setType(initialType ?? 'csv');
-      setName('');
-      setHost('');
-      setDatabase('');
-      setBaseUrl('');
-      setCsv(null);
-      setTestState('idle');
-      setSuggestions([]);
-    }
-  }, [open, initialType]);
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (!prevOpen && open) {
+    setPrevOpen(open);
+    setStep(0);
+    setType(initialType ?? 'csv');
+    setName('');
+    setHost('');
+    setDatabase('');
+    setBaseUrl('');
+    setCsv(null);
+    setTestState('idle');
+    setSuggestions([]);
+  } else if (prevOpen && !open) {
+    setPrevOpen(open);
+  }
 
   const valid =
     name.trim().length > 0 &&

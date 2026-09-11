@@ -86,15 +86,18 @@ export async function loginWithCredentials(
   if (user.passwordHash) {
     isValid = await verifyPassword(password, user.passwordHash);
   } else {
-    // For demo/seeded accounts without initialized password hash, support bootstrap
-    const isDemoPassword = password === "ontos2026!" || password === "password123";
-    if (isDemoPassword || normalizedEmail.endsWith("@acme-ontology.com")) {
-      isValid = true;
-      const newHash = await hashPassword(password);
-      await getDb()
-        .update(users)
-        .set({ passwordHash: newHash })
-        .where(eq(users.id, user.id));
+    // In production, uninitialized accounts without password hash must be rejected
+    // In development/test environments only, allow known fixed bootstrap passwords
+    if (process.env.NODE_ENV !== "production") {
+      const isDemoPassword = password === "ontos2026!" || password === "password123";
+      if (isDemoPassword) {
+        isValid = true;
+        const newHash = await hashPassword(password);
+        await getDb()
+          .update(users)
+          .set({ passwordHash: newHash })
+          .where(eq(users.id, user.id));
+      }
     }
   }
 

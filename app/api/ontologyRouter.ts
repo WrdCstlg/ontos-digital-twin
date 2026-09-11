@@ -546,7 +546,6 @@ export const ontologyRouter = createRouter({
         // walk ancestor chain, detecting cycles; every ancestor beyond the
         // direct parent is an inferred (transitive) rdfs:subClassOf link
         const seen = new Set<number>([c.id]);
-        let depth = 0;
         let prev = c;
         let cur = c.parentId ? byId.get(c.parentId) : undefined;
         while (cur) {
@@ -559,7 +558,6 @@ export const ontologyRouter = createRouter({
           if (cur.deprecated)
             warnings.push(`${c.iri} subclasses deprecated class ${cur.iri}`);
           prev = cur;
-          depth++;
           cur = cur.parentId ? byId.get(cur.parentId) : undefined;
         }
         if (!c.parentId && c.iri !== `${mod.prefix}:Thing`)

@@ -123,7 +123,7 @@ export function MappingEditor({
   const [form, setForm] = useState<EditorForm>(() => emptyForm(connector));
   const [showR2RML, setShowR2RML] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [drag, setDrag] = useState<{ column: string; x: number; y: number } | null>(null);
+  const [drag, setDrag] = useState<{ column: string; startX: number; startY: number; x: number; y: number } | null>(null);
   const [hoverProp, setHoverProp] = useState<string | null>(null);
 
   const boardRef = useRef<HTMLDivElement>(null);
@@ -154,21 +154,17 @@ export function MappingEditor({
     },
   });
 
-  // Re-hydrate the form only when the selected connector/mapping identity
-  // changes — never on background refetches, so unsaved edits survive.
-  const hydratedFor = useRef<string | null>(null);
+  const [prevIdentityKey, setPrevIdentityKey] = useState<string | null>(null);
   const activeMapping = mappings.find((m) => m.id === form.mappingId) ?? mappings[0] ?? null;
-  useEffect(() => {
-    const key = `${connector?.id ?? 'none'}:${activeMapping?.id ?? 'new'}`;
-    if (hydratedFor.current === key) return;
-    hydratedFor.current = key;
+  const currentIdentityKey = `${connector?.id ?? 'none'}:${activeMapping?.id ?? 'new'}`;
+  if (prevIdentityKey !== currentIdentityKey) {
+    setPrevIdentityKey(currentIdentityKey);
     if (activeMapping) {
       setForm(formFromMapping(activeMapping, activeMapping.module?.key ?? 'hr'));
     } else if (connector) {
       setForm(emptyForm(connector));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connector?.id, activeMapping?.id]);
+  }
 
   // Sample data (uploaded CSV for this connector) for type detection + previews
   const sample = useMemo(() => {
@@ -532,26 +528,16 @@ export function MappingEditor({
               />
             );
           })}
-          {drag &&
-            (() => {
-              const el = colDotRefs.current.get(drag.column);
-              const b = boardRef.current?.getBoundingClientRect();
-              if (!el || !b) return null;
-              const r = el.getBoundingClientRect();
-              const x1 = r.right - b.left;
-              const y1 = r.top + r.height / 2 - b.top;
-              const c = Math.max(40, (drag.x - x1) / 2);
-              return (
-                <path
-                  d={`M ${x1} ${y1} C ${x1 + c} ${y1}, ${drag.x - c} ${drag.y}, ${drag.x} ${drag.y}`}
-                  fill="none"
-                  stroke={moduleColor}
-                  strokeWidth={1.5}
-                  strokeDasharray="5 4"
-                  strokeOpacity={0.6}
-                />
-              );
-            })()}
+          {drag && (
+            <path
+              d={`M ${drag.startX} ${drag.startY} C ${drag.startX + Math.max(40, (drag.x - drag.startX) / 2)} ${drag.startY}, ${drag.x - Math.max(40, (drag.x - drag.startX) / 2)} ${drag.y}, ${drag.x} ${drag.y}`}
+              fill="none"
+              stroke={moduleColor}
+              strokeWidth={1.5}
+              strokeDasharray="5 4"
+              strokeOpacity={0.6}
+            />
+          )}
         </svg>
 
         {/* left — source schema */}
@@ -619,7 +605,11 @@ export function MappingEditor({
                       e.preventDefault();
                       const b = boardRef.current?.getBoundingClientRect();
                       if (!b) return;
-                      setDrag({ column: col, x: e.clientX - b.left, y: e.clientY - b.top });
+                      const el = colDotRefs.current.get(col);
+                      const r = el?.getBoundingClientRect();
+                      const startX = r ? r.right - b.left : e.clientX - b.left;
+                      const startY = r ? r.top + r.height / 2 - b.top : e.clientY - b.top;
+                      setDrag({ column: col, startX, startY, x: e.clientX - b.left, y: e.clientY - b.top });
                     }}
                     className={cn(
                       'size-2.5 shrink-0 cursor-crosshair rounded-full border-2 transition-colors',
@@ -780,8 +770,12 @@ export function MappingEditor({
 
 /** Test-value input with live transformation result. */
 function TransformTester({ transform, sample }: { transform: string; sample: string }) {
+  const [prevSample, setPrevSample] = useState(sample);
   const [value, setValue] = useState(sample);
-  useEffect(() => setValue(sample), [sample]);
+  if (prevSample !== sample) {
+    setPrevSample(sample);
+    setValue(sample);
+  }
   return (
     <div>
       <label className="mb-1 block text-[10.5px] font-medium uppercase tracking-[0.08em] text-text-muted">Test value</label>

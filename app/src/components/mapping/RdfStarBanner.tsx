@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Info, X } from 'lucide-react';
 import { Link } from 'react-router';
@@ -8,15 +8,16 @@ const STORAGE_KEY = 'ontos:rdfstar-banner-dismissed';
 
 /** Slim dismissible RDF-star rationale banner; dismissal remembered per session. */
 export function RdfStarBanner() {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
+  const [open, setOpen] = useState(() => {
     try {
-      setOpen(sessionStorage.getItem(STORAGE_KEY) !== '1');
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        return sessionStorage.getItem(STORAGE_KEY) !== '1';
+      }
     } catch {
-      setOpen(true);
+      /* storage unavailable */
     }
-  }, []);
+    return true;
+  });
 
   const dismiss = () => {
     setOpen(false);
