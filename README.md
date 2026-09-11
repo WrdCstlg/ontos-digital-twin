@@ -260,10 +260,13 @@ router tree. Three plain HTTP routes exist alongside it:
 | Route | Auth | Description |
 |---|---|---|
 | `GET /health`, `GET /api/health` | none | Liveness: database and semantic engine status |
-| `POST /api/sparql` | **none** | SPARQL 1.1 query against the loaded graph |
+| `POST /api/sparql` | session | Read-only SPARQL 1.1 query against the loaded graph |
 
 `/api/sparql` accepts `application/sparql-query`, `application/json` (`{"query": "..."}`)
-or a form body, and responds in SPARQL 1.1 JSON Results format.
+or a form body, and responds in SPARQL 1.1 JSON Results format. It requires a valid
+session cookie, is limited to 30 queries per minute per user, caps queries at 10,000
+characters, and accepts only the four SPARQL query forms — `SELECT`, `ASK`, `CONSTRUCT`
+and `DESCRIBE`. Update forms are rejected with a 400.
 
 ---
 
@@ -275,9 +278,13 @@ or a form body, and responds in SPARQL 1.1 JSON Results format.
 - Passwords hashed with `node:crypto` scrypt, 128-bit salts, constant-time verification.
 - `secureHeaders` (HSTS, `X-Frame-Options: DENY`, `nosniff`), explicit-origin CORS, CSRF
   origin checks on mutations, and a 2 MB body limit.
-- Sliding-window rate limits on auth (10 / 15 min), NLQ (30 / min) and graph scans
-  (10 / min).
+- Sliding-window rate limits on auth (10 / 15 min), NLQ (30 / min), SPARQL (30 / min) and
+  graph scans (10 / min).
 - NLQ input is capped at 500 characters and screened for destructive or injection intent.
+- `/api/sparql` sits outside tRPC, so it performs its own session check and is gated to
+  read-only query forms (`api/lib/sparqlGuard.ts`).
+- User records are projected through an allowlist before leaving the server, so
+  `passwordHash` is never serialized to a client.
 
 ---
 
@@ -316,11 +323,6 @@ Set `ALLOWED_ORIGINS` — production CORS and CSRF both deny anything not listed
 
 These are tracked, known behaviours rather than surprises:
 
-- **`POST /api/sparql` is unauthenticated.** It is registered ahead of the tRPC handler and
-  therefore bypasses the RBAC layer that guards every other route, and it is not rate
-  limited. Do not expose the server to an untrusted network until this endpoint is gated.
-- **`auth.me`, `auth.login` and `auth.demoLogin` return the full user row**, including
-  `passwordHash`. These responses should be projected down to safe fields.
 - **No migrations have been generated.** `db/migrations/` is empty and the schema is only
   applied via `drizzle-kit push`, so there is no versioned history and no upgrade path for
   an existing database. Run `npm run db:generate` before the first real deployment.

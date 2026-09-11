@@ -79,6 +79,12 @@ export const nlqRateLimiter = new SlidingWindowRateLimiter({
   max: 30,
 });
 
+/** SPARQL endpoint limiter: 30 queries per minute per user */
+export const sparqlRateLimiter = new SlidingWindowRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+});
+
 /** Heavy scan limiter (insights/reasoner): 10 runs per minute per user */
 export const scanRateLimiter = new SlidingWindowRateLimiter({
   windowMs: 60 * 1000,

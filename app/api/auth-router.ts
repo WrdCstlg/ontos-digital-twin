@@ -4,10 +4,10 @@ import { TRPCError } from "@trpc/server";
 import { Session } from "@contracts/constants";
 import { getSessionCookieName, getSessionCookieOptions } from "./lib/cookies";
 import { createRouter, authedQuery, publicQuery } from "./middleware";
-import { loginDemoUser, loginWithCredentials } from "./auth/service";
+import { loginDemoUser, loginWithCredentials, toPublicUser } from "./auth/service";
 
 export const authRouter = createRouter({
-  me: authedQuery.query((opts) => opts.ctx.user),
+  me: authedQuery.query((opts) => toPublicUser(opts.ctx.user)),
 
   /** One-click demo login — instantly creates a session for the chosen persona (development only) */
   demoLogin: publicQuery
@@ -36,7 +36,7 @@ export const authRouter = createRouter({
           maxAge: Session.maxAgeMs / 1000,
         }),
       );
-      return user;
+      return toPublicUser(user);
     }),
 
   /** Enterprise credentials login */
@@ -68,7 +68,7 @@ export const authRouter = createRouter({
           maxAge: Session.maxAgeMs / 1000,
         }),
       );
-      return user;
+      return toPublicUser(user);
     }),
 
   logout: authedQuery.mutation(async ({ ctx }) => {

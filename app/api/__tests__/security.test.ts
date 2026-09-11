@@ -4,8 +4,99 @@ import { SlidingWindowRateLimiter } from "../lib/rateLimit";
 import { signSessionToken, verifySessionToken } from "../auth/session";
 import { getSessionCookieOptions } from "../lib/cookies";
 import { translate } from "../services/nlq";
+import { isReadOnlySparql } from "../lib/sparqlGuard";
+import { toPublicUser } from "../auth/service";
+import type { User } from "@db/schema";
 
 describe("Security Posture Verification", () => {
+  describe("SPARQL endpoint read-only gate", () => {
+    it("accepts the four SPARQL 1.1 query forms", () => {
+      expect(isReadOnlySparql("SELECT ?s WHERE { ?s ?p ?o }")).toBe(true);
+      expect(isReadOnlySparql("ASK { ?s ?p ?o }")).toBe(true);
+      expect(isReadOnlySparql("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }")).toBe(true);
+      expect(isReadOnlySparql("DESCRIBE <https://ontos.dev/x>")).toBe(true);
+      expect(isReadOnlySparql("  select ?s where { ?s ?p ?o }")).toBe(true);
+    });
+
+    it("accepts a query behind a PREFIX/BASE prologue", () => {
+      const q = `BASE <https://ontos.dev/>
+        PREFIX hr: <https://ontos.dev/ontology/hr/>
+        SELECT ?p WHERE { ?p a hr:Person }`;
+      expect(isReadOnlySparql(q)).toBe(true);
+    });
+
+    it("rejects every SPARQL update form", () => {
+      expect(isReadOnlySparql("INSERT DATA { <a> <b> <c> }")).toBe(false);
+      expect(isReadOnlySparql("DELETE WHERE { ?s ?p ?o }")).toBe(false);
+      expect(isReadOnlySparql("DROP GRAPH <https://ontos.dev/g>")).toBe(false);
+      expect(isReadOnlySparql("CLEAR ALL")).toBe(false);
+      expect(isReadOnlySparql("LOAD <https://evil.example/data.ttl>")).toBe(false);
+      expect(isReadOnlySparql("CREATE GRAPH <https://ontos.dev/g>")).toBe(false);
+      expect(isReadOnlySparql("COPY DEFAULT TO <https://ontos.dev/g>")).toBe(false);
+    });
+
+    it("rejects an update smuggled in after a valid query form", () => {
+      expect(
+        isReadOnlySparql("SELECT ?s WHERE { ?s ?p ?o } ; INSERT DATA { <a> <b> <c> }"),
+      ).toBe(false);
+    });
+
+    it("rejects an update hidden behind a comment-only first line", () => {
+      expect(isReadOnlySparql("# SELECT ?s\nDELETE WHERE { ?s ?p ?o }")).toBe(false);
+    });
+
+    it("does not mistake a '#' inside an IRI for a comment", () => {
+      const q = "SELECT ?s WHERE { ?s a <http://example.org/schema#Person> }";
+      expect(isReadOnlySparql(q)).toBe(true);
+    });
+
+    it("does not treat update keywords inside IRIs or literals as updates", () => {
+      expect(
+        isReadOnlySparql('SELECT ?s WHERE { ?s <https://ontos.dev/insert> "drop all" }'),
+      ).toBe(true);
+    });
+
+    it("does not treat variables or prefixed names as update keywords", () => {
+      expect(isReadOnlySparql("SELECT ?delete WHERE { ?delete ?p ?o }")).toBe(true);
+      expect(isReadOnlySparql("SELECT ?s WHERE { ?s a ex:insert }")).toBe(true);
+    });
+
+    it("rejects empty and non-query input", () => {
+      expect(isReadOnlySparql("")).toBe(false);
+      expect(isReadOnlySparql("   ")).toBe(false);
+      expect(isReadOnlySparql("not a query at all")).toBe(false);
+    });
+  });
+
+  describe("Client-safe user projection", () => {
+    const user: User = {
+      id: 1,
+      email: "admin@acme-ontology.com",
+      name: "Elena Cortez",
+      avatar: null,
+      passwordHash: "deadbeef:cafebabe",
+      role: "admin",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSignInAt: new Date(),
+    };
+
+    it("never emits the password hash", () => {
+      const projected = toPublicUser(user);
+      expect("passwordHash" in projected).toBe(false);
+      expect(JSON.stringify(projected)).not.toContain("deadbeef");
+    });
+
+    it("preserves the fields the client actually renders", () => {
+      const projected = toPublicUser(user);
+      expect(projected.id).toBe(1);
+      expect(projected.email).toBe("admin@acme-ontology.com");
+      expect(projected.name).toBe("Elena Cortez");
+      expect(projected.role).toBe("admin");
+      expect(projected.lastSignInAt).toEqual(user.lastSignInAt);
+    });
+  });
+
   describe("Component 3: Password Security (crypto.scrypt)", () => {
     it("hashes and verifies correct passwords in constant time", async () => {
       const password = "SuperSecretPassword2026!";

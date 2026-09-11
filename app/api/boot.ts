@@ -14,6 +14,9 @@ import { csrf } from "hono/csrf";
 import { sql } from "drizzle-orm";
 import { getDb } from "./queries/connection";
 import { semanticEngine } from "./services/semanticEngine";
+import { authenticateRequest } from "./auth/service";
+import { sparqlRateLimiter } from "./lib/rateLimit";
+import { isReadOnlySparql, MAX_SPARQL_LENGTH } from "./lib/sparqlGuard";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -135,8 +138,23 @@ const healthCheck = async (c: Context<{ Bindings: HttpBindings }>) => {
 app.get("/health", healthCheck);
 app.get("/api/health", healthCheck);
 
-// SPARQL 1.1 Query Endpoint
+// SPARQL 1.1 Query Endpoint — authenticated, rate limited, read-only.
+// This route sits outside the tRPC pipeline, so it performs the session check
+// that `authedQuery` would otherwise apply.
 app.post("/api/sparql", async (c) => {
+  let user;
+  try {
+    user = await authenticateRequest(c.req.raw.headers);
+  } catch {
+    return c.json({ error: "Authentication required." }, 401);
+  }
+
+  const limit = sparqlRateLimiter.check(`sparql:${user.id}`);
+  if (!limit.allowed) {
+    c.header("retry-after", String(Math.ceil(limit.resetMs / 1000)));
+    return c.json({ error: "Rate limit exceeded. Try again shortly." }, 429);
+  }
+
   let queryText = "";
   const contentType = c.req.header("content-type") || "";
   if (contentType.includes("application/sparql-query")) {
@@ -151,6 +169,23 @@ app.post("/api/sparql", async (c) => {
 
   if (!queryText.trim()) {
     return c.json({ error: "Missing SPARQL query string (parameter 'query')" }, 400);
+  }
+
+  if (queryText.length > MAX_SPARQL_LENGTH) {
+    return c.json(
+      { error: `SPARQL query exceeds the ${MAX_SPARQL_LENGTH} character limit.` },
+      400,
+    );
+  }
+
+  if (!isReadOnlySparql(queryText)) {
+    return c.json(
+      {
+        error:
+          "Only read-only SPARQL queries are accepted here (SELECT, ASK, CONSTRUCT, DESCRIBE).",
+      },
+      400,
+    );
   }
 
   const isAlive = await semanticEngine.ensureEngineRunning();

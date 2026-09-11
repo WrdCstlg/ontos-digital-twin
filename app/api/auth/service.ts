@@ -19,6 +19,33 @@ import { authRateLimiter } from "../lib/rateLimit";
  *   3. Role-accurate persona logins with security event logging
  */
 
+/* ─── Client-Safe User Projection ────────────────────────────── */
+
+/** A user record with every server-only field removed. */
+export type PublicUser = Omit<User, "passwordHash">;
+
+/**
+ * Projects a user row down to the fields that may cross the wire.
+ * `ctx.user` carries the full record for server-side role checks, so any
+ * procedure that *returns* a user must pass it through here first.
+ *
+ * This is an allowlist rather than a `delete`: if a sensitive column is added
+ * to the schema later, `PublicUser` gains it and this literal fails to compile
+ * rather than silently leaking the new field.
+ */
+export function toPublicUser(user: User): PublicUser {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    avatar: user.avatar,
+    role: user.role,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    lastSignInAt: user.lastSignInAt,
+  };
+}
+
 /* ─── Request Authentication ─────────────────────────────────── */
 
 export async function authenticateRequest(headers: Headers): Promise<User> {
