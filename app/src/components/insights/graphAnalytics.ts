@@ -65,6 +65,54 @@ export function betweenness(nodes: KgNodeRow[], adj: Adjacency): Map<number, num
   return cb;
 }
 
+/**
+ * PageRank over the undirected window. Where betweenness rewards nodes that sit
+ * on many shortest paths, PageRank rewards nodes attached to other well-connected
+ * nodes — so the two rank the same graph differently and are worth comparing.
+ *
+ * Multi-edges are intentionally left in the adjacency: two instances joined by
+ * several predicates genuinely are more strongly related than two joined by one.
+ */
+export function pagerank(
+  nodes: KgNodeRow[],
+  adj: Adjacency,
+  damping = 0.85,
+  maxIterations = 40,
+): Map<number, number> {
+  const ids = nodes.map((n) => n.id);
+  const n = ids.length;
+  const rank = new Map<number, number>(ids.map((id) => [id, n > 0 ? 1 / n : 0]));
+  if (n === 0) return rank;
+
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
+    const next = new Map<number, number>(ids.map((id) => [id, (1 - damping) / n]));
+
+    // Isolated nodes have nowhere to send their mass; spread it over the whole
+    // window rather than letting it leak out of the system.
+    let danglingMass = 0;
+    for (const id of ids) {
+      const neighbors = adj.neighbors.get(id) ?? [];
+      if (neighbors.length === 0) {
+        danglingMass += rank.get(id)!;
+        continue;
+      }
+      const share = (damping * rank.get(id)!) / neighbors.length;
+      for (const { id: w } of neighbors) next.set(w, (next.get(w) ?? 0) + share);
+    }
+    if (danglingMass > 0) {
+      const spread = (damping * danglingMass) / n;
+      for (const id of ids) next.set(id, next.get(id)! + spread);
+    }
+
+    let delta = 0;
+    for (const id of ids) delta += Math.abs(next.get(id)! - rank.get(id)!);
+    for (const id of ids) rank.set(id, next.get(id)!);
+    if (delta < 1e-6) break;
+  }
+
+  return rank;
+}
+
 export interface Community {
   id: number;
   memberIds: number[];

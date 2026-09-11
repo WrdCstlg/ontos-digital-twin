@@ -166,17 +166,17 @@ export const ADRS: Adr[] = [
   },
   {
     id: 'ADR-004',
-    title: 'Reasoner: deterministic simulation in evaluation build; ELK-profile classification proposed',
+    title: 'Reasoner: native OWL-RL over Oxigraph, with a deterministic fallback when the engine is offline',
     shortTitle: 'Reasoner',
-    status: 'proposed',
-    date: '2025-09-28',
+    status: 'accepted',
+    date: '2026-09-10',
     deciders: ['Amara Okafor', 'R. Alvarez'],
     context: [
       'Ontos needs two kinds of inference: classification (materialize implied subclass relations when a module is published) and data validation (SHACL-style shape checks on synced instances). Both must be explainable — the UI shows inferred facts with provenance, never silent magic.',
-      'A full OWL DL reasoner (HermiT-class) is complete but scales poorly; an ELK-class OWL 2 EL reasoner covers the classification profiles our modules actually use; rule-based validation covers the data checks. In this evaluation build, no external reasoner is provisioned, so the reasoner endpoints run a deterministic simulation over the seeded ontology.',
+      'A full OWL DL reasoner (HermiT-class) is complete but scales poorly; an ELK-class OWL 2 EL reasoner covers the classification profiles our modules actually use. The earlier revision of this ADR shipped a deterministic simulator because no engine was provisioned. That constraint no longer holds: open-ontologies embeds an Oxigraph triple store with a forward-chaining OWL-RL reasoner and a W3C SHACL validator behind a local HTTP API, deployable as a single binary with no JVM.',
     ],
     decision:
-      'Proposed target: ELK-profile OWL 2 EL classification on publish (fast, covers our module profiles) + SHACL-style shape validation on sync, with a HermiT-class complete check as an optional per-module toggle. Current build: ontology.runReasoner executes a deterministic simulation — subclass closure over declared axioms, fixed cardinality/consistency checks — returning the same result shape (inferences, consistency flag, violations/warnings) the real reasoner will. The simulation is disclosed in the UI wherever it runs.',
+      'Accepted: ontology.runReasoner serializes the module and its instances to Turtle, loads them into Oxigraph, and runs native OWL-RL to a fixpoint — returning real entailments with iteration counts and triple deltas. SHACL shapes compiled from shaclJson are validated by the W3C validator in the same engine, and violations are explained through xpSHACL justification trees. When the engine is unreachable the previous deterministic subclass walker still runs, and the response names which path produced the result so the UI never presents a fallback as native entailment.',
     alternatives: [
       {
         option: 'ELK-class OWL 2 EL reasoner',
@@ -191,26 +191,28 @@ export const ADRS: Adr[] = [
         verdict: 'Optional per-module toggle only',
       },
       {
-        option: 'OWL-RL rule subset',
-        strengths: 'Simple, forward-chaining, easy to embed.',
-        weaknesses: 'Partial semantics; silently incomplete results are worse than disclosed simulation.',
-        verdict: 'Rejected as primary',
+        option: 'OWL-RL over Oxigraph (open-ontologies)',
+        strengths: 'Forward-chaining to a fixpoint; embeds as a single binary with no JVM; brings SPARQL 1.1 and a W3C SHACL validator in the same process.',
+        weaknesses: 'Partial semantics — RL does not capture everything an EL or DL reasoner would.',
+        verdict: 'Adopted',
       },
     ],
     gains: [
       'Result contract (inferences, consistency, violations) is stable — swapping the engine changes internals only',
-      'Deterministic simulation keeps the eval build fully offline and reproducible',
-      'Completeness where it is cheap (shape validation), speed where it is not (classification)',
+      'Real OWL-RL entailment with iteration counts and triple deltas, not a simulation',
+      'SPARQL 1.1 and W3C SHACL validation come from the same engine, so shapes and queries agree',
+      'Falls back to the deterministic walker when the engine is offline, and says which path ran',
     ],
     costs: [
-      'In this build, inferred facts are simulated — disclosed, but not real OWL entailment',
-      'EL profile excludes some axioms a full DL reasoner would catch',
+      'RL is an incomplete profile — some axioms an EL or DL reasoner would catch are missed',
+      'Adds an out-of-process dependency that must be deployed alongside the app',
+      'The triple store is global and unscoped, so concurrent runs contend for it',
     ],
-    tradeoff: '> completeness where it\'s cheap (data validation), speed where it\'s not (classification) — and honesty about simulation in between.',
+    tradeoff: '> real entailment from an embeddable engine, and an honest fallback — over complete reasoning that needs a JVM.',
     callout: {
       kind: 'info',
-      title: 'Evaluation build disclosure',
-      text: 'The reasoner in this build is a deterministic simulator over the seeded ontology — same result contract, same UI surfaces, no external reasoning engine. This ADR is PROPOSED until a live ELK-profile engine replaces the simulator.',
+      title: 'Engine dependency',
+      text: 'Reasoning, SHACL validation and SPARQL are served by the open-ontologies binary, which is not vendored in the repository — see the README. When it is unreachable, classification falls back to a deterministic subclass walker and the response names the path that produced it.',
     },
   },
   {

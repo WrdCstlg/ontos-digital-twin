@@ -33,18 +33,38 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
   const text = lang === 'sparql' ? sparql : cypherEdit;
   const typing = typed < text.length;
 
+  // Only SPARQL is executable. The Cypher tab is a reference rendering of the
+  // same translation, so it is never editable and Run switches back to SPARQL
+  // rather than silently executing something other than what is on screen.
+  const isExecutableLang = lang === 'sparql';
+
   // Restart the typewriter only when a freshly generated query arrives
   // (user edits must not reset the editor).
   const genRef = useRef(generation);
+  // The pristine generated query. This is state, not a ref, because the edited
+  // indicator below is derived from it during render.
+  const [generatedSparql, setGeneratedSparql] = useState(sparql);
   useEffect(() => {
     if (genRef.current === generation) return;
     genRef.current = generation;
+    setGeneratedSparql(sparql);
     setCypherEdit(cypher);
     setTyped(0);
     setEditable(false);
     setExplain(false);
     setReval(null);
-  }, [generation, cypher]);
+  }, [generation, cypher, sparql]);
+
+  /**
+   * The evaluation build executes the translated intent carried in the
+   * `# intent:` / `# bindings:` header, not the query body. Editing the body is
+   * allowed — it is how you inspect and learn the shape — but it will not change
+   * the result set, so say so rather than returning stale-looking output.
+   */
+  const headerOf = (q: string) =>
+    q.split('\n').filter((l) => /^#\s*(intent|bindings):/.test(l)).join('\n');
+  const bodyEdited =
+    sparql !== generatedSparql && headerOf(sparql) === headerOf(generatedSparql);
 
   useEffect(() => {
     if (typing === false || editable) return;
@@ -64,7 +84,10 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
   const visible = typing && !editable ? text.slice(0, typed) : text;
   const tokens = useMemo(() => highlightQuery(visible, lang), [visible, lang]);
   const lines = useMemo(() => visible.split('\n'), [visible]);
+  // The banner reflects what is on screen; the Run guard reflects what actually
+  // executes. These differ only on the Cypher tab.
   const writeOp = useMemo(() => findWriteOp(text), [text]);
+  const executableWriteOp = useMemo(() => findWriteOp(sparql), [sparql]);
 
   // Quick re-validation sequence after edits settle (60ms/stage per design).
   const editTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,8 +112,8 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
   );
 
   const handleEdit = (v: string) => {
-    if (lang === 'sparql') onSparqlChange(v);
-    else setCypherEdit(v);
+    if (lang !== 'sparql') return; // Cypher is a reference rendering, never edited
+    onSparqlChange(v);
     scheduleRevalidation();
   };
 
@@ -123,6 +146,7 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
               type="button"
               onClick={() => {
                 setLang(l);
+                if (l !== 'sparql') setEditable(false); // only SPARQL is editable
                 if (!editable) setTyped(0); // tab toggle re-runs the typewriter
               }}
               className={cn(
@@ -135,7 +159,7 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
           ))}
         </div>
         <span className="ml-1 hidden font-mono text-[10px] text-text-muted sm:inline">
-          generated · read-only · ontology-conformant
+          {isExecutableLang ? 'generated · read-only · ontology-conformant' : 'reference rendering · not executable'}
         </span>
         <div className="ml-auto flex items-center gap-1.5">
           <button type="button" onClick={copy} className={chromeBtn} title="Copy query">
@@ -149,8 +173,19 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
               setEditable((e) => !e);
               setExplain(false);
             }}
-            className={cn(chromeBtn, editable && 'border-iris/50 text-text-accent')}
-            title={editable ? 'Lock editor' : 'Edit query'}
+            disabled={!isExecutableLang}
+            className={cn(
+              chromeBtn,
+              editable && 'border-iris/50 text-text-accent',
+              !isExecutableLang && 'cursor-not-allowed opacity-40',
+            )}
+            title={
+              !isExecutableLang
+                ? 'Cypher is a reference rendering — edit the SPARQL instead'
+                : editable
+                  ? 'Lock editor'
+                  : 'Edit query'
+            }
           >
             <Pencil className="size-3" />
             {editable ? 'Lock' : 'Edit'}
@@ -180,10 +215,24 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
           </button>
           <button
             type="button"
-            onClick={onRun}
-            disabled={running || !!writeOp || (typing && !editable)}
+            onClick={() => {
+              // SPARQL is what actually executes — surface it before running so
+              // the results always correspond to the query on screen.
+              if (!isExecutableLang) {
+                setLang('sparql');
+                setTyped(sparql.length);
+              }
+              onRun();
+            }}
+            disabled={running || !!executableWriteOp || (typing && !editable && isExecutableLang)}
             className="flex items-center gap-1.5 rounded-md bg-gradient-to-br from-iris-deep to-iris px-2.5 py-1 font-mono text-[10.5px] font-medium text-white transition-all duration-150 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-            title={writeOp ? 'Refused: write operations are not executable' : 'Execute query'}
+            title={
+              writeOp
+                ? 'Refused: write operations are not executable'
+                : isExecutableLang
+                  ? 'Execute query'
+                  : 'Switch to SPARQL and execute'
+            }
           >
             {running ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />}
             Run
@@ -281,6 +330,13 @@ export function QueryEditor({ sparql, cypher, generation, onSparqlChange, onRun,
           </motion.div>
         )}
       </AnimatePresence>
+      {!writeOp && bodyEdited && (
+        <div className="border-t border-border-hairline bg-warn/5 px-3 py-1.5 font-mono text-[10.5px] leading-relaxed text-warn/90">
+          Body edits are inspected but not executed — this build runs the translated
+          intent in the <span className="text-warn"># intent:</span> header. Ask a new
+          question to change the result set.
+        </div>
+      )}
       {!writeOp && reval !== null && (
         <div className="border-t border-border-hairline px-3 py-1.5 font-mono text-[10.5px]">
           {reval < 4 ? (

@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 const EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
 const BULLETS: Array<{ status: StatusKind; title: string; body: string }> = [
-  { status: 'risk', title: 'Anomaly detection', body: '“3 vendors have payments but no active contract.”' },
+  { status: 'risk', title: 'Anomaly detection', body: '“Which vendors have payments but no active contract?”' },
   { status: 'info', title: 'Graph analytics', body: 'centrality, community detection, orphan islands.' },
   { status: 'warn', title: 'Rule alerts', body: '“Control without evidence in 90 days” → risk flag.' },
   { status: 'ok', title: 'Narrative summaries', body: '“What changed in Logistics this week?”' },
@@ -31,9 +31,9 @@ const CARDS: Array<{ severity: StatusKind; label: string; title: string; evidenc
   {
     severity: 'info',
     label: 'Analytics · HR',
-    title: 'E-1088 (K. Novak) is an orphan island: no manager, no reporting line.',
+    title: 'E-0173 is an orphan island: no manager, no reporting line.',
     evidence: 'evidence: 3 edges · 1 source record',
-    nodes: ['hr:Person', 'hr:ReportingLine', 'hr:OrgUnit'],
+    nodes: ['hr:Person', 'hr:reportsTo', 'hr:OrgUnit'],
   },
 ];
 

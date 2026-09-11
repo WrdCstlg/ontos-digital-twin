@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { EvidenceCanvas, type EvidenceEdge, type EvidenceNode } from './EvidenceCanvas';
 import type { KgNodeRow, SubgraphResult } from './types';
 import { EXPECTED_RELATION, formatTimestamp } from './ruleMeta';
-import { betweenness, buildAdjacency, communities, shortestPath } from './graphAnalytics';
+import { betweenness, buildAdjacency, communities, pagerank, shortestPath } from './graphAnalytics';
 
 type TabKey = 'centrality' | 'communities' | 'paths' | 'orphans';
 
@@ -20,20 +20,20 @@ const TABS: { key: TabKey; label: string; blurb: string; algorithms: string[] }[
   {
     key: 'centrality',
     label: 'Centrality',
-    blurb: 'Betweenness centrality ranks nodes by how many shortest paths flow through them — high scores are structural single points of failure.',
+    blurb: 'Centrality ranks structurally important nodes. Betweenness scores how many shortest paths flow through a node — high scores are single points of failure. PageRank instead rewards nodes attached to other well-connected nodes.',
     algorithms: ['betweenness', 'pagerank'],
   },
   {
     key: 'communities',
     label: 'Communities',
-    blurb: 'Community detection surfaces clusters that are denser internally than externally — unexpected cross-module communities often signal shadow processes.',
-    algorithms: ['louvain', 'label-propagation'],
+    blurb: 'Connected components surface clusters that hang together through the graph — unexpected cross-module components often signal shadow processes.',
+    algorithms: ['connected-components'],
   },
   {
     key: 'paths',
     label: 'Paths',
     blurb: 'Shortest-path playground: pick two instances and the engine walks the graph between them, counting hops across module boundaries.',
-    algorithms: ['astar', 'bfs'],
+    algorithms: ['bfs'],
   },
   {
     key: 'orphans',
@@ -42,6 +42,16 @@ const TABS: { key: TabKey; label: string; blurb: string; algorithms: string[] }[
     algorithms: ['axiom-scan'],
   },
 ];
+
+/**
+ * Centrality scores span very different scales — normalized betweenness sits
+ * around 1e-2 while PageRank over a few hundred nodes sits around 1e-3 — so a
+ * fixed 2-decimal format would flatten a whole column to "0.00".
+ */
+function formatScore(value: number): string {
+  if (value === 0) return '0.00';
+  return value >= 0.01 ? value.toFixed(2) : value.toPrecision(2);
+}
 
 /* ── Endpoint picker for the Paths tab ────────────────────────── */
 
@@ -154,12 +164,12 @@ export function AnalyticsPanel({ hubIri }: { hubIri: string | null }) {
   // Computes — run over the filtered window
   const centrality = useMemo(() => {
     if (tab !== 'centrality' || nodes.length === 0) return [];
-    const cb = betweenness(nodes, adj);
+    const scores = algorithm === 'pagerank' ? pagerank(nodes, adj) : betweenness(nodes, adj);
     return nodes
-      .map((n) => ({ node: n, score: cb.get(n.id) ?? 0 }))
+      .map((n) => ({ node: n, score: scores.get(n.id) ?? 0 }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
-  }, [tab, nodes, adj]);
+  }, [tab, nodes, adj, algorithm]);
 
   const comms = useMemo(() => (tab === 'communities' && nodes.length ? communities(nodes, adj) : []), [tab, nodes, adj]);
 
@@ -335,7 +345,7 @@ export function AnalyticsPanel({ hubIri }: { hubIri: string | null }) {
                 <p className="font-mono text-[10.5px] leading-relaxed text-text-muted">
                   {nodes.length} nodes · {edges.length} edges in scope
                   <br />
-                  evaluation build: deterministic equivalents of the selected algorithm
+                  computed client-side over the fetched window
                 </p>
               </div>
 
@@ -383,8 +393,8 @@ export function AnalyticsPanel({ hubIri }: { hubIri: string | null }) {
                                   style={{ backgroundColor: moduleAlpha(color, 0.7) }}
                                 />
                               </div>
-                              <span className="w-12 shrink-0 text-right font-mono text-[12px] tabular-nums text-text-primary">
-                                {score.toFixed(2)}
+                              <span className="w-16 shrink-0 text-right font-mono text-[12px] tabular-nums text-text-primary">
+                                {formatScore(score)}
                               </span>
                             </li>
                           );

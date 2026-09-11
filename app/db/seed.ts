@@ -4,9 +4,9 @@
  * NEVER touches `users`.
  *
  * PLANTED ANOMALIES (consumed by the insight engine + NLQ demos):
- *  (a) exactly 3 vendors — V-2291, V-2410, V-2555 — have payment transactions
- *      but no active contract (rule: vendor-payment-without-contract)
- *  (b) exactly 2 non-CEO people (hr:Person/E-0173 and hr:Person/E-0201)
+ *  (a) exactly 5 vendors — V-2291, V-2410, V-2555, V-2618, V-2734 — have payment
+ *      transactions but no active contract (rule: vendor-payment-without-contract)
+ *  (b) exactly 4 non-CEO people (hr:Person/E-0173, E-0201, E-0287 and E-0312)
  *      have no hr:reportsTo manager edge (rule: person-without-manager)
  *  (c) exactly 2 controls are evidence-stale: CMP-118 (latest evidence 94 days
  *      ago) and CMP-131 (no evidence at all) (rule: control-without-evidence-90d)
@@ -17,6 +17,16 @@
  *  (f) exactly 1 contract (ACME-CTR-0042) is governed by a policy
  *      (POL-07 Data Protection Policy) with an open audit finding (AF-2025-014)
  *      (rule: contract-governed-by-policy-with-open-finding)
+ *  (g) one vendor (the first non-planted vendor) receives a burst of 50 large
+ *      payments — spend concentration (rule: vendor-spend-concentration)
+ *  (h) exactly 5 active contracts (ACME-CTR-0096..0100) expire within 5-25 days
+ *      with no lgl:relatesToMatter renewal in progress
+ *      (rule: contract-expiring-without-renewal)
+ *  (k) carrier C-08 carries ~2/3 of all shipments — concentration risk, and the
+ *      hub used by the centrality demo (rule: carrier-shipment-concentration)
+ *
+ * Keep this list in step with the code below: the counts here are the contract
+ * the insight-rule expectations and the Field Guide are read against.
  */
 import { createHash } from "crypto";
 import { and, eq } from "drizzle-orm";
@@ -542,7 +552,7 @@ async function main() {
       },
       createdAt: daysAgo(ri(20, 27)),
     });
-    // planted anomaly (b): E-0173 & E-0201 get NO reportsTo edge
+    // planted anomaly (b): every id in ORPHAN_IDS gets NO reportsTo edge
     if (p.manager) edge(`hr:Person/${p.id}`, "hr:reportsTo", `hr:Person/${p.manager}`, "hr");
     edge(`hr:Person/${p.id}`, "hr:memberOf", `hr:OrgUnit/${p.unit}`, "hr");
     edge(`hr:Person/${p.id}`, "hr:inBand", `hr:CompensationBand/${p.band}`, "hr");

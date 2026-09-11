@@ -296,11 +296,12 @@ npm test
 ```
 
 The suite covers password hashing, rate-limiter windows, token verification, cookie
-options, NLQ sanitization, RDF serialization, and explainable SHACL. The
+options, the SPARQL read-only gate, the client-safe user projection, NLQ sanitization, RDF
+serialization, explainable SHACL, and the client-side graph analytics. The
 `semanticEngine.test.ts` cases are **live integration tests** — they require a running
 open-ontologies daemon and will fail without one.
 
-Router-level and frontend tests do not exist yet.
+Router-level and React component tests do not exist yet.
 
 ---
 
