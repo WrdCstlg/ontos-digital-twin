@@ -93,6 +93,13 @@ export default function Mapping() {
       toast.success(`Sync complete — snapshot ${res.snapshot}`, {
         description: `${res.nodesUpserted} instances upserted · ${res.edgesCreated} edges created`,
       });
+      if (res.shaclReport && !res.shaclReport.conforms) {
+        toast.warning(`SHACL Validation: ${res.shaclReport.violationCount} issue(s) detected`, {
+          description:
+            res.shaclReport.signatureSummary?.[0]?.remediationAction ||
+            "Check SHACL compliance report for remediation actions",
+        });
+      }
       await Promise.all([utils.mapping.listSyncJobs.invalidate(), utils.mapping.listMappings.invalidate()]);
     },
     onError: (err) => {

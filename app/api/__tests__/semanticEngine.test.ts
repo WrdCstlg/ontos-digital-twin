@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import {
-  buildPrefixMap,
   moduleToTurtle,
   knowledgeGraphToTurtle,
   shaclJsonToTurtle,
@@ -145,7 +144,6 @@ describe("Semantic Engine & RDF Bridge Integration", () => {
           predicateIri: "hr:reportsTo",
           sourceMappingId: null,
           createdAt: new Date(),
-          updatedAt: new Date(),
           deletedAt: null,
         },
       ];
@@ -265,13 +263,6 @@ describe("Semantic Engine & RDF Bridge Integration", () => {
       expect(reasoning.profile).toBe("owl-rl");
       expect(reasoning.inferredCount).toBeGreaterThanOrEqual(1);
 
-      // Verify transitive inference query: Fido is an Animal via OWL-RL closure
-      const sparql = `
-        PREFIX ex: <https://ontos.dev/test/>
-        ASK {
-          ex:Fido a ex:Animal .
-        }
-      `;
       const askRes = await semanticEngine.querySparql(`
         PREFIX ex: <https://ontos.dev/test/>
         SELECT ?type WHERE {

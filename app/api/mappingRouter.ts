@@ -20,6 +20,7 @@ import {
   knowledgeGraphToTurtle,
   shaclJsonToTurtle,
 } from "./services/rdfBridge";
+import { explainShaclReport, type ExplainedShaclReport } from "./services/explainableShacl";
 
 /* ── CSV helpers ─────────────────────────────────────────────── */
 
@@ -361,11 +362,7 @@ export const mappingRouter = createRouter({
           )
           .limit(1);
 
-        let shaclReport: {
-          conforms: boolean;
-          violationCount: number;
-          violations: unknown[];
-        } | null = null;
+        let shaclReport: ExplainedShaclReport | null = null;
 
         if (targetClass?.shaclJson && (await semanticEngine.ensureEngineRunning())) {
           try {
@@ -400,11 +397,7 @@ export const mappingRouter = createRouter({
               await semanticEngine.clearStore();
               await semanticEngine.loadTurtle(dataTtl);
               const valRes = await semanticEngine.validateShacl(shapesTtl);
-              shaclReport = {
-                conforms: valRes.conforms,
-                violationCount: valRes.violationCount,
-                violations: valRes.violations,
-              };
+              shaclReport = explainShaclReport(valRes);
             }
           } catch (shaclErr) {
             console.warn("[mappingRouter] SHACL pre-validation encountered error:", shaclErr);

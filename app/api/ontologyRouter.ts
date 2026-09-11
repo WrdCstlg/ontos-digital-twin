@@ -24,6 +24,12 @@ import {
   knowledgeGraphToTurtle,
   shaclJsonToTurtle,
 } from "./services/rdfBridge";
+import {
+  explainShaclReport,
+  buildJustificationTree,
+  computeViolationSignature,
+  generateExplanationAndRemediation,
+} from "./services/explainableShacl";
 
 const moduleKeySchema = z
   .string()
@@ -756,9 +762,39 @@ export const ontologyRouter = createRouter({
       }
 
       const report = await semanticEngine.validateShacl(shapesTtl);
+      const explained = explainShaclReport(report);
       return {
-        ...report,
+        ...explained,
         moduleKey: mod.key,
+      };
+    }),
+
+  explainViolation: authedQuery
+    .input(
+      z.object({
+        constraint: z.string(),
+        path: z.string().optional(),
+        focusNode: z.string().optional(),
+        message: z.string().optional(),
+      }),
+    )
+    .query(({ input }) => {
+      const sig = computeViolationSignature(input.constraint, input.path);
+      const violation = {
+        constraint: input.constraint,
+        focusNode: input.focusNode || "instance",
+        path: input.path,
+        message: input.message,
+        severity: "Violation" as const,
+      };
+      const { humanExplanation, remediationAction } =
+        generateExplanationAndRemediation(violation, sig);
+      const justificationTree = buildJustificationTree(violation, sig);
+      return {
+        signature: sig,
+        humanExplanation,
+        remediationAction,
+        justificationTree,
       };
     }),
 });
