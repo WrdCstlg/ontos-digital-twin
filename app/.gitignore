@@ -5,11 +5,10 @@ dist
 .env
 .env.local
 .env.*.local
-# Database
+# Database files. Migrations under db/migrations/ are source and must be committed.
 *.db
 *.sqlite
 *.sqlite3
-db/migrations/*.sql
 # TypeScript cache
 *.tsbuildinfo
 # Build outputs
