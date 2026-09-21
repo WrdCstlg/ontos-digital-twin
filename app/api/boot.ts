@@ -254,6 +254,13 @@ process.on("unhandledRejection", (reason) => {
 
 export default app;
 
+if (env.isProduction && env.allowDemoLogin) {
+  console.warn(
+    "[security] ALLOW_DEMO_LOGIN is on: anyone who can reach this server can sign in as any role, " +
+      "including admin, without a password. Use it for local demos only.",
+  );
+}
+
 if (env.isProduction) {
   const { serve } = await import("@hono/node-server");
   const { serveStaticFiles } = await import("./lib/vite");

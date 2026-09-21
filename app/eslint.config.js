@@ -6,7 +6,8 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // .tmp-ui-test is gitignored local scratch (Playwright walks, one-off scripts)
+  globalIgnores(['dist', '.tmp-ui-test']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

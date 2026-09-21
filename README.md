@@ -48,32 +48,49 @@ serves both the API and the static client bundle.
 
 ---
 
-## Prerequisites
-
-- **Node.js 20+** (developed against 24.x)
-- **MySQL 8+** reachable via `DATABASE_URL`
-- **open-ontologies** binary — required for reasoning, SHACL and SPARQL. Not vendored in
-  this repository; see [Semantic engine](#semantic-engine).
-
----
-
 ## Quick start
+
+### With Docker — recommended
+
+Needs only Docker. Brings up MySQL, the semantic engine, and the app.
+
+```bash
+cp .env.example .env      # fill in the four secrets: openssl rand -hex 32
+docker compose up --build
+```
+
+Open http://localhost:3000 and sign in as `ADMIN_EMAIL` with `ADMIN_PASSWORD`.
+
+The first boot takes about twenty seconds: a one-shot `init` service applies the SQL
+migrations, seeds the Acme Corp demo workspace, and creates the admin account. Later boots
+apply any new migrations and leave your data alone — the seed runs only against an empty
+database. To wipe everything and start over:
+
+```bash
+docker compose down -v    # -v deletes the database volume
+```
+
+### Local development
+
+Needs **Node.js 20+** (developed against 24.x), **MySQL 8+**, and optionally the
+[semantic engine](#semantic-engine) binary.
 
 ```bash
 cd app
 npm install
+cp .env.example .env      # APP_SECRET and DATABASE_URL are required
 
-cp .env.example .env      # then edit — APP_SECRET and DATABASE_URL are required
-
-npm run db:push           # create the schema in MySQL
-npx tsx db/seed.ts        # seed ontology modules + knowledge graph
-npx tsx db/seed-twins.ts  # seed digital twins + telemetry
-
+npm run build:db          # bundle the bootstrap and seed scripts
+npm run db:bootstrap      # migrate, seed on first run, provision the admin account
 npm run dev               # http://localhost:3000
 ```
 
-On the login screen, pick any of the four demo personas — no password required. They are
-created on first use.
+`db:bootstrap` is the same job the Docker `init` service runs, so both paths build the
+database identically.
+
+### Signing in
+
+In development, the login screen offers four one-click demo personas, created on first use:
 
 | Role | Persona | Email |
 |---|---|---|
@@ -82,24 +99,48 @@ created on first use.
 | `editor` | Priya Sharma | editor@acme-ontology.com |
 | `viewer` | Alex Morgan | viewer@acme-ontology.com |
 
-The account matching `ADMIN_EMAIL` is automatically promoted to `admin`.
+**Production disables persona login**, which is why the Docker stack provisions a real
+admin account instead. To re-enable personas for a local demo, set `ALLOW_DEMO_LOGIN=true` —
+but understand that anyone who can reach the server can then sign in as any role, admin
+included, without a password. The server logs a warning at startup whenever it is on.
 
 ---
 
 ## Environment variables
 
-Copy `app/.env.example` to `app/.env`. Only `APP_SECRET` and `DATABASE_URL` have no usable
-default.
+### Docker
+
+The root `.env` (from the root `.env.example`) feeds `compose.yaml`. The four secrets are
+required; `docker compose` refuses to start without them.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `APP_SECRET` | **yes** | Signs session tokens. 32+ random characters. |
+| `MYSQL_PASSWORD` | **yes** | Password for the `ontos` database user. Use hex — it is embedded in a URL. |
+| `MYSQL_ROOT_PASSWORD` | **yes** | MySQL root password. |
+| `ADMIN_PASSWORD` | **yes** | Password for the admin account. Re-applied on every start, so changing it and restarting rotates it. |
+| `ADMIN_EMAIL` | no | Admin account address. Default `admin@acme-ontology.com`. |
+| `ONTOS_PORT` | no | Host port for the app. Default `3000`. |
+| `ALLOW_DEMO_LOGIN` | no | `true` re-enables persona login. Local demos only — see [Signing in](#signing-in). |
+| `ALLOWED_ORIGINS` | no | Cross-origin allowlist. The bundled client is same-origin and needs nothing here. |
+
+### Application
+
+`app/.env` (from `app/.env.example`) configures the server directly. Only `APP_SECRET` and
+`DATABASE_URL` have no usable default.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `APP_SECRET` | **yes** | — | HS256 signing key for session JWTs. Use 32+ random chars. |
 | `DATABASE_URL` | **yes** | — | MySQL connection string, e.g. `mysql://root:@localhost:3306/ontos` |
 | `APP_ID` | no | `ontos` | Application identifier |
-| `ADMIN_EMAIL` | no | — | This address is auto-promoted to the `admin` role |
+| `ADMIN_EMAIL` | no | `admin@acme-ontology.com` | This address is auto-promoted to the `admin` role |
+| `ADMIN_PASSWORD` | no | — | When set, `db:bootstrap` provisions the admin account with it (12+ chars) |
+| `ALLOW_DEMO_LOGIN` | no | `false` | `true` re-enables persona login in production |
 | `PORT` | no | `3000` | Production HTTP port |
-| `NODE_ENV` | no | — | Set to `production` to enable static serving and strict cookies |
-| `ALLOWED_ORIGINS` | in prod | — | Comma-separated CORS/CSRF origin allowlist. **Production rejects every cross-origin request if unset.** Localhost is allowed automatically outside production. |
+| `NODE_ENV` | no | — | `production` enables static serving, strict cookies, and required-secret checks |
+| `ALLOWED_ORIGINS` | no | — | Comma-separated CORS/CSRF allowlist for **cross-origin** callers. Production rejects any cross-origin request not listed; same-origin use is unaffected. |
+| `MIGRATIONS_DIR` | no | `./db/migrations` | Where `db:bootstrap` finds SQL migrations |
 | `OPEN_ONTOLOGIES_URL` | no | `http://127.0.0.1:8085` | Semantic engine base URL |
 | `OPEN_ONTOLOGIES_PORT` | no | `8085` | Port used when auto-starting the engine |
 | `OPEN_ONTOLOGIES_TOKEN` | no | — | Bearer token, if the engine requires one |
@@ -110,23 +151,32 @@ default.
 
 ## Semantic engine
 
-Reasoning, SHACL validation and SPARQL are delegated to **open-ontologies**, a standalone
-binary that runs an in-memory Oxigraph triple store behind an HTTP API.
+Reasoning, SHACL validation and SPARQL are delegated to
+[open-ontologies](https://github.com/fabio-rovai/open-ontologies) (MIT), a standalone Rust
+binary that runs an in-memory Oxigraph triple store behind an HTTP API. Ontos is tested
+against **v1.3.0**.
 
-**The binary is not committed to this repository** (`bin/` and `*.exe` are gitignored, as
-it is ~38 MB). Supply it yourself and place it at either:
+**With Docker** there is nothing to install. The `engine` service runs the official image,
+`ghcr.io/fabio-rovai/open-ontologies:1.3.0`, pinned by digest, as a non-root user on a
+read-only filesystem.
+
+**For local development**, download the v1.3.0 binary for your platform from the
+[release page](https://github.com/fabio-rovai/open-ontologies/releases/tag/v1.3.0) — Linux
+x86_64, macOS (Intel and Apple Silicon) and Windows are published — and verify it against
+the release's `SHASUMS.txt`. Binaries are gitignored, so place it at either:
 
 ```
 bin/open-ontologies          # repo root  (bin/open-ontologies.exe on Windows)
 app/bin/open-ontologies
 ```
 
-or point `OPEN_ONTOLOGIES_BIN` at it. The server resolves these paths at startup and will
-spawn the daemon on demand:
+or point `OPEN_ONTOLOGIES_BIN` at it. The server resolves these paths at startup and
+spawns the daemon on demand, detached, so it outlives the process that started it:
 
 ```bash
 open-ontologies daemon start --host 127.0.0.1 --port 8085
 open-ontologies daemon status
+open-ontologies daemon stop
 ```
 
 Engine state is confirmed by the health endpoint:
@@ -138,8 +188,7 @@ curl http://localhost:3000/api/health
 
 **Without the engine**, the app still runs. Reasoning falls back to a deterministic
 in-process subclass walker, and SHACL validation is skipped — see
-[Known limitations](#known-limitations) for how that is reported. Note that the semantic
-engine integration tests require a live engine and will fail without it.
+[Known limitations](#known-limitations) for how that is reported.
 
 ---
 
@@ -151,14 +200,16 @@ Run from `app/`.
 |---|---|
 | `npm run dev` | Vite dev server + API on port 3000 |
 | `npm run build` | Production build → `dist/public` (client) and `dist/boot.js` (server) |
+| `npm run build:db` | Bundle the bootstrap and seed scripts → `dist/db/` |
+| `npm run db:bootstrap` | Migrate, seed an empty database, provision the admin account |
 | `npm start` | Serve the production build |
 | `npm run check` | TypeScript project build (`tsc -b`) |
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
 | `npm test` | Vitest suite |
-| `npm run db:push` | Push the Drizzle schema straight to MySQL |
-| `npm run db:generate` | Generate a SQL migration into `db/migrations` |
-| `npm run db:migrate` | Apply pending migrations |
+| `npm run db:generate` | Generate a SQL migration into `db/migrations` after a schema change |
+| `npm run db:migrate` | Apply pending migrations with drizzle-kit |
+| `npm run db:push` | Push the schema straight to MySQL, bypassing migrations — prototyping only |
 
 `npm start` is written for a POSIX shell. On Windows, run the equivalent directly:
 
@@ -171,7 +222,10 @@ $env:NODE_ENV = "production"; node dist/boot.js
 ## Project structure
 
 ```
+compose.yaml                 Full stack: db, engine, init, app
+.env.example                 Secrets for the compose stack
 app/
+├── Dockerfile               Two-stage build; runtime carries no node_modules
 ├── api/                     Hono server + tRPC routers
 │   ├── auth/                Session JWTs and login services
 │   ├── lib/                 env, cookies, password hashing, rate limiting
@@ -190,9 +244,10 @@ app/
 ├── db/
 │   ├── schema.ts            Drizzle schema — 16 tables
 │   ├── relations.ts         Drizzle relations
-│   ├── migrations/          Generated SQL migrations
-│   ├── seed.ts              Ontology + knowledge graph seed
-│   └── seed-twins.ts        Digital twin + telemetry seed
+│   ├── migrations/          Versioned SQL migrations (drizzle-kit)
+│   ├── bootstrap.ts         Migrate → seed if empty → provision admin
+│   ├── seed.ts              Ontology + knowledge graph seed (wipes first)
+│   └── seed-twins.ts        Digital twin + telemetry seed (wipes first)
 └── src/                     React application
     ├── pages/               Dashboard, Library, Studio, Explorer, Mapping,
     │                        Insights, Twins, Admin, Decisions, Guide, Login
@@ -248,7 +303,16 @@ elevated access.
 
 Twins are `kgNodes` with `moduleKey = "twin"` and a `dtwin:` class IRI. Telemetry is
 appended to the `twinStateLog` time-series table. `twinRouter.ts` exports Azure DTDL v3
-JSON. Twin types: `WarehouseTwin`, `ZoneTwin`, `ShipmentTwin`, `SensorTwin`.
+JSON.
+
+Six concrete twin types sit under two abstract branches, all defined in
+`api/services/twinModels.ts`:
+
+```
+DigitalTwin
+├── FacilityTwin  → WarehouseTwin, ZoneTwin
+└── AssetTwin     → ShipmentTwin, CarrierTwin, InventoryTwin, EquipmentTwin
+```
 
 ---
 
@@ -273,8 +337,13 @@ and `DESCRIBE`. Update forms are rejected with a 400.
 ## Security
 
 - HS256 session JWTs with issuer pinning, a unique JTI, and a 7-day expiry.
-- Session cookie is `HttpOnly`, `SameSite=Strict` and partitioned; in production it uses
-  the `__Host-` prefix, which forces `Secure` and host-only scope.
+- Session cookie is `HttpOnly` and `SameSite=Strict`. In production on a real hostname it
+  uses the `__Host-` prefix, which forces `Secure` and host-only scope; on `localhost` it
+  falls back to a plain name without `Secure`, so the stack works over plain HTTP locally.
+- Production refuses persona login unless `ALLOW_DEMO_LOGIN=true`, and logs a warning at
+  startup when it is on.
+- Containers run as non-root users; the engine's filesystem is read-only. `.env` files are
+  excluded from the Docker build context, so secrets never land in an image layer.
 - Passwords hashed with `node:crypto` scrypt, 128-bit salts, constant-time verification.
 - `secureHeaders` (HSTS, `X-Frame-Options: DENY`, `nosniff`), explicit-origin CORS, CSRF
   origin checks on mutations, and a 2 MB body limit.
@@ -298,8 +367,9 @@ npm test
 The suite covers password hashing, rate-limiter windows, token verification, cookie
 options, the SPARQL read-only gate, the client-safe user projection, NLQ sanitization, RDF
 serialization, explainable SHACL, and the client-side graph analytics. The
-`semanticEngine.test.ts` cases are **live integration tests** — they require a running
-open-ontologies daemon and will fail without one.
+`semanticEngine.test.ts` cases are **live integration tests**: they start the engine
+daemon themselves from the local binary, so they need the binary in place (see
+[Semantic engine](#semantic-engine)) but not a daemon already running.
 
 Router-level and React component tests do not exist yet.
 
@@ -307,16 +377,23 @@ Router-level and React component tests do not exist yet.
 
 ## Production
 
+The Docker stack is production-shaped: `NODE_ENV=production`, required secrets enforced,
+persona login off, a healthchecked app container, and every image pinned by digest. Put it
+behind a TLS-terminating proxy for anything beyond localhost — the session cookie switches
+to `__Host-` with `Secure` once the host is not `localhost`, so it needs HTTPS.
+
+To run the build without Docker:
+
 ```bash
 cd app
-npm run build
-NODE_ENV=production ALLOWED_ORIGINS=https://your-host node dist/boot.js
+npm run build && npm run build:db
+npm run db:bootstrap
+NODE_ENV=production node dist/boot.js
 ```
 
 `npm run build` emits `dist/public/` (static client assets) and `dist/boot.js` (bundled
-Node server). The server serves both.
-
-Set `ALLOWED_ORIGINS` — production CORS and CSRF both deny anything not listed.
+Node server), and the server serves both. Everything is bundled, so `dist/` plus
+`db/migrations/` is all a deployment needs — no `node_modules`.
 
 ---
 
@@ -324,9 +401,12 @@ Set `ALLOWED_ORIGINS` — production CORS and CSRF both deny anything not listed
 
 These are tracked, known behaviours rather than surprises:
 
-- **No migrations have been generated.** `db/migrations/` is empty and the schema is only
-  applied via `drizzle-kit push`, so there is no versioned history and no upgrade path for
-  an existing database. Run `npm run db:generate` before the first real deployment.
+- **Databases created with `db:push` predate the migration history.** The schema is now
+  versioned from `0000_initial_schema`, but a database built earlier with `drizzle-kit
+  push` already has the tables and no record of the migration, so `db:bootstrap` will fail
+  on it. Start that database fresh, or record `0000` as applied in `__drizzle_migrations`.
+- **The login page shows persona buttons even when persona login is off.** Clicking one
+  returns a clear error naming `ALLOW_DEMO_LOGIN`, but the buttons should be hidden.
 - **SHACL validation fails open.** When the semantic engine is offline,
   `ontology.validateShacl` returns `conforms: true` with an explanatory `message`, and
   `mapping.runSync` commits with no SHACL report at all. Check `message` and the presence

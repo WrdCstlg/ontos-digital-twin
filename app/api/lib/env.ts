@@ -18,4 +18,9 @@ export const env = {
   isProduction: process.env.NODE_ENV === "production",
   databaseUrl: required("DATABASE_URL"),
   adminEmail: process.env.ADMIN_EMAIL ?? "admin@acme-ontology.com",
+  /**
+   * Re-enables one-click persona login in production. Anyone who can reach the
+   * server can then sign in as any role, admin included — local demos only.
+   */
+  allowDemoLogin: process.env.ALLOW_DEMO_LOGIN === "true",
 };

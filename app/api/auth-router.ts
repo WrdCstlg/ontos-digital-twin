@@ -3,6 +3,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { Session } from "@contracts/constants";
 import { getSessionCookieName, getSessionCookieOptions } from "./lib/cookies";
+import { env } from "./lib/env";
 import { createRouter, authedQuery, publicQuery } from "./middleware";
 import { loginDemoUser, loginWithCredentials, toPublicUser } from "./auth/service";
 
@@ -17,10 +18,11 @@ export const authRouter = createRouter({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      if (process.env.NODE_ENV === "production") {
+      if (env.isProduction && !env.allowDemoLogin) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Demo login is disabled in production environments.",
+          message:
+            "Demo login is disabled in production. Sign in with credentials, or set ALLOW_DEMO_LOGIN=true for a local demo.",
         });
       }
       const { user, token } = await loginDemoUser(input.role);
