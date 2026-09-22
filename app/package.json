@@ -1,11 +1,30 @@
 {
-  "name": "my-app",
+  "name": "ontos",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Enterprise Ontology Management and Digital Twin Platform",
+  "author": "Senan Sumrein",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piercepartners/ontos-digital-twin.git"
+  },
+  "keywords": [
+    "ontology",
+    "digital-twin",
+    "knowledge-graph",
+    "dtdl",
+    "shacl",
+    "sparql",
+    "hono",
+    "trpc",
+    "react19",
+    "ai-agents"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && esbuild api/boot.ts --platform=node --bundle --format=esm --outdir=dist --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\"",
+    "build": "vite build && esbuild api/boot.ts --platform=node --bundle --format=esm --outdir=dist --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\" && npm run build:db",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "NODE_ENV=production node dist/boot.js",
@@ -19,8 +38,6 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.965.0",
-    "@aws-sdk/s3-request-presigner": "^3.965.0",
     "@gsap/react": "^2.1.2",
     "@hono/node-server": "^1.14.3",
     "@hookform/resolvers": "^5.2.2",
@@ -107,7 +124,6 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "playwright": "^1.63.0",
-    "plugin-inspect-react-code": "^1.0.3",
     "postcss": "^8.5.6",
     "prettier": "^3.7.4",
     "tailwindcss": "^3.4.19",

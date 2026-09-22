@@ -34,5 +34,10 @@ bin/
 app/bin/
 *.exe
 
-# Temp test files
-app/.tmp-ui-test/
+# Local scratch and test output
+.tmp-ui-test/
+app/scratch/
+
+# AI coding-agent local state (session locks, scratch, per-machine settings)
+.claude/
+.agents/

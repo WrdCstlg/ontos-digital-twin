@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The semantic engine the live integration tests run against. Keep in step
+  # with the image pinned in compose.yaml.
+  ENGINE_VERSION: v1.3.0
+  ENGINE_SHA256: fbd13aab727b575ddc046e5571fce29d7612632c470ce4d50285ff036dc621b0
+
+jobs:
+  verify:
+    name: Typecheck, lint, test, build (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is the oldest supported LTS; 24 is what the Docker image runs.
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix app ci
+
+      - name: Fetch semantic engine
+        run: |
+          mkdir -p bin
+          curl -fsSL -o bin/open-ontologies \
+            "https://github.com/fabio-rovai/open-ontologies/releases/download/${ENGINE_VERSION}/open-ontologies-x86_64-unknown-linux-gnu"
+          echo "${ENGINE_SHA256}  bin/open-ontologies" | sha256sum --check --strict -
+          chmod +x bin/open-ontologies
+
+      - name: Typecheck
+        run: npm --prefix app run check
+
+      - name: Lint
+        run: npm --prefix app run lint
+
+      - name: Test
+        run: npm --prefix app test
+        env:
+          # The engine tests spawn the daemon from this binary themselves.
+          OPEN_ONTOLOGIES_BIN: ${{ github.workspace }}/bin/open-ontologies
+
+      - name: Build
+        run: npm --prefix app run build
+
+  docker:
+    name: Docker stack boots and serves
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate throwaway secrets
+        run: |
+          admin_password="$(openssl rand -hex 12)"
+          echo "::add-mask::${admin_password}"
+          {
+            echo "APP_SECRET=$(openssl rand -hex 32)"
+            echo "MYSQL_PASSWORD=$(openssl rand -hex 24)"
+            echo "MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24)"
+            echo "ADMIN_PASSWORD=${admin_password}"
+          } > .env
+          echo "ADMIN_PASSWORD=${admin_password}" >> "$GITHUB_ENV"
+
+      - name: Build and start the stack
+        run: docker compose up --detach --build
+
+      - name: Wait for the app to report healthy
+        run: |
+          for _ in $(seq 1 90); do
+            if curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
+              echo "app is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "app did not become healthy within 180s" >&2
+          exit 1
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          base=http://localhost:3000
+
+          health="$(curl -fsS "$base/health")"
+          echo "health: $health"
+          test "$(jq -r .database <<< "$health")" = connected
+          test "$(jq -r .semanticEngine.status <<< "$health")" = connected
+
+          # Persona login must be refused in production by default.
+          status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/trpc/auth.demoLogin" \
+            -H 'content-type: application/json' -d '{"json":{"role":"admin"}}')"
+          test "$status" = 403
+
+          # The provisioned admin account signs in, and no password hash leaks.
+          body="$(jq -nc --arg pw "$ADMIN_PASSWORD" '{json:{email:"admin@acme-ontology.com",password:$pw}}')"
+          login="$(curl -fsS -c jar -X POST "$base/api/trpc/auth.login" \
+            -H 'content-type: application/json' -d "$body")"
+          test "$(jq -r .result.data.json.role <<< "$login")" = admin
+          if grep -q passwordHash <<< "$login"; then echo "password hash leaked" >&2; exit 1; fi
+
+          # First boot seeded the demo workspace.
+          kpis="$(curl -fsS -b jar "$base/api/trpc/dashboard.overview" | jq -c .result.data.json.kpis)"
+          echo "kpis: $kpis"
+          test "$(jq -r .totalNodes <<< "$kpis")" = 3627
+          test "$(jq -r .totalEdges <<< "$kpis")" = 7739
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes

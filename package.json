@@ -1,0 +1,17 @@
+{
+  "name": "ontos-workspace",
+  "private": true,
+  "description": "Convenience scripts for the Ontos repository. The application lives in ./app.",
+  "license": "MIT",
+  "scripts": {
+    "setup": "npm --prefix app ci",
+    "dev": "npm --prefix app run dev",
+    "build": "npm --prefix app run build",
+    "start": "npm --prefix app start",
+    "check": "npm --prefix app run check",
+    "lint": "npm --prefix app run lint",
+    "test": "npm --prefix app test",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  }
+}

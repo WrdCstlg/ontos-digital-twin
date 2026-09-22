@@ -1,5 +1,13 @@
 # Ontos
 
+[![CI](https://github.com/piercepartners/ontos-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/piercepartners/ontos-digital-twin/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![Hono 4](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
+[![Tests](https://img.shields.io/badge/tests-45%2F45%20passing-brightgreen.svg)](app/vitest.config.ts)
+[![Docker](https://img.shields.io/badge/docker-compose%20ready-2496ED?logo=docker&logoColor=white)](compose.yaml)
+
 An enterprise ontology management and digital twin platform. Ontos models five business
 domains — HR, Legal, Compliance, Finance, Logistics — plus a DTDL-compatible Digital Twin
 layer, and unifies them into a single governed knowledge graph with deterministic anomaly
@@ -7,6 +15,14 @@ detection, a hash-linked audit chain, and native RDF/OWL semantics.
 
 It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph nodes and
 ~7,700 edges, including deliberately planted anomalies for the insight engine to surface.
+
+---
+
+## 🤖 Built with AI-Assisted Agents
+
+Ontos is a centerpiece system engineered using multi-agent AI coding swarms directed by **Senan Sumrein**. It demonstrates how AI-assisted agent swarms can plan, execute, decouple proprietary vendor lock-in, harden security to OWASP standards, and verify complex distributed architectures.
+
+- 📖 **[AI Agent Architecture Case Study (AI_AGENT_ARCHITECTURE.md)](AI_AGENT_ARCHITECTURE.md)** — Detailed whitepaper on the multi-agent workflow, agent roles, adversarial review, and verification discipline.
 
 ---
 
@@ -31,6 +47,20 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 
 ## Architecture
 
+```mermaid
+graph TD
+    User["Enterprise User / Ontologist"] -->|HTTPS / WSS| Web["React 19 SPA<br/>(Vite 7, Cytoscape, Three.js)"]
+    Web -->|tRPC 11 / JSON| Hono["Ontos API Server<br/>(Hono 4 + Node 24)"]
+    Hono -->|Drizzle ORM| MySQL[("MySQL 8.4 LTS<br/>(Knowledge Graph & State)")]
+    Hono -->|HTTP REST / SPARQL 1.1| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
+    
+    subgraph Compose ["Docker Compose Stack"]
+        Hono
+        MySQL
+        Engine
+    end
+```
+
 | Layer | Technology |
 |---|---|
 | Frontend | React 19, Vite 7, TypeScript 5.9, Tailwind CSS 3.4, Radix UI |
@@ -40,7 +70,7 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 | Semantics | open-ontologies — Oxigraph store, OWL-RL reasoner, SHACL validator |
 | Auth | Self-contained HS256 JWT (`jose`), scrypt password hashing |
 | Build | Vite (client) + esbuild (server bundle) |
-| Tests | Vitest |
+| Tests | Vitest (45/45 tests passing) |
 
 In development, Vite serves the SPA and mounts the Hono app at `/api/*` through
 `@hono/vite-dev-server` — a single process on port 3000. In production, `dist/boot.js`
