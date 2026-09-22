@@ -1,11 +1,11 @@
 # Ontos
 
-[![CI](https://github.com/piercepartners/ontos-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/piercepartners/ontos-digital-twin/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/WrdCstlg/ontos-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/WrdCstlg/ontos-digital-twin/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Hono 4](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
-[![Tests](https://img.shields.io/badge/tests-45%2F45%20passing-brightgreen.svg)](app/vitest.config.ts)
+[![Tests](https://img.shields.io/badge/tests-55%2F55%20passing-brightgreen.svg)](app/vitest.config.ts)
 [![Docker](https://img.shields.io/badge/docker-compose%20ready-2496ED?logo=docker&logoColor=white)](compose.yaml)
 
 An enterprise ontology management and digital twin platform. Ontos models five business

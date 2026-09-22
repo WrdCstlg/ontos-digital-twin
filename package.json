@@ -2,7 +2,7 @@
   "name": "ontos-workspace",
   "private": true,
   "description": "Convenience scripts for the Ontos repository. The application lives in ./app.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "setup": "npm --prefix app ci",
     "dev": "npm --prefix app run dev",
