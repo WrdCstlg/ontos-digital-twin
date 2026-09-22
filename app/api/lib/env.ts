@@ -23,4 +23,15 @@ export const env = {
    * server can then sign in as any role, admin included — local demos only.
    */
   allowDemoLogin: process.env.ALLOW_DEMO_LOGIN === "true",
+
+  // Pluggable LLM Gateway configuration (Local + Cloud)
+  ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
+  ollamaModel: process.env.OLLAMA_MODEL,
+  openaiApiKey: process.env.OPENAI_API_KEY,
+  openaiModel: process.env.OPENAI_MODEL,
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  anthropicModel: process.env.ANTHROPIC_MODEL,
+  openrouterApiKey: process.env.OPENROUTER_API_KEY,
+  openrouterModel: process.env.OPENROUTER_MODEL,
 };
+

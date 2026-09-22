@@ -1,11 +1,13 @@
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
-import type { User } from "@db/schema";
+import type { User, Workspace, WorkspaceMember } from "@db/schema";
 import { authenticateRequest } from "./auth/service";
 
 export type TrpcContext = {
   req: Request;
   resHeaders: Headers;
   user?: User;
+  workspace?: Workspace;
+  membership?: WorkspaceMember;
 };
 
 export async function createContext(

@@ -190,14 +190,14 @@ describe("Security Posture Verification", () => {
   });
 
   describe("Component 6: Input Validation & NLQ Sanitization", () => {
-    it("refuses queries that exceed 500 characters", () => {
+    it("refuses queries that exceed 500 characters", async () => {
       const longQuery = "a".repeat(501);
-      const res = translate(longQuery);
+      const res = await translate(longQuery);
       expect(res.recognized).toBe(false);
       expect(res.refusal).toContain("capped at 500 characters");
     });
 
-    it("refuses destructive or injection keywords", () => {
+    it("refuses destructive or injection keywords", async () => {
       const destructive = [
         "DROP TABLE users",
         "DELETE FROM kg_nodes",
@@ -209,7 +209,7 @@ describe("Security Posture Verification", () => {
       ];
 
       for (const q of destructive) {
-        const res = translate(q);
+        const res = await translate(q);
         expect(res.recognized).toBe(false);
         expect(res.refusal).toBeDefined();
       }

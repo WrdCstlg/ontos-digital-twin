@@ -11,9 +11,14 @@ import {
   ontologyModules,
   syncJobs,
 } from "@db/schema";
-import { createRouter, authedQuery, adminMutation, ontologistMutation } from "./middleware";
+import {
+  createRouter,
+  workspaceQuery,
+  workspaceAdminMutation,
+  workspaceOntologistMutation,
+} from "./middleware";
 import { getDb } from "./queries/connection";
-import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
+import { actorLabelFor, writeAudit } from "./services/audit";
 import { semanticEngine } from "./services/semanticEngine";
 import {
   buildPrefixMap,
@@ -89,8 +94,8 @@ async function nextSnapshotLabel(workspaceId: number) {
 /* ── router ──────────────────────────────────────────────────── */
 
 export const mappingRouter = createRouter({
-  listConnectors: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  listConnectors: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const rows = await db
       .select()
@@ -108,7 +113,7 @@ export const mappingRouter = createRouter({
     });
   }),
 
-  createConnector: adminMutation
+  createConnector: workspaceAdminMutation
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -118,7 +123,7 @@ export const mappingRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const [{ id }] = await db
         .insert(connectors)
@@ -142,8 +147,8 @@ export const mappingRouter = createRouter({
       return row;
     }),
 
-  listMappings: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  listMappings: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const conns = await db
       .select()
@@ -168,13 +173,13 @@ export const mappingRouter = createRouter({
     }));
   }),
 
-  upsertMapping: ontologistMutation
+  upsertMapping: workspaceOntologistMutation
     .input(
       z.object({
         id: z.number().int().positive().optional(),
+        name: z.string().min(1).max(255),
         connectorId: z.number().int().positive(),
         moduleKey: z.string().min(1).max(64),
-        name: z.string().min(1).max(255),
         sourceTable: z.string().min(1).max(255),
         classIri: z.string().min(1).max(512),
         columnMap: z.object({
@@ -195,7 +200,7 @@ export const mappingRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const [mod] = await db
         .select()
@@ -219,19 +224,12 @@ export const mappingRouter = createRouter({
 
       let id = input.id;
       if (id) {
-        const [existing] = await db
-          .select({ mapping: mappings })
-          .from(mappings)
-          .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
-          .where(and(eq(mappings.id, id), eq(connectors.workspaceId, ws.id)))
-          .limit(1);
-        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${id} not found` });
         await db
           .update(mappings)
           .set({
+            name: input.name,
             connectorId: input.connectorId,
             moduleId: mod.id,
-            name: input.name,
             sourceTable: input.sourceTable,
             classIri: input.classIri,
             columnMapJson: input.columnMap,
@@ -239,24 +237,24 @@ export const mappingRouter = createRouter({
           })
           .where(eq(mappings.id, id));
       } else {
-        const [r] = await db
+        const [{ id: newId }] = await db
           .insert(mappings)
           .values({
+            name: input.name,
             connectorId: input.connectorId,
             moduleId: mod.id,
-            name: input.name,
             sourceTable: input.sourceTable,
             classIri: input.classIri,
             columnMapJson: input.columnMap,
             status: input.status,
           })
           .$returningId();
-        id = r.id;
+        id = newId;
       }
       await writeAudit({
         workspaceId: ws.id,
         actor: actorLabelFor(ctx.user),
-        action: `${input.id ? "Updated" : "Created"} mapping '${input.name}' (${input.sourceTable} → ${input.classIri})`,
+        action: `${input.id ? "Updated" : "Created"} mapping '${input.name}'`,
         entityType: "mapping",
         entityId: id,
         payload: { name: input.name, sourceTable: input.sourceTable, classIri: input.classIri, status: input.status },
@@ -265,7 +263,7 @@ export const mappingRouter = createRouter({
       return row;
     }),
 
-  previewCsv: authedQuery
+  previewCsv: workspaceQuery
     .input(
       z.object({
         filename: z.string().min(1).max(255),
@@ -317,10 +315,10 @@ export const mappingRouter = createRouter({
       return { filename: input.filename, headers, sampleRows: rows, instances };
     }),
 
-  runSync: ontologistMutation
+  runSync: workspaceOntologistMutation
     .input(z.object({ mappingId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const [record] = await db
         .select({ mapping: mappings, connector: connectors })
@@ -528,10 +526,10 @@ export const mappingRouter = createRouter({
       }
     }),
 
-  listSyncJobs: authedQuery
+  listSyncJobs: workspaceQuery
     .input(z.object({ limit: z.number().int().min(1).max(100).default(25) }).optional())
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const conns = await db.select().from(connectors).where(eq(connectors.workspaceId, ws.id));
       if (conns.length === 0) return [];

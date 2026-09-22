@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { and, desc, eq, inArray, isNull, like, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, lt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { kgEdges, kgNodes, ontologyClasses, ontologyModules, twinStateLog } from "@db/schema";
-import { createRouter, authedQuery, authedMutation } from "./middleware";
+import { createRouter, workspaceQuery, workspaceMutation, workspaceAdminMutation } from "./middleware";
 import { getDb } from "./queries/connection";
-import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
+import { actorLabelFor, writeAudit } from "./services/audit";
 import {
   DTDL_UNITS,
   LOGGED_NUMERIC_KEYS,
@@ -72,8 +72,8 @@ async function fetchTwinByIri(workspaceId: number, iri: string): Promise<KgNodeR
 
 export const twinRouter = createRouter({
   /** Twins grouped by class, with current-state summary + zone/equipment counts. */
-  listTwins: authedQuery.input(listInput).query(async ({ input }) => {
-    const ws = await getDemoWorkspace();
+  listTwins: workspaceQuery.input(listInput).query(async ({ ctx, input }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const conds = [
       eq(kgNodes.workspaceId, ws.id),
@@ -147,10 +147,10 @@ export const twinRouter = createRouter({
   }),
 
   /** One twin: node, model (class + hasModel target), state, topology subgraph, twinOf target. */
-  getTwin: authedQuery
+  getTwin: workspaceQuery
     .input(z.object({ iri: z.string().min(1).max(512) }))
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const node = await fetchTwinByIri(ws.id, input.iri);
 
@@ -260,7 +260,7 @@ export const twinRouter = createRouter({
     }),
 
   /** Time-ordered telemetry series from twin_state_log (ascending recordedAt). */
-  getStateHistory: authedQuery
+  getStateHistory: workspaceQuery
     .input(
       z.object({
         iri: z.string().min(1).max(512),
@@ -268,8 +268,8 @@ export const twinRouter = createRouter({
         points: z.number().int().min(1).max(500).default(48),
       }),
     )
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const node = await fetchTwinByIri(ws.id, input.iri);
       const rows = await db
@@ -297,10 +297,10 @@ export const twinRouter = createRouter({
    * cold-chain drift toward 2-6°C, shipment ETA countdown + delivery flip,
    * equipment battery drain. Persists propsJson + appends twin_state_log.
    */
-  tick: authedMutation
+  tick: workspaceMutation
     .input(z.object({ iri: z.string().min(1).max(512).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const now = new Date();
       const conds = [
@@ -375,10 +375,10 @@ export const twinRouter = createRouter({
     }),
 
   /** DTDL v3 export: one twin's model (by twin IRI) or every twin model. */
-  exportDtdl: authedQuery
+  exportDtdl: workspaceQuery
     .input(z.object({ iri: z.string().min(1).max(512).optional() }).optional())
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       let modelNames = TWIN_MODELS.map((m) => m.name);
       let forTwin: { iri: string; label: string; classIri: string } | null = null;
       if (input?.iri) {
@@ -459,5 +459,42 @@ export const twinRouter = createRouter({
         models: interfaces.map((i) => i["@id"]),
         content: JSON.stringify(doc, null, 2),
       };
+    }),
+
+  pruneStateHistory: workspaceAdminMutation
+    .input(z.object({ olderThanDays: z.number().int().min(1).default(90) }))
+    .mutation(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
+      const db = getDb();
+      const cutoff = new Date(Date.now() - input.olderThanDays * 86400000);
+
+      const wsTwinNodes = await db
+        .select({ id: kgNodes.id })
+        .from(kgNodes)
+        .where(eq(kgNodes.workspaceId, ws.id));
+      const nodeIds = wsTwinNodes.map((n) => n.id);
+
+      if (nodeIds.length === 0) {
+        return { deletedCount: 0, cutoff: cutoff.toISOString() };
+      }
+
+      await db
+        .delete(twinStateLog)
+        .where(
+          and(
+            inArray(twinStateLog.nodeId, nodeIds),
+            lt(twinStateLog.recordedAt, cutoff),
+          ),
+        );
+
+      await writeAudit({
+        workspaceId: ws.id,
+        actor: actorLabelFor(ctx.user),
+        action: `Pruned twin state history older than ${input.olderThanDays} days`,
+        entityType: "twin_state_log",
+        payload: { olderThanDays: input.olderThanDays, cutoff: cutoff.toISOString() },
+      });
+
+      return { cutoff: cutoff.toISOString() };
     }),
 });

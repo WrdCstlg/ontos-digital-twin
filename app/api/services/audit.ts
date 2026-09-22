@@ -53,36 +53,46 @@ export async function writeAudit(opts: {
   payload?: unknown;
 }) {
   const db = getDb();
-  const [last] = await db
-    .select()
-    .from(auditLog)
-    .where(eq(auditLog.workspaceId, opts.workspaceId))
-    .orderBy(desc(auditLog.id))
-    .limit(1);
-  const prevHash = last?.hash ?? null;
-  const canonicalPayload = canonicalize({
-    actor: opts.actor,
-    action: opts.action,
-    entityType: opts.entityType,
-    entityId: opts.entityId ?? null,
-    payload: opts.payload ?? null,
-  });
-  const hash = auditHash(prevHash, canonicalPayload);
-  const [{ id }] = await db
-    .insert(auditLog)
-    .values({
-      workspaceId: opts.workspaceId,
-      actorLabel: opts.actor,
+  return await db.transaction(async (tx) => {
+    const [last] = await tx
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.workspaceId, opts.workspaceId))
+      .orderBy(desc(auditLog.id))
+      .limit(1)
+      .for("update");
+
+    const prevHash = last?.hash ?? null;
+    const canonicalPayload = canonicalize({
+      actor: opts.actor,
       action: opts.action,
       entityType: opts.entityType,
-      entityId: opts.entityId != null ? String(opts.entityId) : null,
-      payloadJson: { actor: opts.actor, action: opts.action, entityType: opts.entityType, entityId: opts.entityId ?? null, payload: opts.payload ?? null },
-      hash,
-      prevHash,
-    })
-    .$returningId();
-  const [row] = await db.select().from(auditLog).where(eq(auditLog.id, id));
-  return row;
+      entityId: opts.entityId ?? null,
+      payload: opts.payload ?? null,
+    });
+    const hash = auditHash(prevHash, canonicalPayload);
+    const [{ id }] = await tx
+      .insert(auditLog)
+      .values({
+        workspaceId: opts.workspaceId,
+        actorLabel: opts.actor,
+        action: opts.action,
+        entityType: opts.entityType,
+        entityId: opts.entityId != null ? String(opts.entityId) : null,
+        payloadJson: {
+          actor: opts.actor,
+          action: opts.action,
+          entityType: opts.entityType,
+          entityId: opts.entityId ?? null,
+          payload: opts.payload ?? null,
+        },
+        hash,
+        prevHash,
+      })
+      .$returningId();
+    const [row] = await tx.select().from(auditLog).where(eq(auditLog.id, id));
+    return row;
+  });
 }
 
 /** Recompute the hash chain; returns true if intact. */

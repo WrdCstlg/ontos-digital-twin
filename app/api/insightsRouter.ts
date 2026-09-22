@@ -11,10 +11,10 @@ import {
   auditLog,
 } from "@db/schema";
 import type { KgEdge, KgNode } from "@db/schema";
-import { createRouter, authedQuery, authedMutation } from "./middleware";
+import { createRouter, workspaceQuery, workspaceMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { scanRateLimiter } from "./lib/rateLimit";
-import { actorLabelFor, getDemoWorkspace, writeAudit } from "./services/audit";
+import { actorLabelFor, writeAudit } from "./services/audit";
 
 type Evidence = {
   nodeIds: number[];
@@ -504,7 +504,7 @@ export async function reconcileInsights(
 }
 
 export const insightsRouter = createRouter({
-  list: authedQuery
+  list: workspaceQuery
     .input(
       z
         .object({
@@ -515,8 +515,8 @@ export const insightsRouter = createRouter({
         })
         .optional(),
     )
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const conds = [eq(insights.workspaceId, ws.id)];
       if (input?.severity) conds.push(eq(insights.severity, input.severity));
@@ -530,10 +530,10 @@ export const insightsRouter = createRouter({
         .limit(input?.limit ?? 50);
     }),
 
-  acknowledge: authedMutation
+  acknowledge: workspaceMutation
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const [row] = await db
         .select()
@@ -553,7 +553,7 @@ export const insightsRouter = createRouter({
       return { ok: true };
     }),
 
-  runScan: authedMutation.mutation(async ({ ctx }) => {
+  runScan: workspaceMutation.mutation(async ({ ctx }) => {
     const rateCheck = scanRateLimiter.check(String(ctx.user?.id ?? "anon"));
     if (!rateCheck.allowed) {
       throw new TRPCError({
@@ -561,7 +561,7 @@ export const insightsRouter = createRouter({
         message: `Insight scan rate limit exceeded. Please wait ${Math.ceil(rateCheck.resetMs / 1000)} seconds.`,
       });
     }
-    const ws = await getDemoWorkspace();
+    const ws = ctx.workspace;
     const { scanned, results } = await reconcileInsights(ws.id);
     await writeAudit({
       workspaceId: ws.id,
@@ -574,11 +574,11 @@ export const insightsRouter = createRouter({
     return { scanned, findings: results };
   }),
 
-  narrative: authedQuery
+  narrative: workspaceQuery
     .input(z.object({ period: z.enum(["week", "month"]).default("week") }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       // Deterministic, template-based narrative grounded in live DB numbers.
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const { nodes, edges } = await loadGraph(ws.id);
       const byModule = new Map<string, number>();

@@ -11,13 +11,12 @@ import {
   mappings,
   connectors,
 } from "@db/schema";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { getDemoWorkspace } from "./services/audit";
 
 export const dashboardRouter = createRouter({
-  overview: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  overview: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const [n] = await db
       .select({ n: count() })
@@ -74,8 +73,8 @@ export const dashboardRouter = createRouter({
     };
   }),
 
-  moduleHealth: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  moduleHealth: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const mods = await db
       .select()
@@ -105,8 +104,8 @@ export const dashboardRouter = createRouter({
     }));
   }),
 
-  recentActivity: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  recentActivity: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     return db
       .select()
@@ -116,8 +115,8 @@ export const dashboardRouter = createRouter({
       .limit(20);
   }),
 
-  insightPreview: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  insightPreview: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     return db
       .select()

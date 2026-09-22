@@ -2,17 +2,16 @@ import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { iotConnectors } from "@db/schema";
-import { createRouter, authedQuery, authedMutation } from "./middleware";
+import { createRouter, workspaceQuery, workspaceMutation } from "./middleware";
 import { getDb } from "./queries/connection";
-import { getDemoWorkspace } from "./services/audit";
 import { iotBrokerManager } from "./services/iot/iotBrokerManager";
 import { ingestTelemetry } from "./services/iot/iotIngestion";
 import type { IotBrokerConfig, RawTelemetryPoint } from "./services/iot/types";
 
 export const iotRouter = createRouter({
   /** List all configured IoT connectors with live runtime status and stats. */
-  listConnectors: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  listConnectors: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const rows = await db
       .select()
@@ -45,7 +44,7 @@ export const iotRouter = createRouter({
   }),
 
   /** Create or update an IoT broker connector. */
-  upsertConnector: authedMutation
+  upsertConnector: workspaceMutation
     .input(
       z.object({
         id: z.number().optional(),
@@ -63,8 +62,8 @@ export const iotRouter = createRouter({
         connectNow: z.boolean().default(true),
       }),
     )
-    .mutation(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .mutation(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
 
       const configJson: Record<string, unknown> = {};
@@ -131,10 +130,10 @@ export const iotRouter = createRouter({
     }),
 
   /** Connect or disconnect a specific broker connector. */
-  toggleConnector: authedMutation
+  toggleConnector: workspaceMutation
     .input(z.object({ id: z.number(), enable: z.boolean() }))
-    .mutation(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .mutation(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const [connector] = await db
         .select()
@@ -180,10 +179,10 @@ export const iotRouter = createRouter({
     }),
 
   /** Delete an IoT connector. */
-  deleteConnector: authedMutation
+  deleteConnector: workspaceMutation
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .mutation(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       await iotBrokerManager.stopBroker(input.id);
       await db
@@ -193,7 +192,7 @@ export const iotRouter = createRouter({
     }),
 
   /** Directly ingest telemetry payload via tRPC. */
-  ingestTelemetry: authedMutation
+  ingestTelemetry: workspaceMutation
     .input(
       z.object({
         points: z.array(
@@ -206,8 +205,8 @@ export const iotRouter = createRouter({
         ),
       }),
     )
-    .mutation(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .mutation(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       return ingestTelemetry(input.points as unknown as RawTelemetryPoint[], {
         workspaceId: ws.id,
         source: "trpc_api",
@@ -215,8 +214,8 @@ export const iotRouter = createRouter({
     }),
 
   /** Get workspace webhook ingestion configuration details. */
-  getWebhookConfig: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  getWebhookConfig: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const apiKey = process.env.IOT_API_KEY || `ontos_iot_${ws.slug}_key_live`;
     return {
       endpointUrl: "/api/iot/telemetry",

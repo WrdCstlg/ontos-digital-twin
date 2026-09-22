@@ -1,7 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
-import { iotConnectors } from "@db/schema";
-import { getDemoWorkspace } from "../audit";
+import { iotConnectors, workspaces } from "@db/schema";
 import { MqttBrokerAdapter } from "./mqttAdapter";
 import type { BrokerAuthType, BrokerType, IotBrokerConfig } from "./types";
 
@@ -21,18 +20,12 @@ class IotBrokerManager {
 
     try {
       const db = getDb();
-      const ws = await getDemoWorkspace();
 
-      // 1. Load active connectors from database
+      // 1. Load active connectors from database across all workspaces
       const rows = await db
         .select()
         .from(iotConnectors)
-        .where(
-          and(
-            eq(iotConnectors.workspaceId, ws.id),
-            eq(iotConnectors.status, "connected"),
-          ),
-        );
+        .where(eq(iotConnectors.status, "connected"));
 
       for (const row of rows) {
         if (row.brokerType === "mqtt" || row.brokerType === "aws_iot" || row.brokerType === "azure_iot") {
@@ -60,8 +53,10 @@ class IotBrokerManager {
       // 2. Load from 12-factor environment variables if configured
       if (process.env.IOT_BROKER_URL) {
         console.log(`[iot-manager] Booting default environment broker at ${process.env.IOT_BROKER_URL}`);
+        const defaultWsRow = (await db.select({ id: workspaces.id }).from(workspaces).limit(1))[0];
+        const defaultWsId = Number(process.env.IOT_WORKSPACE_ID) || defaultWsRow?.id || 1;
         const envConfig: IotBrokerConfig = {
-          workspaceId: ws.id,
+          workspaceId: defaultWsId,
           name: "Environment IoT Broker",
           brokerType: (process.env.IOT_BROKER_TYPE as BrokerType) || "mqtt",
           endpointUrl: process.env.IOT_BROKER_URL,

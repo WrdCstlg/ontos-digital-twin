@@ -2,6 +2,7 @@ import { ErrorMessages } from "@contracts/constants";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { resolveUserWorkspace, hasWorkspaceRole } from "./services/workspaceGuard";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -92,4 +93,89 @@ export const ontologistProcedure = authedQuery.use(
 );
 export const ontologistQuery = ontologistProcedure;
 export const ontologistMutation = ontologistProcedure;
+
+/* ─────────────────────────────────────────────────────────────
+ * Multi-tenant workspace procedures with geometric isolation
+ * ───────────────────────────────────────────────────────────── */
+
+export const requireWorkspace = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
+
+  if (!ctx.user) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: ErrorMessages.unauthenticated,
+    });
+  }
+
+  if (ctx.workspace && ctx.membership) {
+    return next({
+      ctx: {
+        ...ctx,
+        user: ctx.user,
+        workspace: ctx.workspace,
+        membership: ctx.membership,
+      },
+    });
+  }
+
+  const { workspace, membership } = await resolveUserWorkspace(
+    ctx.user,
+    ctx.req.headers,
+  );
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+      workspace,
+      membership,
+    },
+  });
+});
+
+export function requireWorkspaceRole(allowedRoles: string[]) {
+  return t.middleware(async (opts) => {
+    const { ctx, next } = opts;
+
+    if (!ctx.user || !ctx.membership || !ctx.workspace) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: ErrorMessages.unauthenticated,
+      });
+    }
+
+    if (!hasWorkspaceRole(ctx.membership, ctx.user, allowedRoles)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: ErrorMessages.insufficientRole,
+      });
+    }
+
+    return next({
+      ctx: {
+        ...ctx,
+        user: ctx.user,
+        workspace: ctx.workspace,
+        membership: ctx.membership,
+      },
+    });
+  });
+}
+
+export const workspaceProcedure = authedProcedure.use(requireWorkspace);
+export const workspaceQuery = workspaceProcedure;
+export const workspaceMutation = workspaceProcedure;
+
+export const workspaceOntologistProcedure = workspaceProcedure.use(
+  requireWorkspaceRole(["admin", "ontologist", "editor"]),
+);
+export const workspaceOntologistQuery = workspaceOntologistProcedure;
+export const workspaceOntologistMutation = workspaceOntologistProcedure;
+
+export const workspaceAdminProcedure = workspaceProcedure.use(
+  requireWorkspaceRole(["admin"]),
+);
+export const workspaceAdminQuery = workspaceAdminProcedure;
+export const workspaceAdminMutation = workspaceAdminProcedure;
 

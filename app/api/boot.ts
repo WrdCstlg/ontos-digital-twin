@@ -17,6 +17,7 @@ import { semanticEngine } from "./services/semanticEngine";
 import { authenticateRequest } from "./auth/service";
 import { sparqlRateLimiter } from "./lib/rateLimit";
 import { isReadOnlySparql, MAX_SPARQL_LENGTH } from "./lib/sparqlGuard";
+import { resolveUserWorkspace } from "./services/workspaceGuard";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -149,6 +150,14 @@ app.post("/api/sparql", async (c) => {
     return c.json({ error: "Authentication required." }, 401);
   }
 
+  let workspace;
+  try {
+    const resolved = await resolveUserWorkspace(user, c.req.raw.headers);
+    workspace = resolved.workspace;
+  } catch {
+    return c.json({ error: "Forbidden: No authorized workspace membership." }, 403);
+  }
+
   const limit = sparqlRateLimiter.check(`sparql:${user.id}`);
   if (!limit.allowed) {
     c.header("retry-after", String(Math.ceil(limit.resetMs / 1000)));
@@ -194,6 +203,10 @@ app.post("/api/sparql", async (c) => {
       { error: "Semantic engine is currently unavailable. Ensure open-ontologies service is active." },
       503,
     );
+  }
+
+  if (c.req.header("x-auto-sync") === "true") {
+    await semanticEngine.syncWorkspace(workspace.id);
   }
 
   try {
@@ -287,13 +300,52 @@ if (env.isProduction && env.allowDemoLogin) {
   );
 }
 
+let serverHandle: { close: (cb?: () => void) => void } | undefined;
+
 if (env.isProduction) {
   const { serve } = await import("@hono/node-server");
   const { serveStaticFiles } = await import("./lib/vite");
   serveStaticFiles(app);
 
   const port = parseInt(process.env.PORT || "3000");
-  serve({ fetch: app.fetch, port }, () => {
+  serverHandle = serve({ fetch: app.fetch, port }, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
+
+// Graceful process lifecycle supervisor (SIGTERM / SIGINT)
+const gracefulShutdown = async (signal: string) => {
+  console.log(`[process] Received ${signal}. Initiating deterministic graceful teardown...`);
+  try {
+    const { iotBrokerManager } = await import("./services/iot/iotBrokerManager");
+    await iotBrokerManager.shutdownAll();
+    console.log("[process] Disconnected all active IoT broker adapters.");
+  } catch (err) {
+    console.error("[process] Error during IoT broker disconnect:", err);
+  }
+
+  try {
+    const { closeDb } = await import("./queries/connection");
+    await closeDb();
+    console.log("[process] Drained and closed MySQL connection pool.");
+  } catch (err) {
+    console.error("[process] Error closing database connection pool:", err);
+  }
+
+  if (serverHandle) {
+    serverHandle.close(() => {
+      console.log("[process] HTTP server closed cleanly.");
+      process.exit(0);
+    });
+    setTimeout(() => {
+      console.error("[process] Shutdown timed out (5s). Forcing termination.");
+      process.exit(1);
+    }, 5000).unref();
+  } else {
+    process.exit(0);
+  }
+};
+
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+

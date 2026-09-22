@@ -8,12 +8,12 @@ import {
   ontologyModules,
   ontologyProperties,
   ontologyVersions,
+  type Workspace,
 } from "@db/schema";
-import { createRouter, authedQuery, ontologistMutation } from "./middleware";
+import { createRouter, workspaceQuery, workspaceOntologistMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import {
   actorLabelFor,
-  getDemoWorkspace,
   writeAudit,
 } from "./services/audit";
 import { serializeModule } from "./services/serializers";
@@ -37,8 +37,7 @@ const moduleKeySchema = z
   .max(64)
   .regex(/^[a-z][a-z0-9-]*$/, "module key must be lowercase slug");
 
-async function requireModule(moduleKey: string) {
-  const ws = await getDemoWorkspace();
+async function requireModule(ws: Workspace, moduleKey: string) {
   const db = getDb();
   const [mod] = await db
     .select()
@@ -76,8 +75,8 @@ function bumpMinor(version: string): string {
 }
 
 export const ontologyRouter = createRouter({
-  listModules: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  listModules: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const mods = await db
       .select()
@@ -112,10 +111,10 @@ export const ontologyRouter = createRouter({
     }));
   }),
 
-  getModule: authedQuery
+  getModule: workspaceQuery
     .input(z.object({ key: moduleKeySchema }))
-    .query(async ({ input }) => {
-      const { mod } = await requireModule(input.key);
+    .query(async ({ ctx, input }) => {
+      const { mod } = await requireModule(ctx.workspace, input.key);
       const db = getDb();
       const [c] = await db
         .select({ n: count() })
@@ -134,10 +133,10 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  listClasses: authedQuery
+  listClasses: workspaceQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
-    .query(async ({ input }) => {
-      const { mod } = await requireModule(input.moduleKey);
+    .query(async ({ ctx, input }) => {
+      const { mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       const classes = await db
         .select()
@@ -164,10 +163,10 @@ export const ontologyRouter = createRouter({
       }));
     }),
 
-  listProperties: authedQuery
+  listProperties: workspaceQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
-    .query(async ({ input }) => {
-      const { mod } = await requireModule(input.moduleKey);
+    .query(async ({ ctx, input }) => {
+      const { mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       const props = await db
         .select()
@@ -195,10 +194,10 @@ export const ontologyRouter = createRouter({
       }));
     }),
 
-  listVersions: authedQuery
+  listVersions: workspaceQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
-    .query(async ({ input }) => {
-      const { mod } = await requireModule(input.moduleKey);
+    .query(async ({ ctx, input }) => {
+      const { mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       return db
         .select()
@@ -207,7 +206,7 @@ export const ontologyRouter = createRouter({
         .orderBy(desc(ontologyVersions.publishedAt));
     }),
 
-  createClass: ontologistMutation
+  createClass: workspaceOntologistMutation
     .input(
       z.object({
         moduleKey: moduleKeySchema,
@@ -237,7 +236,7 @@ export const ontologyRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { ws, mod } = await requireModule(input.moduleKey);
+      const { ws, mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       const iri = `${mod.prefix}:${input.label}`;
 
@@ -394,10 +393,10 @@ export const ontologyRouter = createRouter({
       return { class: cls, properties: createdProps, newVersion, auditId: audit.id };
     }),
 
-  deprecateClass: ontologistMutation
+  deprecateClass: workspaceOntologistMutation
     .input(z.object({ classIri: z.string().min(1).max(512) }))
     .mutation(async ({ ctx, input }) => {
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const mods = await db
         .select()
@@ -437,7 +436,7 @@ export const ontologyRouter = createRouter({
       return { ok: true, auditId: audit.id };
     }),
 
-  diffVersions: authedQuery
+  diffVersions: workspaceQuery
     .input(
       z.object({
         moduleKey: moduleKeySchema,
@@ -445,8 +444,8 @@ export const ontologyRouter = createRouter({
         toVersion: z.string().min(1).max(32),
       }),
     )
-    .query(async ({ input }) => {
-      const { mod } = await requireModule(input.moduleKey);
+    .query(async ({ ctx, input }) => {
+      const { mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       const versions = await db
         .select()
@@ -498,15 +497,15 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  exportModule: authedQuery
+  exportModule: workspaceQuery
     .input(
       z.object({
         moduleKey: moduleKeySchema,
         format: z.enum(["turtle", "owl", "jsonld", "rdfxml"]),
       }),
     )
-    .query(async ({ input }) => {
-      const { mod } = await requireModule(input.moduleKey);
+    .query(async ({ ctx, input }) => {
+      const { mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       const classes = await db
         .select()
@@ -538,15 +537,15 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  runReasoner: authedQuery
+  runReasoner: workspaceQuery
     .input(
       z.object({
         moduleKey: moduleKeySchema,
         profile: z.enum(["rdfs", "owl-rl", "owl-rl-ext", "owl-dl"]).default("owl-rl"),
       }),
     )
-    .query(async ({ input }) => {
-      const { ws, mod } = await requireModule(input.moduleKey);
+    .query(async ({ ctx, input }) => {
+      const { ws, mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       const classes = await db
         .select()
@@ -695,10 +694,10 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  validateShacl: authedQuery
+  validateShacl: workspaceQuery
     .input(z.object({ moduleKey: moduleKeySchema }))
-    .query(async ({ input }) => {
-      const { ws, mod } = await requireModule(input.moduleKey);
+    .query(async ({ ctx, input }) => {
+      const { ws, mod } = await requireModule(ctx.workspace, input.moduleKey);
       const db = getDb();
       const classes = await db
         .select()
@@ -769,7 +768,7 @@ export const ontologyRouter = createRouter({
       };
     }),
 
-  explainViolation: authedQuery
+  explainViolation: workspaceQuery
     .input(
       z.object({
         constraint: z.string(),

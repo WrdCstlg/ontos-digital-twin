@@ -14,9 +14,9 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/mysql2/migrator";
-import { ontologyModules, users, workspaces } from "./schema";
+import { ontologyModules, users, workspaces, workspaceMembers } from "./schema";
 import { getDb } from "../api/queries/connection";
 import { hashPassword } from "../api/lib/password";
 import { env } from "../api/lib/env";
@@ -85,6 +85,26 @@ async function provisionAdmin() {
   } else {
     await db.insert(users).values({ email, name: "Administrator", role: "admin", passwordHash });
     log(`admin account ${email} created`);
+  }
+
+  const [adminUser] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+  if (adminUser) {
+    const [ws] = await db.select({ id: workspaces.id }).from(workspaces).limit(1);
+    if (ws) {
+      const [existingMember] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, ws.id), eq(workspaceMembers.userId, adminUser.id)))
+        .limit(1);
+      if (!existingMember) {
+        await db.insert(workspaceMembers).values({
+          workspaceId: ws.id,
+          userId: adminUser.id,
+          role: "admin",
+        });
+        log(`admin enrolled in workspace id=${ws.id}`);
+      }
+    }
   }
 }
 

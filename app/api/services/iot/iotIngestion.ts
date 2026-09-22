@@ -5,6 +5,7 @@ import { getDemoWorkspace, writeAudit } from "../audit";
 import { reconcileInsights } from "../../insightsRouter";
 import { DTDL_UNITS, LOGGED_NUMERIC_KEYS, TWIN_MODULE_KEY, type TwinState } from "../twinModels";
 import type { IngestResult, RawTelemetryPoint } from "./types";
+import { env } from "../../lib/env";
 
 type KgNodeRow = typeof kgNodes.$inferSelect;
 
@@ -124,7 +125,20 @@ export async function ingestTelemetry(
   }
 
   const db = getDb();
-  const ws = options?.workspaceId ? { id: options.workspaceId } : await getDemoWorkspace();
+  let workspaceId = options?.workspaceId;
+  if (!workspaceId) {
+    if (env.isProduction) {
+      return {
+        success: false,
+        receivedCount: points.length,
+        updatedTwins: [],
+        errors: ["Refused: Multi-tenant telemetry ingestion requires an authorized workspaceId."],
+      };
+    }
+    const wsDemo = await getDemoWorkspace();
+    workspaceId = wsDemo.id;
+  }
+  const ws = { id: workspaceId };
   const now = new Date();
   const logRows: (typeof twinStateLog.$inferInsert)[] = [];
   const updatedTwinsMap = new Map<string, { twinIri: string; label: string; classIri: string; updatedKeys: Set<string> }>();

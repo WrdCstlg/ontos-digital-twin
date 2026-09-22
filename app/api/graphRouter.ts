@@ -8,29 +8,28 @@ import {
   kgNodes,
   mappings,
   ontologyModules,
+  type Workspace,
 } from "@db/schema";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { getDemoWorkspace } from "./services/audit";
 import { semanticEngine } from "./services/semanticEngine";
 
-async function resolveWorkspace(workspaceKey?: string) {
-  if (!workspaceKey) return getDemoWorkspace();
-  const ws = await getDemoWorkspace();
-  if (workspaceKey !== ws.slug && workspaceKey !== String(ws.id) && workspaceKey !== ws.name) {
+async function resolveWorkspace(userWorkspace: Workspace, workspaceKey?: string) {
+  if (!workspaceKey) return userWorkspace;
+  if (workspaceKey !== userWorkspace.slug && workspaceKey !== String(userWorkspace.id) && workspaceKey !== userWorkspace.name) {
     throw new TRPCError({
-      code: "NOT_FOUND",
-      message: `Workspace '${workspaceKey}' not found`,
+      code: "FORBIDDEN",
+      message: `User does not have access to workspace '${workspaceKey}'`,
     });
   }
-  return ws;
+  return userWorkspace;
 }
 
 export const graphRouter = createRouter({
-  stats: authedQuery
+  stats: workspaceQuery
     .input(z.object({ workspaceKey: z.string().max(255).optional() }).optional())
-    .query(async ({ input }) => {
-      const ws = await resolveWorkspace(input?.workspaceKey);
+    .query(async ({ ctx, input }) => {
+      const ws = await resolveWorkspace(ctx.workspace, input?.workspaceKey);
       const db = getDb();
       const nodeRows = await db
         .select({ moduleKey: kgNodes.moduleKey, n: count() })
@@ -70,7 +69,7 @@ export const graphRouter = createRouter({
       };
     }),
 
-  searchNodes: authedQuery
+  searchNodes: workspaceQuery
     .input(
       z.object({
         q: z.string().min(1).max(255),
@@ -78,8 +77,8 @@ export const graphRouter = createRouter({
         limit: z.number().int().min(1).max(100).default(20),
       }),
     )
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const pattern = `%${input.q}%`;
       const conds = [
@@ -97,7 +96,7 @@ export const graphRouter = createRouter({
       return rows;
     }),
 
-  getSubgraph: authedQuery
+  getSubgraph: workspaceQuery
     .input(
       z.object({
         centerIri: z.string().min(1).max(512),
@@ -105,8 +104,8 @@ export const graphRouter = createRouter({
         limit: z.number().int().min(1).max(500).default(80),
       }),
     )
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const [center] = await db
         .select()
@@ -177,10 +176,10 @@ export const graphRouter = createRouter({
       };
     }),
 
-  getNode: authedQuery
+  getNode: workspaceQuery
     .input(z.object({ iri: z.string().min(1).max(512) }))
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const [node] = await db
         .select()
@@ -278,15 +277,15 @@ export const graphRouter = createRouter({
       };
     }),
 
-  sparqlQuery: authedQuery
+  sparqlQuery: workspaceQuery
     .input(
       z.object({
         query: z.string().min(1).max(50000),
         autoSync: z.boolean().default(false),
       }),
     )
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const isAlive = await semanticEngine.ensureEngineRunning();
       if (!isAlive) {
         throw new TRPCError({
@@ -315,8 +314,8 @@ export const graphRouter = createRouter({
       }
     }),
 
-  syncStore: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  syncStore: workspaceQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const isAlive = await semanticEngine.ensureEngineRunning();
     if (!isAlive) {
       throw new TRPCError({

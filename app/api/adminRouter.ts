@@ -2,29 +2,28 @@ import { z } from "zod";
 import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { auditLog, users, workspaceMembers } from "@db/schema";
-import { LLM_PROVIDERS } from "@contracts/providers";
 import {
   createRouter,
-  authedQuery,
-  adminQuery,
-  adminMutation,
+  workspaceQuery,
+  workspaceAdminQuery,
+  workspaceAdminMutation,
 } from "./middleware";
 import { getDb } from "./queries/connection";
 import {
   actorLabelFor,
-  getDemoWorkspace,
   verifyAuditChain,
   writeAudit,
 } from "./services/audit";
 
+import { llmGateway } from "./services/llmGateway";
+
 export const adminRouter = createRouter({
-  getWorkspace: authedQuery.query(async () => {
-    const ws = await getDemoWorkspace();
-    return ws;
+  getWorkspace: workspaceQuery.query(async ({ ctx }) => {
+    return ctx.workspace;
   }),
 
-  listMembers: adminQuery.query(async () => {
-    const ws = await getDemoWorkspace();
+  listMembers: workspaceAdminQuery.query(async ({ ctx }) => {
+    const ws = ctx.workspace;
     const db = getDb();
     const rows = await db
       .select()
@@ -41,7 +40,7 @@ export const adminRouter = createRouter({
     }));
   }),
 
-  updateMemberRole: adminMutation
+  updateMemberRole: workspaceAdminMutation
     .input(
       z.object({
         memberId: z.number().int().positive(),
@@ -49,7 +48,7 @@ export const adminRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const ws = await getDemoWorkspace();
+      const ws = ctx.workspace;
       const db = getDb();
       const [m] = await db
         .select()
@@ -71,7 +70,7 @@ export const adminRouter = createRouter({
       return row;
     }),
 
-  listAudit: authedQuery
+  listAudit: workspaceQuery
     .input(
       z
         .object({
@@ -80,8 +79,8 @@ export const adminRouter = createRouter({
         })
         .optional(),
     )
-    .query(async ({ input }) => {
-      const ws = await getDemoWorkspace();
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
       const db = getDb();
       const conds = [eq(auditLog.workspaceId, ws.id)];
       if (input?.cursor) conds.push(lt(auditLog.id, input.cursor));
@@ -98,6 +97,9 @@ export const adminRouter = createRouter({
       return { entries, nextCursor, chainValid };
     }),
 
-  getProviders: adminQuery.query(() => LLM_PROVIDERS),
+  getProviders: workspaceAdminQuery.query(async () => {
+    return await llmGateway.getProviderStatuses();
+  }),
 });
+
 

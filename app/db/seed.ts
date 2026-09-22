@@ -45,6 +45,7 @@ import {
   ontologyVersions,
   syncJobs,
   twinStateLog,
+  users,
   workspaceMembers,
   workspaces,
 } from "@db/schema";
@@ -360,6 +361,24 @@ async function main() {
     .values({ name: "Acme Corp — Production", slug: "acme-corp-production", plan: "enterprise" })
     .$returningId();
   console.log("workspace id", workspaceId);
+
+  /* workspace members: enroll all existing users */
+  const existingUsers = await db.select({ id: users.id, role: users.role }).from(users);
+  for (const u of existingUsers) {
+    const wsRole: "admin" | "ontologist" | "editor" | "viewer" =
+      u.role === "admin"
+        ? "admin"
+        : u.role === "ontologist"
+        ? "ontologist"
+        : u.role === "editor"
+        ? "editor"
+        : "viewer";
+    await db.insert(workspaceMembers).values({
+      workspaceId,
+      userId: u.id,
+      role: wsRole,
+    });
+  }
 
   /* modules */
   const moduleIdByKey = new Map<string, number>();

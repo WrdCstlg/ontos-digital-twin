@@ -47,22 +47,30 @@ export const workspaces = mysqlTable("workspaces", {
 });
 export type Workspace = typeof workspaces.$inferSelect;
 
-export const workspaceMembers = mysqlTable("workspace_members", {
-  id: bigint("id", { mode: "number", unsigned: true })
-    .autoincrement()
-    .primaryKey(),
-  workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
-    .notNull()
-    .references(() => workspaces.id),
-  userId: bigint("userId", { mode: "number", unsigned: true })
-    .notNull()
-    .references(() => users.id),
-  role: mysqlEnum("role", ["viewer", "editor", "ontologist", "admin"])
-    .notNull()
-    .default("viewer"),
-  moduleScope: json("moduleScope"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const workspaceMembers = mysqlTable(
+  "workspace_members",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: bigint("userId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: mysqlEnum("role", ["viewer", "editor", "ontologist", "admin"])
+      .notNull()
+      .default("viewer"),
+    moduleScope: json("moduleScope"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("workspace_members_ws_user_unique").on(table.workspaceId, table.userId),
+    index("workspace_members_ws_idx").on(table.workspaceId),
+    index("workspace_members_user_idx").on(table.userId),
+  ],
+);
 export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
 
 export const ontologyModules = mysqlTable(
@@ -73,7 +81,7 @@ export const ontologyModules = mysqlTable(
     .primaryKey(),
     workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => workspaces.id),
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     key: varchar("key", { length: 64 }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     prefix: varchar("prefix", { length: 32 }).notNull(),
@@ -161,7 +169,7 @@ export const connectors = mysqlTable("connectors", {
     .primaryKey(),
   workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
     .notNull()
-    .references(() => workspaces.id),
+    .references(() => workspaces.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 255 }).notNull(),
   type: mysqlEnum("type", ["csv", "sql", "rest"]).notNull(),
   configJson: json("configJson"),
@@ -178,10 +186,10 @@ export const mappings = mysqlTable("mappings", {
     .primaryKey(),
   connectorId: bigint("connectorId", { mode: "number", unsigned: true })
     .notNull()
-    .references(() => connectors.id),
+    .references(() => connectors.id, { onDelete: "cascade" }),
   moduleId: bigint("moduleId", { mode: "number", unsigned: true })
     .notNull()
-    .references(() => ontologyModules.id),
+    .references(() => ontologyModules.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 255 }).notNull(),
   sourceTable: varchar("sourceTable", { length: 255 }).notNull(),
   classIri: varchar("classIri", { length: 512 }).notNull(),
@@ -199,7 +207,7 @@ export const syncJobs = mysqlTable("sync_jobs", {
     .primaryKey(),
   mappingId: bigint("mappingId", { mode: "number", unsigned: true })
     .notNull()
-    .references(() => mappings.id),
+    .references(() => mappings.id, { onDelete: "cascade" }),
   status: mysqlEnum("status", ["running", "succeeded", "failed"]).notNull(),
   rowsProcessed: bigint("rowsProcessed", { mode: "number", unsigned: true })
     .notNull()
@@ -218,7 +226,7 @@ export const kgNodes = mysqlTable(
     .primaryKey(),
     workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => workspaces.id),
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     moduleKey: varchar("moduleKey", { length: 64 }).notNull(),
     classIri: varchar("classIri", { length: 512 }).notNull(),
     iri: varchar("iri", { length: 512 }).notNull(),
@@ -251,13 +259,13 @@ export const kgEdges = mysqlTable(
     .primaryKey(),
     workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => workspaces.id),
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     fromNodeId: bigint("fromNodeId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => kgNodes.id),
+      .references(() => kgNodes.id, { onDelete: "cascade" }),
     toNodeId: bigint("toNodeId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => kgNodes.id),
+      .references(() => kgNodes.id, { onDelete: "cascade" }),
     predicateIri: varchar("predicateIri", { length: 512 }).notNull(),
     moduleKey: varchar("moduleKey", { length: 64 }),
     sourceMappingId: bigint("sourceMappingId", {
@@ -281,7 +289,7 @@ export const insights = mysqlTable("insights", {
     .primaryKey(),
   workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
     .notNull()
-    .references(() => workspaces.id),
+    .references(() => workspaces.id, { onDelete: "cascade" }),
   type: mysqlEnum("type", ["anomaly", "analytics", "narrative"]).notNull(),
   severity: mysqlEnum("severity", ["info", "warn", "risk"]).notNull(),
   ruleId: varchar("ruleId", { length: 128 }),
@@ -303,7 +311,7 @@ export const auditLog = mysqlTable(
     .primaryKey(),
     workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => workspaces.id),
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     actorLabel: varchar("actorLabel", { length: 255 }).notNull(),
     action: varchar("action", { length: 255 }).notNull(),
     entityType: varchar("entityType", { length: 128 }).notNull(),
@@ -330,7 +338,7 @@ export const twinStateLog = mysqlTable(
       .primaryKey(),
     nodeId: bigint("nodeId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => kgNodes.id),
+      .references(() => kgNodes.id, { onDelete: "cascade" }),
     key: varchar("key", { length: 64 }).notNull(),
     valueNum: double("valueNum"),
     valueText: varchar("valueText", { length: 255 }),
@@ -353,7 +361,7 @@ export const graphSnapshots = mysqlTable("graph_snapshots", {
     .primaryKey(),
   workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
     .notNull()
-    .references(() => workspaces.id),
+    .references(() => workspaces.id, { onDelete: "cascade" }),
   label: varchar("label", { length: 64 }).notNull(),
   statsJson: json("statsJson"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -372,7 +380,7 @@ export const iotConnectors = mysqlTable(
       .primaryKey(),
     workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => workspaces.id),
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 255 }).notNull(),
     brokerType: mysqlEnum("brokerType", ["mqtt", "aws_iot", "azure_iot", "webhook"]).notNull(),
     endpointUrl: varchar("endpointUrl", { length: 512 }).notNull(),
