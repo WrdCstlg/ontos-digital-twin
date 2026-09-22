@@ -344,6 +344,17 @@ DigitalTwin
 └── AssetTwin     → ShipmentTwin, CarrierTwin, InventoryTwin, EquipmentTwin
 ```
 
+#### IoT Brokers & Live Telemetry Ingestion
+
+Ontos includes standard protocol adapters to ingest live telemetry directly from enterprise IoT brokers and industrial edge gateways into active digital twins:
+
+- **Universal MQTT (3.1.1 / 5.0)**: Connects to standard brokers like Mosquitto, EMQX, HiveMQ, or RabbitMQ. Supports wildcard topic patterns (`ontos/twins/+/telemetry`).
+- **AWS IoT Core**: Connects directly via MQTT over mTLS on port 8883 using X.509 device certificates and private keys.
+- **Azure IoT Hub**: Connects via MQTT over TLS with device connection strings or SAS tokens.
+- **HTTP Webhook Ingestion**: Ingest single or batch telemetry points via `POST /api/iot/telemetry` with API key authentication (`x-iot-api-key`).
+- **Device-to-Twin Resolution**: Matches incoming devices by explicit IRI (`dtwin:...`), device label, hardware serial number (`propsJson.deviceId`), or configurable custom mapping tables.
+- **Automated Anomaly Detection**: Live telemetry ingestion automatically synchronizes with deterministic insight rules (e.g. cold-chain excursions > 6°C, low battery warnings < 10%).
+
 ---
 
 ## API surface
@@ -355,6 +366,7 @@ router tree. Three plain HTTP routes exist alongside it:
 |---|---|---|
 | `GET /health`, `GET /api/health` | none | Liveness: database and semantic engine status |
 | `POST /api/sparql` | session | Read-only SPARQL 1.1 query against the loaded graph |
+| `POST /api/iot/telemetry` | `x-iot-api-key` / session | High-throughput IoT telemetry batch ingestion endpoint |
 
 `/api/sparql` accepts `application/sparql-query`, `application/json` (`{"query": "..."}`)
 or a form body, and responds in SPARQL 1.1 JSON Results format. It requires a valid

@@ -359,3 +359,43 @@ export const graphSnapshots = mysqlTable("graph_snapshots", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type GraphSnapshot = typeof graphSnapshots.$inferSelect;
+
+/* ─────────────────────────────────────────────────────────────
+ * IoT Telemetry Connectors — configuration for external IoT brokers
+ * (Generic MQTT, AWS IoT Core, Azure IoT Hub, HTTP Webhook)
+ * ───────────────────────────────────────────────────────────── */
+export const iotConnectors = mysqlTable(
+  "iot_connectors",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id),
+    name: varchar("name", { length: 255 }).notNull(),
+    brokerType: mysqlEnum("brokerType", ["mqtt", "aws_iot", "azure_iot", "webhook"]).notNull(),
+    endpointUrl: varchar("endpointUrl", { length: 512 }).notNull(),
+    topicPattern: varchar("topicPattern", { length: 512 }),
+    clientId: varchar("clientId", { length: 255 }),
+    authType: mysqlEnum("authType", ["none", "basic", "tls_cert", "sas_token", "api_key"]).notNull().default("none"),
+    configJson: json("configJson"),
+    status: mysqlEnum("status", ["connected", "disconnected", "error", "disabled"]).notNull().default("disconnected"),
+    lastConnectedAt: timestamp("lastConnectedAt"),
+    messageCount: bigint("messageCount", { mode: "number", unsigned: true }).default(0).notNull(),
+    errorCount: bigint("errorCount", { mode: "number", unsigned: true }).default(0).notNull(),
+    lastError: text("lastError"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("iot_connectors_ws").on(table.workspaceId),
+    index("iot_connectors_status").on(table.status),
+  ],
+);
+export type IotConnector = typeof iotConnectors.$inferSelect;
+export type InsertIotConnector = typeof iotConnectors.$inferInsert;
+

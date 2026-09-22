@@ -219,6 +219,27 @@ app.post("/api/sparql", async (c) => {
   }
 });
 
+// High-Throughput IoT Telemetry Webhook Ingestion Endpoint
+// Used by cellular trackers, edge gateways, AWS IoT Rules HTTPS actions, and Azure Event Grid webhooks.
+app.post("/api/iot/telemetry", async (c) => {
+  const reqKey = c.req.header("x-iot-api-key") || c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const expectedKey = process.env.IOT_API_KEY || "ontos_iot_demo_key";
+
+  if (reqKey !== expectedKey) {
+    return c.json({ error: "Unauthorized: Invalid or missing x-iot-api-key" }, 401);
+  }
+
+  try {
+    const body = await c.req.json();
+    const points = Array.isArray(body) ? body : [body];
+    const { ingestTelemetry } = await import("./services/iot/iotIngestion");
+    const result = await ingestTelemetry(points, { source: "http_webhook" });
+    return c.json(result, result.success ? 200 : 207);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : "Malformed JSON payload" }, 400);
+  }
+});
+
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
@@ -228,6 +249,11 @@ app.use("/api/trpc/*", async (c) => {
   });
 });
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
+
+// Initialize background IoT broker connectors if configured
+import("./services/iot/iotBrokerManager")
+  .then(({ iotBrokerManager }) => iotBrokerManager.init())
+  .catch((err) => console.warn("[boot] IoT broker auto-start error:", err));
 
 // Global Error Handler
 app.onError((err, c) => {

@@ -3,11 +3,14 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { trpc } from '@/providers/trpc';
+import { Radio } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { DisclosureChip } from '@/components/twins/DisclosureChip';
 import { TickControl } from '@/components/twins/TickControl';
 import { TwinRegistry } from '@/components/twins/TwinRegistry';
 import { TwinDetail } from '@/components/twins/TwinDetail';
 import { EventLog } from '@/components/twins/EventLog';
+import { IotConnectorsModal } from '@/components/twins/IotConnectorsModal';
 import type { LogEntry, TickResult, TwinGroup } from '@/components/twins/meta';
 
 /** Max twins whose cards flash per tick — the 8–10 concurrent-animation guardrail. */
@@ -36,6 +39,8 @@ export default function Twins() {
 
   /* ── detail state ───────────────────────────────────────────── */
   const [selectedIri, setSelectedIri] = useState<string | null>(null);
+  const [iotModalOpen, setIotModalOpen] = useState(false);
+  const iotConnectors = trpc.iot.listConnectors.useQuery();
 
   /* ── live pulse ─────────────────────────────────────────────── */
   const [tickCount, setTickCount] = useState(0);
@@ -178,7 +183,22 @@ export default function Twins() {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, delay: 0.27, ease: EASE }}
+            className="flex items-center gap-2"
           >
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-2 h-9 border-border bg-card/60 hover:bg-card text-xs font-medium"
+              onClick={() => setIotModalOpen(true)}
+            >
+              <Radio className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+              IoT Brokers
+              {iotConnectors.data && iotConnectors.data.filter((c) => c.status === 'connected').length > 0 && (
+                <span className="ml-0.5 inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400">
+                  {iotConnectors.data.filter((c) => c.status === 'connected').length}
+                </span>
+              )}
+            </Button>
             <TickControl
               tickCount={tickCount}
               lastTickAt={lastTickAt}
@@ -236,6 +256,13 @@ export default function Twins() {
 
       {/* Section 5 — live pulse event log */}
       <EventLog entries={log} autoTick={autoTick} tickCount={tickCount} onSelect={(iri) => iri && setSelectedIri(iri)} />
+
+      {/* IoT Brokers & Telemetry Management Modal */}
+      <IotConnectorsModal
+        open={iotModalOpen}
+        onOpenChange={setIotModalOpen}
+        onTelemetryIngested={() => void list.refetch()}
+      />
     </div>
   );
 }

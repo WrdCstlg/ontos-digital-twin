@@ -15,12 +15,14 @@ import {
   auditLog,
   graphSnapshots,
   twinStateLog,
+  iotConnectors,
 } from "./schema";
 
 export const workspacesRelations = relations(workspaces, ({ many }) => ({
   members: many(workspaceMembers),
   modules: many(ontologyModules),
   connectors: many(connectors),
+  iotConnectors: many(iotConnectors),
   nodes: many(kgNodes),
   edges: many(kgEdges),
   insights: many(insights),
@@ -119,4 +121,12 @@ export const twinStateLogRelations = relations(twinStateLog, ({ one }) => ({
     references: [kgNodes.id],
   }),
 }));
+
+export const iotConnectorsRelations = relations(iotConnectors, ({ one }) => ({
+  workspace: one(workspaces, {
+    fields: [iotConnectors.workspaceId],
+    references: [workspaces.id],
+  }),
+}));
+
 
