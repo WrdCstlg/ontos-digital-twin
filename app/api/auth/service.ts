@@ -156,11 +156,16 @@ export async function loginWithCredentials(
 
 /* ─── Demo / Evaluation Login ────────────────────────────────── */
 
+/**
+ * Demo personas use a `demo-` email prefix so they never collide with real
+ * accounts. The admin provisioned by `db/bootstrap.ts` is `admin@acme-ontology.com`;
+ * the demo admin is `demo-admin@acme-ontology.com` — a separate row.
+ */
 const DEMO_PERSONAS: Record<string, { name: string; email: string }> = {
-  admin: { name: "Elena Cortez (Admin)", email: "admin@acme-ontology.com" },
-  ontologist: { name: "Dr. James Wei (Ontologist)", email: "ontologist@acme-ontology.com" },
-  editor: { name: "Priya Sharma (Editor)", email: "editor@acme-ontology.com" },
-  viewer: { name: "Alex Morgan (Viewer)", email: "viewer@acme-ontology.com" },
+  admin: { name: "Elena Cortez (Demo Admin)", email: "demo-admin@acme-ontology.com" },
+  ontologist: { name: "Dr. James Wei (Ontologist)", email: "demo-ontologist@acme-ontology.com" },
+  editor: { name: "Priya Sharma (Editor)", email: "demo-editor@acme-ontology.com" },
+  viewer: { name: "Alex Morgan (Viewer)", email: "demo-viewer@acme-ontology.com" },
 };
 
 export async function loginDemoUser(
@@ -174,16 +179,24 @@ export async function loginDemoUser(
     });
   }
 
-  const demoHash = await hashPassword("ontos2026!");
-
-  // Upsert the demo user with exact role and hashed password
-  await upsertUser({
-    email: persona.email,
-    name: persona.name,
-    role: role,
-    passwordHash: demoHash,
-    lastSignInAt: new Date(),
-  });
+  // Only set password hash on first creation — never overwrite an existing hash
+  const existing = await findUserByEmail(persona.email);
+  if (!existing) {
+    const demoHash = await hashPassword("ontos2026!");
+    await upsertUser({
+      email: persona.email,
+      name: persona.name,
+      role: role,
+      passwordHash: demoHash,
+      lastSignInAt: new Date(),
+    });
+  } else {
+    // Touch lastSignInAt but do not overwrite passwordHash or role
+    await getDb()
+      .update(users)
+      .set({ lastSignInAt: new Date() })
+      .where(eq(users.id, existing.id));
+  }
 
   const user = await findUserByEmail(persona.email);
   if (!user) {

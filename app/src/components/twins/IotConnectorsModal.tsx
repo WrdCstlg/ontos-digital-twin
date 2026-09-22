@@ -259,7 +259,7 @@ export function IotConnectorsModal({
                         } else if (val === 'azure_iot') {
                           setFormUrl('mqtts://your-hub.azure-devices.net:8883');
                         } else {
-                          setFormUrl('mqtt://broker.emqx.io:1883');
+                          setFormUrl('mqtt://localhost:1883');
                         }
                       }}
                     >

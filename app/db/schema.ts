@@ -110,7 +110,7 @@ export const ontologyClasses = mysqlTable(
     .primaryKey(),
     moduleId: bigint("moduleId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => ontologyModules.id),
+      .references(() => ontologyModules.id, { onDelete: "cascade" }),
     iri: varchar("iri", { length: 512 }).notNull(),
     label: varchar("label", { length: 255 }).notNull(),
     parentId: bigint("parentId", { mode: "number", unsigned: true }),
@@ -132,7 +132,7 @@ export const ontologyProperties = mysqlTable(
     .primaryKey(),
     moduleId: bigint("moduleId", { mode: "number", unsigned: true })
       .notNull()
-      .references(() => ontologyModules.id),
+      .references(() => ontologyModules.id, { onDelete: "cascade" }),
     iri: varchar("iri", { length: 512 }).notNull(),
     label: varchar("label", { length: 255 }).notNull(),
     kind: mysqlEnum("kind", ["object", "datatype"]).notNull(),
@@ -155,7 +155,7 @@ export const ontologyVersions = mysqlTable("ontology_versions", {
     .primaryKey(),
   moduleId: bigint("moduleId", { mode: "number", unsigned: true })
     .notNull()
-    .references(() => ontologyModules.id),
+    .references(() => ontologyModules.id, { onDelete: "cascade" }),
   version: varchar("version", { length: 32 }).notNull(),
   changelog: text("changelog"),
   diffJson: json("diffJson"),

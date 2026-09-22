@@ -216,16 +216,21 @@ export const iotRouter = createRouter({
   /** Get workspace webhook ingestion configuration details. */
   getWebhookConfig: workspaceQuery.query(async ({ ctx }) => {
     const ws = ctx.workspace;
-    const apiKey = process.env.IOT_API_KEY || `ontos_iot_${ws.slug}_key_live`;
+    const apiKey = process.env.IOT_WEBHOOK_API_KEY;
+    const configured = !!apiKey;
     return {
       endpointUrl: "/api/iot/telemetry",
       fullEndpointUrl: `http://localhost:${process.env.PORT || 3000}/api/iot/telemetry`,
-      apiKey,
+      apiKey: configured ? apiKey : "(not configured — set IOT_WEBHOOK_API_KEY)",
+      configured,
       workspaceSlug: ws.slug,
-      sampleCurl: `curl -X POST http://localhost:3000/api/iot/telemetry \\
+      sampleCurl: configured
+        ? `curl -X POST http://localhost:3000/api/iot/telemetry \\
   -H "Content-Type: application/json" \\
   -H "x-iot-api-key: ${apiKey}" \\
-  -d '{"deviceId":"SHP-1004","telemetry":{"temperature":3.8,"etaMinutes":145,"status":"in_transit"}}'`,
+  -H "x-workspace-id: ${ws.id}" \\
+  -d '{"deviceId":"SHP-1004","telemetry":{"temperature":3.8,"etaMinutes":145,"status":"in_transit"}}'`
+        : "# Set IOT_WEBHOOK_API_KEY in your environment first",
     };
   }),
 });

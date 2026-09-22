@@ -16,7 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { and, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/mysql2/migrator";
-import { ontologyModules, users, workspaces, workspaceMembers } from "./schema";
+import { auditLog, ontologyModules, users, workspaces, workspaceMembers } from "./schema";
 import { getDb } from "../api/queries/connection";
 import { hashPassword } from "../api/lib/password";
 import { env } from "../api/lib/env";
@@ -45,6 +45,27 @@ async function seedState(): Promise<SeedState> {
     .where(eq(ontologyModules.key, "twin"))
     .limit(1);
   return twin.length > 0 ? "complete" : "partial";
+}
+
+/**
+ * Safety check: if the database has data that looks like it was created by
+ * real users (audit entries, multiple workspaces, or non-seed user accounts),
+ * refuse to wipe and reseed even if the seed state is "partial". This prevents
+ * a missing twin module from destroying a production database.
+ */
+async function hasRealData(): Promise<boolean> {
+  const db = getDb();
+  const [{ auditCount }] = await db
+    .select({ auditCount: sql<number>`count(*)` })
+    .from(auditLog);
+  if (Number(auditCount) > 0) return true;
+
+  const [{ wsCount }] = await db
+    .select({ wsCount: sql<number>`count(*)` })
+    .from(workspaces);
+  if (Number(wsCount) > 1) return true;
+
+  return false;
 }
 
 /** The seed scripts end with process.exit(), so each runs as its own process. */
@@ -116,8 +137,18 @@ async function main() {
   const state = await seedState();
   if (state === "complete") {
     log("demo workspace present — seed skipped");
+  } else if (state === "partial") {
+    // Partial seed with real data = dangerous to wipe. Refuse.
+    if (await hasRealData()) {
+      log("ERROR: incomplete seed detected but database contains real data (audit entries or extra workspaces).");
+      log("Refusing to wipe and reseed. To fix: manually insert the missing twin module, or wipe the database and restart.");
+    } else {
+      log("incomplete seed detected (no real data) — reseeding");
+      runSeed("seed.js");
+      runSeed("seed-twins.js");
+    }
   } else {
-    log(state === "empty" ? "empty database — seeding demo workspace" : "incomplete seed detected — reseeding");
+    log("empty database — seeding demo workspace");
     runSeed("seed.js");
     runSeed("seed-twins.js");
   }

@@ -157,11 +157,15 @@ orchestration.
 Before the containerization shipped, four reviewer agents each examined the change through
 one lens: security, bootstrap and data safety, Docker operations, and documentation
 accuracy. Every finding was then handed to two independent skeptic agents instructed to
-The loop verified four core invariants:
-- **Secrets & Credentials**: Complete scan across all commits confirmed zero leaked production keys, tokens, or credentials.
-- **Database Safety**: `db/bootstrap.ts` idempotency confirmed—destructive seed scripts execute only on empty databases, and migrations apply strictly via versioned Drizzle records.
-- **Container Isolation**: Multi-stage build isolates production runtime from development-only tooling, pinning all upstream images by immutable digest.
+try to refute it. Findings that survived both skeptics were accepted; the rest were
+discarded with an explanation.
+
+The loop confirmed three invariants and flagged one it could not confirm:
+
+- **Secrets & Credentials**: A complete scan across all commits confirmed zero leaked production keys, tokens, or credentials.
+- **Container Isolation**: The multi-stage build isolates production runtime from development-only tooling, pinning all upstream images by immutable digest.
 - **Dependency Hygiene**: Phantom dependencies (`@aws-sdk/*`) and debug DOM inspection plugins were identified and excised before release.
+- **Database Safety (open)**: `db/bootstrap.ts` guards against seeding a complete workspace, but if a previous seed run fails partway — leaving tables populated but the `twin` module missing — a restart will wipe and reseed everything, including the hash-linked audit chain. This is documented but not yet guarded against.
 
 ### Designing the semantic layer
 

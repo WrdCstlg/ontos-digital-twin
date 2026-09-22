@@ -121,39 +121,42 @@ export async function resolveUserWorkspace(
     };
   }
 
-  // 4. If user has no memberships yet:
-  // Fall back to demo workspace if available (or first workspace in database)
-  const [demoWs] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.slug, DEMO_WORKSPACE_SLUG))
-    .limit(1);
+  // 4. If user has no memberships:
+  // System admins can bootstrap — they need access to create workspaces and enroll users.
+  // All other users are strictly rejected: no membership = no access.
+  if (user.role === "admin") {
+    const [fallbackWs] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.slug, DEMO_WORKSPACE_SLUG))
+      .limit(1);
 
-  const fallbackWs =
-    demoWs || (await db.select().from(workspaces).limit(1))[0];
+    const ws =
+      fallbackWs || (await db.select().from(workspaces).limit(1))[0];
 
-  if (!fallbackWs) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "No workspace available. Please initialize or seed a workspace.",
-    });
+    if (!ws) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No workspace available. Please initialize or seed a workspace.",
+      });
+    }
+
+    const adminMembership: WorkspaceMember = {
+      id: 0,
+      workspaceId: ws.id,
+      userId: user.id,
+      role: "admin",
+      moduleScope: null,
+      createdAt: new Date(),
+    };
+    return { workspace: ws, membership: adminMembership };
   }
 
-  // If user is system admin or has non-empty role, grant appropriate membership
-  const role = user.role === "admin" ? "admin" : (user.role as WorkspaceMember["role"]) || "viewer";
-  const syntheticMembership: WorkspaceMember = {
-    id: 0,
-    workspaceId: fallbackWs.id,
-    userId: user.id,
-    role,
-    moduleScope: null,
-    createdAt: new Date(),
-  };
-
-  return {
-    workspace: fallbackWs,
-    membership: syntheticMembership,
-  };
+  // Non-admin with no memberships: strict rejection
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "User is not a member of any workspace. Contact an administrator to be enrolled.",
+  });
 }
 
 /** Check if user/membership has the required workspace-level role */

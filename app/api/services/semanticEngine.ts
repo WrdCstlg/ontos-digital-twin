@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   ontologyModules,
   ontologyClasses,
@@ -277,14 +277,58 @@ class SemanticEngineClient {
 
   /**
    * Runs the W3C SHACL validator against the currently loaded graph.
+   *
+   * The engine's batch API accepts a file path in `args`. In Docker, the app and
+   * engine run in separate containers with isolated filesystems, so a temp file
+   * written here is invisible to the engine. We first try sending the shapes
+   * content through a direct SHACL validation endpoint; if that fails we fall
+   * back to the temp file approach (which works when both share a host).
    */
   public async validateShacl(shapesTurtle: string): Promise<ShaclValidationResult> {
     await this.ensureEngineRunning();
-    const tmpDir = os.tmpdir();
-    const tmpFile = path.join(tmpDir, `ontos-shacl-${Date.now()}-${Math.random().toString(36).slice(2)}.ttl`);
-    try {
-      fs.writeFileSync(tmpFile, shapesTurtle, "utf-8");
 
+    type BatchResp = Array<{
+      command: string;
+      result?: {
+        conforms?: boolean;
+        focus_nodes?: number;
+        violation_count?: number;
+        violations?: Array<{
+          constraint?: string;
+          focus_node?: string;
+          path?: string;
+          severity?: "Violation" | "Warning" | "Info";
+          message?: string;
+          value?: string;
+        }>;
+        error?: string;
+      };
+      error?: string;
+    }>;
+
+    // Try a direct /api/shacl endpoint that accepts inline Turtle (Docker-safe)
+    let batch: BatchResp | null = null;
+    try {
+      const directRes = await fetch(`${this.baseUrl}/api/shacl`, {
+        method: "POST",
+        headers: { ...this.getHeaders(), "Content-Type": "text/turtle" },
+        body: shapesTurtle,
+        signal: AbortSignal.timeout(15000),
+      });
+      if (directRes.ok) {
+        const directResult = await directRes.json();
+        // Wrap in batch format for uniform handling
+        batch = [{ command: "shacl", result: directResult }];
+      }
+    } catch {
+      // Direct endpoint not available — fall through to batch+tmpfile
+    }
+
+    // Fallback: write a temp file and use the batch API (works when sharing a filesystem)
+    let tmpFile: string | undefined;
+    if (!batch) {
+      tmpFile = path.join(os.tmpdir(), `ontos-shacl-${Date.now()}-${Math.random().toString(36).slice(2)}.ttl`);
+      fs.writeFileSync(tmpFile, shapesTurtle, "utf-8");
       const res = await fetch(`${this.baseUrl}/api/batch`, {
         method: "POST",
         headers: this.getHeaders(),
@@ -295,27 +339,10 @@ class SemanticEngineClient {
       if (!res.ok) {
         throw new Error(`SHACL validation request failed: HTTP ${res.status}`);
       }
+      batch = (await res.json()) as BatchResp;
+    }
 
-      type BatchResp = Array<{
-        command: string;
-        result?: {
-          conforms?: boolean;
-          focus_nodes?: number;
-          violation_count?: number;
-          violations?: Array<{
-            constraint?: string;
-            focus_node?: string;
-            path?: string;
-            severity?: "Violation" | "Warning" | "Info";
-            message?: string;
-            value?: string;
-          }>;
-          error?: string;
-        };
-        error?: string;
-      }>;
-
-      const batch = (await res.json()) as BatchResp;
+    try {
       const shaclRes = batch[0]?.result;
 
       if (!shaclRes || shaclRes.error) {
@@ -339,7 +366,7 @@ class SemanticEngineClient {
         raw: shaclRes,
       };
     } finally {
-      if (fs.existsSync(tmpFile)) {
+      if (tmpFile && fs.existsSync(tmpFile)) {
         try {
           fs.unlinkSync(tmpFile);
         } catch {
@@ -478,11 +505,12 @@ class SemanticEngineClient {
     const classes = await db
       .select()
       .from(ontologyClasses)
-      .where(and(isNull(ontologyClasses.deprecated)));
+      .where(and(inArray(ontologyClasses.moduleId, moduleIds), eq(ontologyClasses.deprecated, false)));
 
     const properties = await db
       .select()
-      .from(ontologyProperties);
+      .from(ontologyProperties)
+      .where(inArray(ontologyProperties.moduleId, moduleIds));
 
     const nodes = await db
       .select()

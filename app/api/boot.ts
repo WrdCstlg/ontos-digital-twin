@@ -236,7 +236,10 @@ app.post("/api/sparql", async (c) => {
 // Used by cellular trackers, edge gateways, AWS IoT Rules HTTPS actions, and Azure Event Grid webhooks.
 app.post("/api/iot/telemetry", async (c) => {
   const reqKey = c.req.header("x-iot-api-key") || c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
-  const expectedKey = process.env.IOT_API_KEY || "ontos_iot_demo_key";
+  const expectedKey = process.env.IOT_WEBHOOK_API_KEY;
+  if (!expectedKey) {
+    return c.json({ error: "IoT webhook not configured: set IOT_WEBHOOK_API_KEY" }, 503);
+  }
 
   if (reqKey !== expectedKey) {
     return c.json({ error: "Unauthorized: Invalid or missing x-iot-api-key" }, 401);
@@ -245,8 +248,10 @@ app.post("/api/iot/telemetry", async (c) => {
   try {
     const body = await c.req.json();
     const points = Array.isArray(body) ? body : [body];
+    const wsHeader = c.req.header("x-workspace-id");
+    const workspaceId = wsHeader && /^\d+$/.test(wsHeader) ? parseInt(wsHeader, 10) : undefined;
     const { ingestTelemetry } = await import("./services/iot/iotIngestion");
-    const result = await ingestTelemetry(points, { source: "http_webhook" });
+    const result = await ingestTelemetry(points, { workspaceId, source: "http_webhook" });
     return c.json(result, result.success ? 200 : 207);
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : "Malformed JSON payload" }, 400);

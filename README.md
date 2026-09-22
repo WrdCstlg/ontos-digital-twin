@@ -5,7 +5,7 @@
 [![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Hono 4](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
-[![Tests](https://img.shields.io/badge/tests-55%2F55%20passing-brightgreen.svg)](app/vitest.config.ts)
+
 [![Docker](https://img.shields.io/badge/docker-compose%20ready-2496ED?logo=docker&logoColor=white)](compose.yaml)
 
 An enterprise ontology management and digital twin platform. Ontos models five business
@@ -18,11 +18,14 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 
 ---
 
-## 🤖 Built with AI-Assisted Agents
+## Built with AI coding agents
 
-Ontos is a centerpiece system engineered using multi-agent AI coding swarms directed by **Senan Sumrein**. It demonstrates how AI-assisted agent swarms can plan, execute, decouple proprietary vendor lock-in, harden security to OWASP standards, and verify complex distributed architectures.
+Ontos was built almost entirely by AI coding agents, directed by **Senan Sumrein**
+across several sessions and more than one agent system. The interesting part is not
+the generation — it is the verification discipline that separated plausible output
+from working software, and the defects that passed every automated gate.
 
-- 📖 **[AI Agent Architecture Case Study (AI_AGENT_ARCHITECTURE.md)](AI_AGENT_ARCHITECTURE.md)** — Detailed whitepaper on the multi-agent workflow, agent roles, adversarial review, and verification discipline.
+- **[How Ontos Was Built (AI_AGENT_ARCHITECTURE.md)](AI_AGENT_ARCHITECTURE.md)** — How the work was organized, what the agents got right and wrong, and the checking that made the difference.
 
 ---
 
@@ -39,8 +42,10 @@ Ontos is a centerpiece system engineered using multi-agent AI coding swarms dire
 - **Digital twins** — twin registry, live telemetry time series, topology subgraphs, and
   Azure DTDL v3 JSON export.
 - **Data mapping** — CSV → ontology class/property mapping with pre-commit SHACL checks.
-- **Natural language query** — pattern-based, ontology-grounded NL → SQL translation that
-  always shows the generated query and refuses write or unsafe intents.
+- **Natural language query** — pattern-based NL → SQL translation with a deterministic
+  template engine; a pluggable LLM gateway (Ollama, OpenAI, Anthropic, OpenRouter) is
+  available for SPARQL generation when configured. Both paths show the generated query
+  and refuse write or unsafe intents.
 - **RBAC + audit** — five roles, per-route authorization, SHA-256 hash-linked audit log.
 
 ---
@@ -70,7 +75,7 @@ graph TD
 | Semantics | open-ontologies — Oxigraph store, OWL-RL reasoner, SHACL validator |
 | Auth | Self-contained HS256 JWT (`jose`), scrypt password hashing |
 | Build | Vite (client) + esbuild (server bundle) |
-| Tests | Vitest (45/45 tests passing) |
+| Tests | Vitest |
 
 In development, Vite serves the SPA and mounts the Hono app at `/api/*` through
 `@hono/vite-dev-server` — a single process on port 3000. In production, `dist/boot.js`
