@@ -23,6 +23,10 @@ x-app-env: &app-env
   ALLOW_DEMO_LOGIN: ${ALLOW_DEMO_LOGIN:-false}
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
   OPEN_ONTOLOGIES_URL: http://engine:8085
+  IOT_BROKER_URL: ${IOT_BROKER_URL:-}
+  IOT_BROKER_TYPE: ${IOT_BROKER_TYPE:-}
+  IOT_BROKER_TOPIC: ${IOT_BROKER_TOPIC:-}
+  IOT_WEBHOOK_API_KEY: ${IOT_WEBHOOK_API_KEY:-}
 
 x-app-build: &app-build
   context: ./app
