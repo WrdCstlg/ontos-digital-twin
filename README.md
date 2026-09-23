@@ -402,6 +402,10 @@ session cookie, is limited to 30 queries per minute per user, caps queries at 10
 characters, and accepts only the four SPARQL query forms — `SELECT`, `ASK`, `CONSTRUCT`
 and `DESCRIBE`. Update forms are rejected with a 400.
 
+Before executing, the endpoint syncs the caller's workspace into the engine so queries
+always answer from current data. Pass `x-auto-sync: false` to skip the sync when you
+know the store is already loaded (e.g. multiple queries in one batch).
+
 ---
 
 ## Security
@@ -477,15 +481,14 @@ These are tracked, known behaviours rather than surprises:
   on it. Start that database fresh, or record `0000` as applied in `__drizzle_migrations`.
 - **The login page shows persona buttons even when persona login is off.** Clicking one
   returns a clear error naming `ALLOW_DEMO_LOGIN`, but the buttons should be hidden.
-- **SHACL validation fails open.** When the semantic engine is offline,
-  `ontology.validateShacl` returns `conforms: true` with an explanatory `message`, and
-  `mapping.runSync` commits with no SHACL report at all. Check `message` and the presence
-  of `shaclReport`, not just `conforms`.
+- **SHACL validation is unavailable when the engine is offline.**
+  `ontology.validateShacl` returns `conforms: null` with `engineOffline: true`
+  when the semantic engine is down. `mapping.runSync` commits with no SHACL
+  report at all. Callers should check `engineOffline` and `conforms !== null`
+  before trusting the result.
 - **Pre-commit SHACL checks are advisory.** Violations are recorded in the audit entry and
   surfaced as a warning, but they do not block a sync.
-- **The triple store is global and unscoped.** Each operation clears and reloads the shared
-  Oxigraph store, so concurrent reasoning or validation runs will interfere with one
-  another. It is not partitioned per workspace.
+- **The triple store is a shared, single-tenant singleton.** The Oxigraph engine holds one dataset at a time. Every operation — reasoning, SHACL validation, CSV import, SPARQL query — clears the store and loads what it needs. The `/api/sparql` endpoint syncs before each query by default, but other operations (reasoning, SHACL) still clear and reload the store, so concurrent runs will interfere with each other. The engine is not partitioned per workspace; only one workspace should exist at a time.
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that
   has no hash yet will accept a known fixed bootstrap password and be upgraded to a real

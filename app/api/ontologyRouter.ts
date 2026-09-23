@@ -744,11 +744,12 @@ export const ontologyRouter = createRouter({
       const isEngineAlive = await semanticEngine.ensureEngineRunning();
       if (!isEngineAlive) {
         return {
-          conforms: true,
+          conforms: null,
           focusNodes: 0,
           violationCount: 0,
           violations: [],
-          message: "Semantic engine offline — SHACL shapes generated but validation skipped",
+          engineOffline: true,
+          message: "Semantic engine offline — SHACL shapes generated but validation was NOT performed",
         };
       }
 

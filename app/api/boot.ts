@@ -205,7 +205,11 @@ app.post("/api/sparql", async (c) => {
     );
   }
 
-  if (c.req.header("x-auto-sync") === "true") {
+  // Sync the workspace's graph into the engine before querying.
+  // Default: always sync so callers get current data (the engine is a shared
+  // singleton that any prior operation may have overwritten).
+  // Pass x-auto-sync: false to skip, e.g. for repeated queries in one batch.
+  if (c.req.header("x-auto-sync") !== "false") {
     await semanticEngine.syncWorkspace(workspace.id);
   }
 

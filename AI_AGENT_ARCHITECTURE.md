@@ -235,9 +235,12 @@ The parts of Ontos that make judgements are deliberately not generative.
   nodes that caused it, so it can be traced and reproduced exactly.
 - **SHACL explanations are derived, not written.** Justification trees and remediation
   guidance come from the violated constraint's structure, not from model prose.
-- **Natural-language query is a translator, not a generator.** Patterns map to an
-  intermediate representation, the representation compiles to SQL, and a guard rejects
-  anything that writes (ADR-005). The generated query is always shown.
+- **Natural-language query has a deterministic default and a pluggable LLM path.** The
+  built-in engine maps patterns to an intermediate representation, compiles to SQL, and a
+  guard rejects anything that writes (ADR-005). When an LLM provider is configured (Ollama,
+  OpenAI, Anthropic, OpenRouter), the gateway can also generate SPARQL queries directly —
+  the same write-guard applies. The generated query is always shown, so a reviewer can trace
+  the result regardless of which path produced it.
 
 The reason is auditability. *"The model thinks this vendor is non-compliant"* cannot be put
 in front of an auditor. A rule, its evidence and a reproducible result can. Where a
