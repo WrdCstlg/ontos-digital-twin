@@ -5,7 +5,8 @@ import { iotConnectors } from "@db/schema";
 import { createRouter, workspaceQuery, workspaceMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { iotBrokerManager } from "./services/iot/iotBrokerManager";
-import { ingestTelemetry } from "./services/iot/iotIngestion";
+import { ingestTelemetry, sampleDeviceId, webhookWorkspaceId } from "./services/iot/iotIngestion";
+import { hasWorkspaceRole } from "./services/workspaceGuard";
 import type { IotBrokerConfig, RawTelemetryPoint } from "./services/iot/types";
 
 export const iotRouter = createRouter({
@@ -217,20 +218,35 @@ export const iotRouter = createRouter({
   getWebhookConfig: workspaceQuery.query(async ({ ctx }) => {
     const ws = ctx.workspace;
     const apiKey = process.env.IOT_WEBHOOK_API_KEY;
-    const configured = !!apiKey;
+    const boundWorkspaceId = await webhookWorkspaceId();
+    // The webhook writes to one workspace only; elsewhere it is not configured.
+    const configured = !!apiKey && boundWorkspaceId === ws.id;
+    // The key is a shared secret, so only this workspace's admins see it.
+    const revealKey = configured && hasWorkspaceRole(ctx.membership, ctx.user, ["admin"]);
+
+    // A twin that exists here, so the copyable example actually succeeds.
+    const device = (configured && (await sampleDeviceId(ws.id))) || "<twin IRI>";
+
+    const shownKey = !apiKey
+      ? "(not configured — set IOT_WEBHOOK_API_KEY)"
+      : !configured
+        ? "(the webhook is bound to another workspace)"
+        : revealKey
+          ? apiKey
+          : "(hidden — visible to workspace admins)";
+
     return {
       endpointUrl: "/api/iot/telemetry",
       fullEndpointUrl: `http://localhost:${process.env.PORT || 3000}/api/iot/telemetry`,
-      apiKey: configured ? apiKey : "(not configured — set IOT_WEBHOOK_API_KEY)",
+      apiKey: shownKey,
       configured,
       workspaceSlug: ws.slug,
       sampleCurl: configured
         ? `curl -X POST http://localhost:3000/api/iot/telemetry \\
   -H "Content-Type: application/json" \\
-  -H "x-iot-api-key: ${apiKey}" \\
-  -H "x-workspace-id: ${ws.id}" \\
-  -d '{"deviceId":"SHP-1004","telemetry":{"temperature":3.8,"etaMinutes":145,"status":"in_transit"}}'`
-        : "# Set IOT_WEBHOOK_API_KEY in your environment first",
+  -H "x-iot-api-key: ${revealKey ? apiKey : "<IOT_WEBHOOK_API_KEY>"}" \\
+  -d '{"deviceId":"${device}","telemetry":{"temperature":4.1,"etaMinutes":145,"status":"in_transit"}}'`
+        : "# Set IOT_WEBHOOK_API_KEY (and IOT_WORKSPACE_ID for this workspace) first",
     };
   }),
 });

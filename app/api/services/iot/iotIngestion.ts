@@ -7,6 +7,34 @@ import { DTDL_UNITS, LOGGED_NUMERIC_KEYS, TWIN_MODULE_KEY, type TwinState } from
 import type { IngestResult, RawTelemetryPoint } from "./types";
 import { env } from "../../lib/env";
 
+/**
+ * The one workspace the HTTP webhook writes to. IOT_WEBHOOK_API_KEY is a single
+ * shared secret, so the workspace it grants is fixed by the operator through
+ * IOT_WORKSPACE_ID — never chosen by the caller, or one key would open every
+ * tenant. Defaults to the demo workspace, as the MQTT broker manager does.
+ */
+export async function webhookWorkspaceId(): Promise<number> {
+  const configured = Number(process.env.IOT_WORKSPACE_ID);
+  if (Number.isInteger(configured) && configured > 0) return configured;
+  return (await getDemoWorkspace()).id;
+}
+
+/** A device identifier that really resolves in this workspace, for copyable examples. */
+export async function sampleDeviceId(workspaceId: number): Promise<string | null> {
+  const [twin] = await getDb()
+    .select({ iri: kgNodes.iri })
+    .from(kgNodes)
+    .where(
+      and(
+        eq(kgNodes.workspaceId, workspaceId),
+        eq(kgNodes.classIri, "dtwin:ShipmentTwin"),
+        isNull(kgNodes.deletedAt),
+      ),
+    )
+    .limit(1);
+  return twin?.iri ?? null;
+}
+
 type KgNodeRow = typeof kgNodes.$inferSelect;
 
 /**
@@ -64,7 +92,7 @@ export async function resolveTwinNode(
       .limit(1);
     if (directNode) return directNode;
 
-    // Search by label pattern (e.g. "Twin — Logistics Shipment SHP-1004" containing "SHP-1004")
+    // Search by label pattern (e.g. the label "Twin · SHP-001" contains "SHP-001")
     const [labelNode] = await db
       .select()
       .from(kgNodes)

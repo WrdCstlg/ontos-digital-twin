@@ -6,7 +6,7 @@ import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { secureHeaders } from "hono/secure-headers";
 import { cors } from "hono/cors";
 import { csrf } from "hono/csrf";
@@ -232,6 +232,14 @@ app.post("/api/sparql", async (c) => {
   }
 });
 
+/** Constant-time comparison, so response timing reveals nothing about the key. */
+function keysMatch(given: string | undefined, expected: string): boolean {
+  if (!given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 // High-Throughput IoT Telemetry Webhook Ingestion Endpoint
 // Used by cellular trackers, edge gateways, AWS IoT Rules HTTPS actions, and Azure Event Grid webhooks.
 app.post("/api/iot/telemetry", async (c) => {
@@ -241,16 +249,23 @@ app.post("/api/iot/telemetry", async (c) => {
     return c.json({ error: "IoT webhook not configured: set IOT_WEBHOOK_API_KEY" }, 503);
   }
 
-  if (reqKey !== expectedKey) {
+  if (!keysMatch(reqKey, expectedKey)) {
     return c.json({ error: "Unauthorized: Invalid or missing x-iot-api-key" }, 401);
   }
 
   try {
     const body = await c.req.json();
     const points = Array.isArray(body) ? body : [body];
-    const wsHeader = c.req.header("x-workspace-id");
-    const workspaceId = wsHeader && /^\d+$/.test(wsHeader) ? parseInt(wsHeader, 10) : undefined;
-    const { ingestTelemetry } = await import("./services/iot/iotIngestion");
+    const { ingestTelemetry, webhookWorkspaceId } = await import("./services/iot/iotIngestion");
+
+    // The key grants exactly one workspace, set by the operator. A caller asking
+    // for a different one is refused outright rather than silently redirected.
+    const workspaceId = await webhookWorkspaceId();
+    const requested = c.req.header("x-workspace-id");
+    if (requested && requested !== String(workspaceId)) {
+      return c.json({ error: `This key writes to workspace ${workspaceId} only.` }, 403);
+    }
+
     const result = await ingestTelemetry(points, { workspaceId, source: "http_webhook" });
     return c.json(result, result.success ? 200 : 207);
   } catch (err) {

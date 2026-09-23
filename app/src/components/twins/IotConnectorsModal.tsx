@@ -42,7 +42,7 @@ const TEMPLATES = {
     label: 'Logistics Fleet / Truck',
     payload: JSON.stringify(
       {
-        deviceId: 'SHP-1004',
+        deviceId: 'SHP-001',
         telemetry: {
           temperature: 4.1,
           humidity: 46.5,
@@ -60,7 +60,7 @@ const TEMPLATES = {
     label: 'Cold-Chain Storage Zone (Breach Test)',
     payload: JSON.stringify(
       {
-        deviceId: 'dtwin:Zone_WH1_Cold1',
+        deviceId: 'dtwin:log/warehouse-01/zone-cold-chain',
         telemetry: {
           temperature: 7.8, // Excursion above 6°C threshold to trigger insights!
           humidity: 58.0,
@@ -76,7 +76,7 @@ const TEMPLATES = {
     label: 'Warehouse Equipment / Sensor',
     payload: JSON.stringify(
       {
-        deviceId: 'dtwin:Equip_WH1_Sensor1',
+        deviceId: 'dtwin:log/warehouse-01/equip-temp-sensor-1',
         telemetry: {
           batteryLevel: 8.5, // Low battery warning threshold (<10%)
           status: 'warning',
