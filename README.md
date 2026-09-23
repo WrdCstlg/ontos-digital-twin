@@ -54,10 +54,10 @@ from working software, and the defects that passed every automated gate.
 
 ```mermaid
 graph TD
-    User["Enterprise User / Ontologist"] -->|HTTPS / WSS| Web["React 19 SPA<br/>(Vite 7, Cytoscape, Three.js)"]
-    Web -->|tRPC 11 / JSON| Hono["Ontos API Server<br/>(Hono 4 + Node 24)"]
-    Hono -->|Drizzle ORM| MySQL[("MySQL 8.4 LTS<br/>(Knowledge Graph & State)")]
-    Hono -->|HTTP REST / SPARQL 1.1| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
+    User["Enterprise User / Ontologist"] <-->|HTTPS / WSS| Web["React 19 SPA<br/>(Vite 7, Cytoscape, Three.js)"]
+    Web <-->|tRPC 11 / JSON| Hono["Ontos API Server<br/>(Hono 4 + Node 24)"]
+    Hono <-->|Drizzle ORM| MySQL[("MySQL 8.4 LTS<br/>(Knowledge Graph & State)")]
+    Hono <-->|HTTP REST / SPARQL 1.1| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
     
     subgraph Compose ["Docker Compose Stack"]
         Hono
