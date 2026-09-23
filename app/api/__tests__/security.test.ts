@@ -5,7 +5,8 @@ import { signSessionToken, verifySessionToken } from "../auth/session";
 import { getSessionCookieOptions } from "../lib/cookies";
 import { translate } from "../services/nlq";
 import { isReadOnlySparql } from "../lib/sparqlGuard";
-import { toPublicUser } from "../auth/service";
+import { demoPersonaEmails, isDemoPersona, loginWithCredentials, toPublicUser } from "../auth/service";
+import { env } from "../lib/env";
 import type { User } from "@db/schema";
 
 describe("Security Posture Verification", () => {
@@ -94,6 +95,28 @@ describe("Security Posture Verification", () => {
       expect(projected.name).toBe("Elena Cortez");
       expect(projected.role).toBe("admin");
       expect(projected.lastSignInAt).toEqual(user.lastSignInAt);
+    });
+  });
+
+  describe("Demo personas", () => {
+    it("recognises current and legacy persona addresses, case-insensitively", () => {
+      expect(isDemoPersona("demo-admin@acme-ontology.com")).toBe(true);
+      expect(isDemoPersona("DEMO-Viewer@Acme-Ontology.com")).toBe(true);
+      expect(isDemoPersona("ontologist@acme-ontology.com")).toBe(true);
+      expect(isDemoPersona("someone@example.com")).toBe(false);
+      expect(isDemoPersona(null)).toBe(false);
+    });
+
+    it("never treats the configured admin address as a persona", () => {
+      const admin = env.adminEmail.trim().toLowerCase();
+      expect(demoPersonaEmails()).not.toContain(admin);
+      expect(isDemoPersona(admin)).toBe(false);
+    });
+
+    it("refuses persona addresses on the credential form, even with the old public password", async () => {
+      await expect(
+        loginWithCredentials("demo-admin@acme-ontology.com", "ontos2026!"),
+      ).rejects.toThrow("Invalid email or password.");
     });
   });
 

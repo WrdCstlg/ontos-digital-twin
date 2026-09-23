@@ -14,12 +14,13 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/mysql2/migrator";
 import { auditLog, ontologyModules, users, workspaces, workspaceMembers } from "./schema";
 import { getDb } from "../api/queries/connection";
 import { hashPassword } from "../api/lib/password";
 import { env } from "../api/lib/env";
+import { demoPersonaEmails } from "../api/auth/service";
 
 const MIN_ADMIN_PASSWORD_LENGTH = 12;
 
@@ -129,6 +130,22 @@ async function provisionAdmin() {
   }
 }
 
+/**
+ * Demo personas never hold a password (see api/auth/service.ts). Earlier builds
+ * gave them a hash of the public demo password, and those rows outlive demo
+ * mode, so every start clears any that remain. The configured admin is never
+ * in this list.
+ */
+async function clearPersonaPasswords() {
+  const [result] = await getDb()
+    .update(users)
+    .set({ passwordHash: null })
+    .where(and(inArray(users.email, demoPersonaEmails()), isNotNull(users.passwordHash)));
+  if (result.affectedRows > 0) {
+    log(`cleared stored passwords on ${result.affectedRows} demo persona account(s)`);
+  }
+}
+
 async function main() {
   const migrationsFolder = process.env.MIGRATIONS_DIR ?? path.resolve(process.cwd(), "db/migrations");
   log(`applying migrations from ${migrationsFolder}`);
@@ -153,6 +170,7 @@ async function main() {
     runSeed("seed-twins.js");
   }
 
+  await clearPersonaPasswords();
   await provisionAdmin();
   log("done");
 }
