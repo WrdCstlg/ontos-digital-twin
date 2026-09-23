@@ -40,9 +40,9 @@ Reconstructed from the git history.
 | Stage | When | Commits | What happened |
 |---|---|---|---|
 | 1. Orchestrated build | before the history begins | — | A swarm of role-specialized agents built the platform. Its output is the first commit. |
-| 2. Hardening and handover | 2026-09-08 | `b739308` `0ef9bd8` `d360fc9` | Self-contained authentication, security hardening, and a written handover for the next agent session. |
-| 3. Feature sessions | 2026-09-09 – 10 | `c8cdc00` `498717f` `0041d35` `1e627ec` `91a04cc` | Field Guide, twelve insight rules, native semantic engine, explainable SHACL. |
-| 4. Independent evaluation | 2026-09-10 onward | `e33bd7e` onward | A fresh session audited the build without trusting its documentation, then fixed and containerized it. Later rounds were re-verified the same way. |
+| 2. Hardening and handover | 2026-09-08 | `b1ef7b1` `fabcc69` `4d2a057` | Self-contained authentication, security hardening, and a written handover for the next agent session. |
+| 3. Feature sessions | 2026-09-09 – 10 | `31e632c` `ab00a2a` `5a85e27` `60a85e2` `14a2471` | Field Guide, twelve insight rules, native semantic engine, explainable SHACL. |
+| 4. Independent evaluation | 2026-09-10 onward | `dda675c` onward | A fresh session audited the build without trusting its documentation, then fixed and containerized it. Later rounds were re-verified the same way. |
 
 ---
 
