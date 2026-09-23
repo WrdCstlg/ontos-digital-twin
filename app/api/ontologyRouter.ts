@@ -733,11 +733,12 @@ export const ontologyRouter = createRouter({
       const shapesTtl = shaclJsonToTurtle(classes, prefixMap);
       if (!shapesTtl.trim()) {
         return {
-          conforms: true,
+          conforms: null,
           focusNodes: 0,
           violationCount: 0,
           violations: [],
-          message: "No SHACL constraints configured for module",
+          noConstraints: true,
+          message: "No SHACL constraints configured for this module — validation was not performed",
         };
       }
 
