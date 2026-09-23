@@ -102,6 +102,30 @@ const STYLE = [
       'text-background-padding': 2,
     },
   },
+  // Subclass edges in UML generalization style: a hollow triangle at the parent.
+  // Drawn like the property arrows beside them, "Employee ⊑ Person" read as
+  // something flowing into Person; this reads as classification instead.
+  {
+    selector: 'edge[label = "⊑"], edge[label = "⊑ inferred"]',
+    style: {
+      label: 'is a',
+      'target-arrow-shape': 'triangle',
+      'target-arrow-fill': 'hollow',
+      'arrow-scale': 1.4,
+      'line-color': '#64748B',
+      'target-arrow-color': '#94A3B8',
+      color: '#94A3B8',
+    },
+  },
+  {
+    selector: 'edge[label = "⊑ inferred"]',
+    style: { label: 'is a (inferred)', 'line-style': 'dashed' },
+  },
+  // Instance-of edges: dotted, so instances read as members of a class.
+  {
+    selector: 'edge[label = "rdf:type"]',
+    style: { 'line-style': 'dotted', 'target-arrow-shape': 'vee', 'arrow-scale': 0.6 },
+  },
   {
     selector: '.faded',
     style: { opacity: 0.15, 'text-opacity': 0.15 },

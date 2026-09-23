@@ -131,12 +131,87 @@ const STYLE = [
   },
 ] as unknown as StylesheetCSS[];
 
-const LAYOUTS: Record<ExplorerLayout, LayoutOptions> = {
+const LAYOUTS: Record<Exclude<ExplorerLayout, 'hierarchy'>, LayoutOptions> = {
   force: { name: 'fcose', animate: false, randomize: true, nodeRepulsion: 6500, idealEdgeLength: 90, gravity: 0.35, padding: 40 } as unknown as LayoutOptions,
   radial: { name: 'concentric', animate: true, animationDuration: 500, padding: 40, minNodeSpacing: 24 } as unknown as LayoutOptions,
-  hierarchy: { name: 'breadthfirst', animate: true, animationDuration: 500, padding: 40, spacingFactor: 1.1 } as unknown as LayoutOptions,
   timeline: { name: 'grid', animate: true, animationDuration: 500, padding: 40 } as unknown as LayoutOptions,
 };
+
+/**
+ * Hierarchy layout in which every node sits below everything it points to.
+ * The graph's structural predicates run child → parent — memberOf, reportsTo,
+ * parentUnit — so each parent lands above its children and every arrow points
+ * up to its object. Cytoscape's breadthfirst can't express this: unrooted, it
+ * roots each component at its busiest node, which drew Acme Corp beneath one of
+ * its own departments; rooted at the sinks, depth follows the nearest root, so
+ * an employee with a skill rose above their department and the arrow flipped.
+ */
+function hierarchyLayout(cy: Core): LayoutOptions {
+  const level = new Map<string, number>();
+  const visiting = new Set<string>();
+  const heightOf = (node: NodeSingular): number => {
+    const id = node.id();
+    const known = level.get(id);
+    if (known !== undefined) return known;
+    if (visiting.has(id)) return 0; // a cycle: break it here
+    visiting.add(id);
+    let h = 0;
+    node.outgoers('node').forEach((target) => {
+      if (target.id() !== id) h = Math.max(h, heightOf(target) + 1);
+    });
+    visiting.delete(id);
+    level.set(id, h);
+    return h;
+  };
+  cy.nodes().forEach((n) => {
+    heightOf(n);
+  });
+
+  // Levels top-down. Within a level, order nodes by the mean x of what they
+  // point to above, which keeps edges from crossing needlessly. A level wider
+  // than the canvas wraps onto extra lines; they all stay below the level they
+  // point to, so arrows still only point up.
+  const GAP_X = 70;
+  const LINE_GAP = 70;
+  const LEVEL_GAP = 130;
+  const maxPerLine = Math.max(12, Math.ceil(Math.sqrt(cy.nodes().length) * 1.8));
+  const levels: string[][] = [];
+  level.forEach((h, id) => (levels[h] ??= []).push(id));
+  const pos = new Map<string, { x: number; y: number }>();
+  let y = 0;
+  levels.forEach((row, h) => {
+    if (h > 0) {
+      const anchor = (id: string) => {
+        const xs = cy
+          .getElementById(id)
+          .outgoers('node')
+          .map((t) => pos.get(t.id())?.x)
+          .filter((v): v is number => v !== undefined);
+        return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+      };
+      row.sort((a, b) => anchor(a) - anchor(b));
+    }
+    for (let start = 0; start < row.length; start += maxPerLine) {
+      const line = row.slice(start, start + maxPerLine);
+      const width = (line.length - 1) * GAP_X;
+      line.forEach((id, i) => pos.set(id, { x: i * GAP_X - width / 2, y }));
+      y += LINE_GAP;
+    }
+    y += LEVEL_GAP - LINE_GAP;
+  });
+
+  return {
+    name: 'preset',
+    positions: (node: NodeSingular) => pos.get(node.id()) ?? { x: 0, y: 0 },
+    animate: true,
+    animationDuration: 500,
+    fit: true,
+    padding: 40,
+  } as unknown as LayoutOptions;
+}
+
+const layoutFor = (cy: Core, layout: ExplorerLayout): LayoutOptions =>
+  layout === 'hierarchy' ? hierarchyLayout(cy) : LAYOUTS[layout];
 
 /**
  * ExplorerGraph — Explorer-specific Cytoscape canvas extending the shared
@@ -253,7 +328,7 @@ export function ExplorerGraph({
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.layout(LAYOUTS[layout]).run();
+    cy.layout(layoutFor(cy, layout)).run();
   }, [layout, dataKey]);
 
   // Selected-node pulse (underlay padding oscillates 8→12→8 over 1.2s)
