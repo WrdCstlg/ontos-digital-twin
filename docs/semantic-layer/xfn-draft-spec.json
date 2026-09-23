@@ -1,0 +1,2523 @@
+{
+  "moduleKey": "xfn",
+  "prefix": "xfn",
+  "moduleName": "Cross-Functional Core",
+  "version": "1.0",
+  "color": "#A3E635",
+  "description": "The semantic overlay that relates the function modules without editing them. It holds business functions and seats, decision rights and answerability, boundary objects and each function's perspective on them, handoffs and what they transfer, outcomes and metric definitions (never values), and attributable, provenance-bearing claims. The central claim is the cross-boundary effect claim, which the module holds but never asserts as true.",
+  "documentation": "# Cross-Functional Core module (xfn)\n\nEach existing module (hr, lgl, cmp, fin, log) is one function's local vocabulary. `xfn` is the only module whose classes describe relations **between** other modules' instances. Its edges always start at `xfn` nodes, point into the function modules, and never the other way round, so `xfn` can be reseeded or removed without breaking any local site.\n\n**Five things `xfn` keeps apart**\n- **Structure (fact).** `xfn:BusinessFunction` is what is done, not `hr:OrgUnit`, which is who is grouped. `xfn:Position` is a seat that survives turnover. `xfn:Handoff` + `xfn:Transfer` record what crosses a boundary and whether the receiver accepted it.\n- **Accountability (fact).** `xfn:DecisionRight`, `xfn:Answerability` and `xfn:MetricBinding` are sourced, time-bounded records held by seats. `xfn:ExposureGap` is derived only; it shows where one seat decides what another seat bears.\n- **Meaning (convention).** `xfn:BoundaryObject` is a thin anchor. Each function's view of it is an `xfn:Perspective` pointing at that function's own records (never `owl:sameAs`). Disagreements are `xfn:PerspectiveCorrespondence` records: graded, attributed, never resolved in favour of one function.\n- **Definition without value.** `xfn:Variable` names a neutral state. `xfn:Outcome` says which direction of it is desired and whose remit it is. `xfn:MetricDefinition` / `xfn:MetricVersion` say what a number would mean. Values live in the measurement layer, keyed by `xfn:MetricVersion` IRI.\n- **Claims (held, never asserted).** `xfn:EffectClaim` is the arrow: an n-ary node relating a cause `xfn:Variable` to an effect `xfn:Variable`, usually via an `xfn:Decision`. It records sign, rung, lag, claimant, function and evidence. **No property links two Variables directly.** Verdicts, including the causal engine's, arrive only as `xfn:Appraisal` records.\n\n**Rules of the house**\n- Every claim has exactly one `xfn:attributedTo` and one `xfn:onBehalfOf`.\n- `xfn:recordStatus` is a speech-act lifecycle (`draft|asserted|withdrawn|superseded`); none of its values means true.\n- Records freeze when they leave draft. A change is a new record that `xfn:revises` the old one.\n- Instance IRIs follow `xfn:&lt;Class&gt;/&lt;stable-id&gt;`, are never reused, and are retired rather than deleted.\n- Multi-valued facts are object properties, never propsJson arrays.\n\nNothing here computes a value, a causal verdict, a weight, a score or a rollup.",
+  "classes": [
+    {
+      "label": "AttributedRecord",
+      "definition": "Abstract root. An immutable information entity attributed to exactly one answerable agent. It records that someone said, defined, recorded or stipulated something, and when. It never records that the thing is true. Content freezes when the record leaves draft; a change is a new record that revises it. Aligned to prov:Entity."
+    },
+    {
+      "label": "ControlledTerm",
+      "definition": "A term in one of the module's open, governed vocabularies, held as instance data (like log:Incoterm). Terms are grouped by xfn:termScheme: evidence-class, appraisal-aspect, divergence-mode, carried-kind, decision-kind, commitment-kind, decision-context. Adding a term is a data change, not a schema change. Aligned to skos:Concept."
+    },
+    {
+      "label": "AnalyticAgent",
+      "definition": "A versioned software agent that authors claims, appraisals or evidence: a causal engine, an insight rule, a forecasting model. It always has an accountable human or organisational owner. A new version is a new agent. Aligned to prov:SoftwareAgent."
+    },
+    {
+      "label": "Deliberation",
+      "definition": "An occasion on which records were produced about one or more decisions: a CEO decision review, an S&OP meeting, a structured elicitation, an analysis run, a post-incident review, an audit. It gathers every C-suite input on one decision. It also shows whether each claim was solicited (claimant is not the convener) or volunteered. Aligned to prov:Activity."
+    },
+    {
+      "label": "BusinessFunction",
+      "definition": "A durable domain of business responsibility: Procurement, Finance, Operations, Customer Support, Legal & Compliance, Revenue, People, Product & Engineering, and 'Enterprise' for the CEO's whole-business remit. It has a stable key that survives reorganisation. It is deliberately not hr:OrgUnit: functions map many-to-many onto the reporting tree, and Acme has no Procurement, Support or Legal OrgUnit at all. Aligned to ArchiMate Business Function."
+    },
+    {
+      "label": "Position",
+      "definition": "A seat in the organisation that exists independently of whoever fills it, e.g. 'Chief Procurement Officer' or 'S&OP Council'. It instantiates an hr:Role and sits in an hr:OrgUnit. Decision rights, answerabilities and metric bindings attach to seats, not people, so accountability survives turnover. A collective seat (committee, board) is a Position with positionKind 'collective'. Aligned to org:Post."
+    },
+    {
+      "label": "BoundaryObject",
+      "definition": "An entity or concept that two or more functions each touch and represent differently for their own work (Star & Griesemer): a supplier, a supply arrangement, a product, the concept 'on-time', the concept 'savings'. It is deliberately thin: a scope statement every function accepts, its form, and an optional steward. All descriptive content lives in Perspectives, so no function's view is privileged. Ideal-type boundary objects are the reference hub for terminology; instance boundary objects are the join key across modules' records."
+    },
+    {
+      "label": "LegalEntity",
+      "definition": "A registered legal person (company, branch, natural person) identified by LEI or registration number, never by any function's master-data key. It is the real-world referent that a fin:Vendor payee row, an lgl:Party signatory, a log:Carrier and an hr:Contractor agency may each be about. It is not called Party because lgl:Party already names a role. It carries the corporate parent, which insight rule R1 needs to be evaluated at group grain. Aligned to OMG Commons cmns-pts:Party and GLEIF LegalEntity."
+    },
+    {
+      "label": "Perspective",
+      "parent": "AttributedRecord",
+      "definition": "One business function's partial, purpose-bound view of one boundary object. It records the module-native records that represent the object for that function (representedBy), the work the view serves, the operational criterion applied, the module class seen through, and how the identity match was made. It is a reified relator: function x object x records x criterion x valid time. It is the sanctioned replacement for owl:sameAs and for cross-module pointer edges. Two perspectives may disagree, and neither is wrong because of that."
+    },
+    {
+      "label": "PerspectiveCorrespondence",
+      "parent": "AttributedRecord",
+      "definition": "An attributed, graded statement of how one function's perspective relates to others on the same boundary object: exact, close, broad, narrow or related match, or an explicit denial. It names the facet, the kind of knowledge boundary (syntactic, semantic or pragmatic), the decision contexts it is claimed for, and the steward's adoption decision. It is the only place terminology collisions are recorded, and it never names a winner: 'reconciled' means a shared translation was agreed, and 'plural' means both views stand."
+    },
+    {
+      "label": "Handoff",
+      "definition": "A standing, directed interface across which one function passes work, material, information, obligations, authority, resources, cost or risk to another, for a kind of boundary object (e.g. 'Procurement to Operations: supplier onboarding'). It carries the receiver's own requirement: the next process is the customer. It is type-level; individual POs and tickets are event data keyed to the Handoff IRI in the measurement layer."
+    },
+    {
+      "label": "Transfer",
+      "definition": "One element carried across a functional boundary, attached either to a standing Handoff or to a specific Decision or Commitment. It records what is carried, the milestone at which it passes, whether the receiver has accepted it, its basis (designed, contractual or observed practice, never 'claimed'), and the instrument that fixes it. An unacknowledged cost or risk transfer is an internal externality by construction. It subsumes 'obligation borne by', 'cost borne by' and acceptance of an obligation assignment."
+    },
+    {
+      "label": "AccountabilityAssertion",
+      "parent": "AttributedRecord",
+      "definition": "Abstract. A sourced, time-bounded fact about what one seat holds, owes or is evaluated on. Its basis is either formal (conferred by an instrument) or attested (observed practice, with evidence). It records the forum answered to. It is immutable once in force; a change supersedes it."
+    },
+    {
+      "label": "DecisionRight",
+      "parent": "AccountabilityAssertion",
+      "definition": "The holder seat may exercise a right of a stated kind (initiate, ratify, veto, implement, monitor, consult, inform) over one DecisionDomain, within an optional monetary limit and scope, traceable by delegation to a root right. With basis 'attested' it records real authority, i.e. who actually decides (Aghion & Tirole)."
+    },
+    {
+      "label": "Answerability",
+      "parent": "AccountabilityAssertion",
+      "definition": "The holder seat must render account to a forum for an object: an Outcome, cmp:Risk, cmp:Control, fin:CostCenter, lgl:Contract or BoundaryObject, or, as definition-steward, for a term. This is Bovens' actor-forum-object relation with the sanctions leg excluded, because sanctions are incentive design. It is the factual record of consequence exposure."
+    },
+    {
+      "label": "MetricBinding",
+      "parent": "AccountabilityAssertion",
+      "definition": "The holder seat is formally evaluated on (evaluated-on), or must report (reports-on), a MetricDefinition for a fiscal period. This is what a role is scored on, recorded as fact only: no weight, target, threshold or payout. Its IRI is the join key the measurement and incentive layers attach their own data to."
+    },
+    {
+      "label": "DecisionDomain",
+      "definition": "A class of decisions, i.e. a lever, such as 'supplier selection, direct materials' or 'standard payment terms'. It is owned by exactly one BusinessFunction and acts on one kind of entity. Its IRI is the stable, type-level handle an external causal model binds an intervention variable family to. The ontology never states what a domain affects."
+    },
+    {
+      "label": "ExposureGap",
+      "definition": "DERIVED ONLY; never hand-asserted. It is produced when all of the following hold: seat P has an in-force ratify or veto DecisionRight over domain D; an asserted EffectClaim concerns a decision in D; a different seat Q has an Answerability for the outcome of the claimed effect; and P has no answerability of its own for that outcome. The result: P decides what Q bears. The gap records where the two ends first converge in the solid-line hierarchy and on shared forums. It is conditional on the claim and asserts nothing about the claim's truth. Its IRI is deterministic over (right, answerability, claim)."
+    },
+    {
+      "label": "Decision",
+      "definition": "A dated, attributable act, or proposed act, of authority by a named person in a named function: a supplier switch, payment-terms change, budget cut, hiring freeze, capitalisation ruling, concession, roadmap deferral, expedite. It records who decided, when, in which capacity and under which right, which functions were consulted, what the decision sets (the do() target: variables, baseline and new state), and the rationale stated at the time. It says nothing about consequences. It is the intervention anchor for the causal layer and the usual subject of effect claims. It replaces every per-function decision class; the kind is a ControlledTerm."
+    },
+    {
+      "label": "Commitment",
+      "definition": "A promise to or from an external counterparty that binds another function's options or performance: a volume or exclusivity commitment, a spend commitment with exit cost, a customer service entitlement, a forward roadmap or delivery promise, a concession. It records whether it is contractual, where it is actually captured (contract, order form, email, verbal, none), and which decision made it. Who bears it internally is recorded as a Transfer. The defining property of the class is how often isContractual is false."
+    },
+    {
+      "label": "TermDeviation",
+      "parent": "AttributedRecord",
+      "definition": "A reified gap between what a contract says about a risk-allocating term (indemnity, liability cap, warranty, termination right, payment terms, SLA) and a stated standard or benchmark contract. Direction 'absent' covers an expected term that is missing, since an absence cannot otherwise be a node. It records who approved the deviation and when, which is usually empty. It asserts no consequence; consequences are EffectClaims that may cite it."
+    },
+    {
+      "label": "Variable",
+      "parent": "AttributedRecord",
+      "definition": "A named, neutral state or quantity of the business that claims are about, e.g. 'primary supplier of component C', 'weekly defect tickets on product P', 'indemnity cover on component C'. It is the construct: not its metric, not its values, not a valence. It must be observable in principle, so 'savings', 'uplift' and 'impact' are EffectClaims with a contrast, not Variables. It is attributed to whoever defined it, so rival definitions are distinct Variables. Variables are never linked to other Variables."
+    },
+    {
+      "label": "Outcome",
+      "parent": "AttributedRecord",
+      "definition": "A state of the business someone values: a Variable plus the desired direction of it, phrased as a desirable condition and placed in one or more functions' remit. A shared outcome is, by definition, made up of outcomes in two or more remits (hasConstituent). That make-up is definitional, never causal, and forms the DAG that propagation walks. An Outcome holds no values, targets, baselines or weights."
+    },
+    {
+      "label": "MetricDefinition",
+      "definition": "The enduring catalogue identity of a named metric (e.g. 'Procurement unit-cost saving', 'OTIF') and its governance facts: which function defines and reports it, which seat stewards it, which forum receives it. Names are deliberately not unique across definitions. Two definitions both called 'OTIF' are two metrics, and that collision is the point. A MetricDefinition has no operational meaning of its own; meaning lives in its versions."
+    },
+    {
+      "label": "MetricVersion",
+      "parent": "AttributedRecord",
+      "definition": "One immutable operational definition of a metric: plain-language meaning; population (class plus inclusion and exclusion rules, optionally pinned to one function's Perspective); a computation description, not an implementation; baseline; recognition event; clock and measurement boundary; unit; scale type; stock/flow type; and grain. It is the only node a measurement system may bind a value to. Any change of meaning mints a new version that supersedes it with a declared comparability."
+    },
+    {
+      "label": "DimensionBinding",
+      "definition": "Declares that a metric version's observations are indexed by one GrainDimension, at a fixed position in the observation key, with a fixed rollup rule along that dimension. A version's set of bindings is its grain. It is what tells the propagation layer what is joinable and how aggregation is permitted."
+    },
+    {
+      "label": "GrainDimension",
+      "definition": "A conformed dimension along which observations are indexed and joined: org unit, cost center, vendor, legal entity, SKU, fiscal period, calendar week. It names the KG class whose instances are its coordinates and the KG predicate that forms its hierarchy (e.g. hr:parentUnit). Metrics that share no non-temporal dimension can meet only at the enterprise total. That is the Ashby attenuating channel, made visible."
+    },
+    {
+      "label": "Claim",
+      "parent": "AttributedRecord",
+      "definition": "Abstract. An attributed assertion that can itself be appraised. It keeps the author's own words verbatim beside its structured encoding, along with the evidence the author cites and the author's own stated confidence. Holding a claim never asserts its content. Aligned to schema:Claim."
+    },
+    {
+      "label": "EffectClaim",
+      "parent": "Claim",
+      "definition": "THE ARROW. An attributed claim that a change in one Variable (the claimed cause, normally set by a Decision) produces a change in another Variable (the claimed effect), usually one in another function's remit. It records:\n- sign;\n- dependency kind (Pearl rung);\n- orientation (forecast, explanation or standing);\n- coarse magnitude band and lag window;\n- mechanism and scope;\n- the functions the claimant says originate and bear it;\n- the carried kinds and handoff pathway alleged;\n- cited evidence.\nIt is an n-ary node: no triple anywhere links the two Variables directly. Truth is the causal layer's verdict, written back only as an Appraisal. It subsumes every function's effect-claim class."
+    },
+    {
+      "label": "ProxyClaim",
+      "parent": "Claim",
+      "definition": "An attributed claim that a metric indicates the state of an outcome. It records the question the metric actually answers, the direction claimed to signal progress, the ceteris-paribus conditions under which that holds, and which constituents of the outcome it covers. The gap between the operational question and the outcome statement is where Goodhart lives. Constituents that no proxy covers are the tasks Holmstrom-Milgrom predict will be neglected."
+    },
+    {
+      "label": "DivergenceClaim",
+      "parent": "Claim",
+      "definition": "An attributed claim that under a stated trigger a proxy breaks: the metric improves while its outcome, or another function's outcome, does not or gets worse. It records the divergence modes (regressional, extremal, causal, adversarial, multitask-omission, externality, horizon-mismatch), the outcomes at risk, the counter-metrics that would reveal the break, and references to the EffectClaims describing the mechanism. It subsumes knownSubstitutionRisk, knownGamingVector, proxyGap and excludedSignal."
+    },
+    {
+      "label": "ForecastClaim",
+      "parent": "Claim",
+      "definition": "A dated, owner-attributed claim about the future value of a metric version for a period and scope. It records the method, the revision chain (via revises), and the functions that declare they plan against it. The numeric value is held by the measurement layer, keyed by this IRI. The revision topology alone makes sandbagging and late convergence visible, and consumedBy gives each revision a known blast radius."
+    },
+    {
+      "label": "Appraisal",
+      "parent": "Claim",
+      "definition": "An attributed position that one agent takes on an existing record: endorses, disputes, qualifies, not-identifiable or abstains. It names the aspects concerned and may advance rival records, such as a counter-claim or a rival variable definition. This is the only way a verdict, from a person or from the causal engine, enters the ontology. The appraised record is never changed, and appraisals are never aggregated here. It subsumes contests, counterClaim, disputedBy and Contestation."
+    },
+    {
+      "label": "EvidenceItem",
+      "parent": "AttributedRecord",
+      "definition": "A body of evidence cited by the author of a claim or appraisal. It records:\n- its design class (an EvidenceClass term, never ranked);\n- its source system ('none: recollection' is a valid, visible value);\n- its observation window;\n- optionally a reproducible selection predicate and a comparison baseline (a ticket cohort is an EvidenceItem);\n- the KG artefacts it rests on (cmp:Evidence, cmp:AuditFinding, lgl:Clause, fin:Transaction, log:Shipment).\nIt is neutral in itself. Whether it supports or undermines a claim depends on who cites it. It is deliberately not cmp:Evidence, which means 'a control operated' and carries a 90-day freshness rule."
+    },
+    {
+      "label": "Reading",
+      "parent": "AttributedRecord",
+      "definition": "One community's interpretation of an artefact whose meaning depends on vocabulary (an insight rule, NLQ intent, report or scorecard line): the Perspectives it takes each term from, and the identity criterion it joins records on. Several readings of one artefact can coexist, e.g. Finance's, Legal's and Procurement's readings of R1. It makes the artefact's hidden vocabulary choices queryable without deciding which reading is right."
+    }
+  ],
+  "properties": [
+    {
+      "name": "attributedTo",
+      "kind": "object",
+      "domain": "AttributedRecord",
+      "range": "hr:Person | hr:OrgUnit | lgl:Party | fin:Vendor | AnalyticAgent",
+      "cardinality": "1..1",
+      "definition": "The single agent who answers for the record: claimant, author, preparer or recorder (prov:wasAttributedTo). Joint positions are separate records or endorsing appraisals, never co-authorship. Cross-module axiom: range stored null in PROP_DEFS and enforced by SHACL."
+    },
+    {
+      "name": "onBehalfOf",
+      "kind": "object",
+      "domain": "AttributedRecord",
+      "range": "BusinessFunction",
+      "cardinality": "0..1",
+      "definition": "The function whose position the record speaks for. Required on every Claim and on any record attributed to an AnalyticAgent. Makes the claimant's incentive position legible as structure without scoring it."
+    },
+    {
+      "name": "recordedAt",
+      "kind": "datatype",
+      "domain": "AttributedRecord",
+      "datatype": "xsd:dateTime",
+      "cardinality": "1..1",
+      "definition": "When the author made the statement or definition (prov:generatedAtTime). Set once and never back-dated, which is what separates an ex-ante forecast from an ex-post explanation."
+    },
+    {
+      "name": "recordStatus",
+      "kind": "datatype",
+      "domain": "AttributedRecord",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Speech-act lifecycle only: draft | asserted | withdrawn | superseded. Only draft records are mutable. No value means verified, accepted, true or false, and none will be added."
+    },
+    {
+      "name": "withdrawnAt",
+      "kind": "datatype",
+      "domain": "AttributedRecord",
+      "datatype": "xsd:dateTime",
+      "cardinality": "0..1",
+      "definition": "When the author withdrew the record. Withdrawn records stay in the graph; withdrawal is never deletion."
+    },
+    {
+      "name": "revises",
+      "kind": "object",
+      "domain": "AttributedRecord",
+      "range": "AttributedRecord",
+      "cardinality": "0..1",
+      "definition": "The earlier record of the same class that this one replaces (prov:wasRevisionOf). The earlier record keeps its IRI and content and is marked superseded."
+    },
+    {
+      "name": "contentDigest",
+      "kind": "datatype",
+      "domain": "AttributedRecord",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "Lowercase hex SHA-256 of the canonical JSON of the record's content properties (Ontos audit canonicalize(), object values as IRIs). Excludes recordStatus, withdrawnAt, decisionStatus and itself. Required once asserted. A changed digest under the same IRI is a detectable contract violation."
+    },
+    {
+      "name": "generatedIn",
+      "kind": "object",
+      "domain": "AttributedRecord",
+      "range": "Deliberation",
+      "cardinality": "0..1",
+      "definition": "The occasion that produced the record (prov:wasGeneratedBy)."
+    },
+    {
+      "name": "validFrom",
+      "kind": "datatype",
+      "domain": "null",
+      "datatype": "xsd:date",
+      "cardinality": "0..1",
+      "definition": "Start of business validity (valid time) of a Position, Perspective, AccountabilityAssertion, Handoff or Outcome. Shared property with no rdfs:domain (null slot), so nothing is inferred from having it."
+    },
+    {
+      "name": "validTo",
+      "kind": "datatype",
+      "domain": "null",
+      "datatype": "xsd:date",
+      "cardinality": "0..1",
+      "definition": "End of business validity, inclusive. Absent means still valid. Shared property with no rdfs:domain."
+    },
+    {
+      "name": "termScheme",
+      "kind": "datatype",
+      "domain": "ControlledTerm",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The vocabulary the term belongs to: evidence-class | appraisal-aspect | divergence-mode | carried-kind | decision-kind | commitment-kind | decision-context. It is also the first segment of the term's local id (xfn:ControlledTerm/evidence-class.natural-experiment)."
+    },
+    {
+      "name": "termDefinition",
+      "kind": "datatype",
+      "domain": "ControlledTerm",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Normative definition of the term (skos:definition)."
+    },
+    {
+      "name": "broaderTerm",
+      "kind": "object",
+      "domain": "ControlledTerm",
+      "range": "ControlledTerm",
+      "cardinality": "0..1",
+      "definition": "A more general term in the same scheme (skos:broader). Lets consumers fall back from an unknown new term to one they know."
+    },
+    {
+      "name": "agentVersion",
+      "kind": "datatype",
+      "domain": "AnalyticAgent",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Software version. A new version is a new agent, so results are never pooled across versions."
+    },
+    {
+      "name": "accountableOwner",
+      "kind": "object",
+      "domain": "AnalyticAgent",
+      "range": "hr:Person | hr:OrgUnit",
+      "cardinality": "1..1",
+      "definition": "The person or unit that answers for the agent's output (prov:actedOnBehalfOf). Software never answers for itself."
+    },
+    {
+      "name": "deliberationKind",
+      "kind": "datatype",
+      "domain": "Deliberation",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "decision-review | structured-elicitation | analysis-run | post-incident-review | audit | ad-hoc."
+    },
+    {
+      "name": "startedAt",
+      "kind": "datatype",
+      "domain": "Deliberation",
+      "datatype": "xsd:dateTime",
+      "cardinality": "1..1",
+      "definition": "When the occasion began."
+    },
+    {
+      "name": "convenedBy",
+      "kind": "object",
+      "domain": "Deliberation",
+      "range": "hr:Person | AnalyticAgent",
+      "cardinality": "0..1",
+      "definition": "Who convened or ran the occasion. A claim made there by anyone else was solicited; otherwise it was volunteered."
+    },
+    {
+      "name": "concernsDecision",
+      "kind": "object",
+      "domain": "Deliberation",
+      "range": "Decision",
+      "cardinality": "0..*",
+      "definition": "The decisions (enacted, or proposed options) under deliberation. This is the hook that gathers every C-suite input on one CEO decision."
+    },
+    {
+      "name": "functionKey",
+      "kind": "datatype",
+      "domain": "BusinessFunction",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Stable machine key: procurement, finance, operations, support, legal, revenue, people, engineering, enterprise. It never changes and survives reorganisation and renaming."
+    },
+    {
+      "name": "performedBy",
+      "kind": "object",
+      "domain": "BusinessFunction",
+      "range": "hr:OrgUnit",
+      "cardinality": "0..*",
+      "definition": "Org units that currently carry out the function. Many-to-many, so a reorg does not rewrite function-level facts. A function with none is itself a finding."
+    },
+    {
+      "name": "headedBy",
+      "kind": "object",
+      "domain": "BusinessFunction",
+      "range": "Position",
+      "cardinality": "0..1",
+      "definition": "The seat accountable for the function (the C-suite member), as fact."
+    },
+    {
+      "name": "vocabularyPrefix",
+      "kind": "datatype",
+      "domain": "BusinessFunction",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "Prefix of the Ontos module that is this function's native vocabulary (fin, lgl, cmp, log, hr). Absent for functions that have no module yet."
+    },
+    {
+      "name": "subFunctionOf",
+      "kind": "object",
+      "domain": "BusinessFunction",
+      "range": "BusinessFunction",
+      "cardinality": "0..1",
+      "definition": "Functional decomposition, e.g. Treasury under Finance. Acyclic."
+    },
+    {
+      "name": "instantiatesRole",
+      "kind": "object",
+      "domain": "Position",
+      "range": "hr:Role",
+      "cardinality": "1..1",
+      "definition": "The job-role type the seat instantiates. Gives hr:Role's promised 'responsibility set' a home: the accountability assertions held by seats of that role."
+    },
+    {
+      "name": "positionIn",
+      "kind": "object",
+      "domain": "Position",
+      "range": "hr:OrgUnit",
+      "cardinality": "1..1",
+      "definition": "The org unit the seat sits in. Reuses the hr:OrgUnit tree unchanged."
+    },
+    {
+      "name": "positionKind",
+      "kind": "datatype",
+      "domain": "Position",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "individual | collective. Collective seats (Board, ExCo, S&OP Council) may have several concurrent holders."
+    },
+    {
+      "name": "solidLineTo",
+      "kind": "object",
+      "domain": "Position",
+      "range": "Position",
+      "cardinality": "0..1",
+      "definition": "Supervisory reporting line between seats. Must form one rooted acyclic tree at any instant. hr:reportsTo (person-level, HRIS-sourced) is kept unchanged."
+    },
+    {
+      "name": "dottedLineTo",
+      "kind": "object",
+      "domain": "Position",
+      "range": "Position",
+      "cardinality": "0..*",
+      "definition": "Functional or matrix reporting lines: the lateral channels the solid hierarchy attenuates."
+    },
+    {
+      "name": "seatOn",
+      "kind": "object",
+      "domain": "Position",
+      "range": "Position",
+      "cardinality": "0..*",
+      "definition": "Ex officio membership of a collective seat, e.g. CPO seatOn S&OP Council. Makes cross-functional forums explicit convergence points."
+    },
+    {
+      "name": "scopeStatement",
+      "kind": "datatype",
+      "domain": "BoundaryObject",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The agreed identity and extent of the object; the only content every perspective accepts, e.g. 'supply of component C to all product lines, whichever supplier'. For ideal-type objects it is the reference definition."
+    },
+    {
+      "name": "boundaryForm",
+      "kind": "datatype",
+      "domain": "BoundaryObject",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Star & Griesemer form: idealType (a concept, e.g. 'supplier', 'on-time', 'savings') | coincidentBoundaries (an instance, e.g. this supply arrangement) | standardizedForm (a medium, e.g. the PO form) | repository."
+    },
+    {
+      "name": "exemplifies",
+      "kind": "object",
+      "domain": "BoundaryObject",
+      "range": "BoundaryObject",
+      "cardinality": "0..1",
+      "definition": "Links an instance object to the ideal-type object it is a case of. Also defines unit populations for the causal layer."
+    },
+    {
+      "name": "aboutEntity",
+      "kind": "object",
+      "domain": "null",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "Shared property, no rdfs:domain, open range. On a BoundaryObject: the real-world referent it denotes, normally an xfn:LegalEntity or an authority IRI such as an ELI. On a Variable: the entities whose state it describes (log:InventoryItem, fin:Vendor, hr:OrgUnit, log:Route). It may never point at another Variable. Cross-module."
+    },
+    {
+      "name": "stewardedBy",
+      "kind": "object",
+      "domain": "null",
+      "range": "Position",
+      "cardinality": "0..1",
+      "definition": "Shared property, no rdfs:domain. On a BoundaryObject: the boundary spanner accountable across all its perspectives. On a MetricDefinition: the definitional steward. Absence on a BoundaryObject is the anchor-scenario finding that nobody owns both ends."
+    },
+    {
+      "name": "legalName",
+      "kind": "datatype",
+      "domain": "LegalEntity",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Registered legal name as incorporated. Not the trading name on the vendor master, and not the brand Procurement negotiated with."
+    },
+    {
+      "name": "lei",
+      "kind": "datatype",
+      "domain": "LegalEntity",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "ISO 17442 Legal Entity Identifier. The preferred identity basis. A property, never the IRI."
+    },
+    {
+      "name": "registrationId",
+      "kind": "datatype",
+      "domain": "LegalEntity",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "Company registration or tax identifier in the jurisdiction of incorporation."
+    },
+    {
+      "name": "incorporatedIn",
+      "kind": "object",
+      "domain": "LegalEntity",
+      "range": "lgl:Jurisdiction",
+      "cardinality": "0..1",
+      "definition": "Jurisdiction of incorporation. Reuses Legal's jurisdiction class."
+    },
+    {
+      "name": "parentEntity",
+      "kind": "object",
+      "domain": "LegalEntity",
+      "range": "LegalEntity",
+      "cardinality": "0..1",
+      "definition": "Direct consolidating parent (GLEIF Level 2). Acyclic. Its transitive closure is what makes 'do we have a contract with this group' answerable, and makes R1 correct at group grain."
+    },
+    {
+      "name": "heldBy",
+      "kind": "object",
+      "domain": "Perspective",
+      "range": "BusinessFunction",
+      "cardinality": "1..1",
+      "definition": "The function whose view this is."
+    },
+    {
+      "name": "perspectiveOn",
+      "kind": "object",
+      "domain": "Perspective",
+      "range": "BoundaryObject",
+      "cardinality": "1..1",
+      "definition": "The boundary object viewed."
+    },
+    {
+      "name": "representedBy",
+      "kind": "object",
+      "domain": "Perspective",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "The module-native records through which this function represents the object: fin:Vendor/V-2291, lgl:Party/PTY-017, lgl:Contract/..., log:PurchaseOrder/..., hr:Contractor/... Open cross-module range (null slot). This is correspondence without merging, and the only sanctioned identity link across modules."
+    },
+    {
+      "name": "localPurpose",
+      "kind": "datatype",
+      "domain": "Perspective",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The work the view serves, e.g. 'pay accurately and control spend', 'allocate liability'."
+    },
+    {
+      "name": "localCriterion",
+      "kind": "datatype",
+      "domain": "Perspective",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The operational definition the function applies to count, classify or accept the object, e.g. 'vendor = unblocked remit-to payee paid in last 18 months' or 'on-time = despatched by latest confirmed promise'. Different criteria on one object are expected, not errors."
+    },
+    {
+      "name": "localClass",
+      "kind": "datatype",
+      "domain": "Perspective",
+      "datatype": "xsd:anyURI",
+      "cardinality": "0..1",
+      "definition": "CURIE of the module class through which the function sees the object (fin:Vendor, lgl:Party). Needed on ideal-type objects, where perspectives are definitions rather than records."
+    },
+    {
+      "name": "identityBasis",
+      "kind": "datatype",
+      "domain": "Perspective",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "How the representation was matched to the object: lei-match | registry-id-match | tax-id-match | shared-source-key | name-similarity | signature-block | manual. Identity across modules is an attributable assertion, not a given."
+    },
+    {
+      "name": "revisedBy",
+      "kind": "object",
+      "domain": "Perspective",
+      "range": "Decision",
+      "cardinality": "0..1",
+      "definition": "The decision that produced this perspective version, e.g. the Legal perspective pointing at the new contract after a supplier switch. Enables before/after comparison."
+    },
+    {
+      "name": "correspondenceSubject",
+      "kind": "object",
+      "domain": "PerspectiveCorrespondence",
+      "range": "Perspective",
+      "cardinality": "1..1",
+      "definition": "The perspective the statement is about."
+    },
+    {
+      "name": "correspondenceObject",
+      "kind": "object",
+      "domain": "PerspectiveCorrespondence",
+      "range": "Perspective",
+      "cardinality": "1..*",
+      "definition": "The other perspective(s) on the same boundary object. More than one only with compoundOperator."
+    },
+    {
+      "name": "matchRelation",
+      "kind": "datatype",
+      "domain": "PerspectiveCorrespondence",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "exact | close | broad | narrow | related, with SKOS semantics: 'subject broad object' means the object is broader."
+    },
+    {
+      "name": "negated",
+      "kind": "datatype",
+      "domain": "PerspectiveCorrespondence",
+      "datatype": "xsd:boolean",
+      "cardinality": "0..1",
+      "definition": "True = an explicit, attributed denial that the relation holds (SSSOM predicate_modifier 'Not'). Distinct from no record, which means unknown."
+    },
+    {
+      "name": "compoundOperator",
+      "kind": "datatype",
+      "domain": "PerspectiveCorrespondence",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "AND | OR over multiple objects (ISO 25964-2), e.g. Sales on-time = AND(line in-full, generation-1 date). Required exactly when there is more than one object."
+    },
+    {
+      "name": "hierarchyType",
+      "kind": "datatype",
+      "domain": "PerspectiveCorrespondence",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "generic | partitive | instance; required for broad and narrow. A partitive-narrower concept (unit price within total cost of ownership) is a component and never stands for its whole."
+    },
+    {
+      "name": "divergenceFacet",
+      "kind": "datatype",
+      "domain": "PerspectiveCorrespondence",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The aspect on which the views relate or differ, in neutral words: 'identity grain', 'clock start', 'baseline', 'cost elements included'."
+    },
+    {
+      "name": "divergenceKind",
+      "kind": "datatype",
+      "domain": "PerspectiveCorrespondence",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Carlile boundary type: syntactic (different terms, same meaning) | semantic (different meanings) | pragmatic (different interests at stake)."
+    },
+    {
+      "name": "adoptionStatus",
+      "kind": "datatype",
+      "domain": "PerspectiveCorrespondence",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "proposed | adopted | rejected | reconciled | plural. The steward's decision on the convention; it changes at most once, and later changes are revisions. 'reconciled' = a shared translation agreed; 'plural' = legitimately different, both kept. No value names a winning function. Exists only on conventions, never on empirical claims."
+    },
+    {
+      "name": "appliesInContext",
+      "kind": "object",
+      "domain": "PerspectiveCorrespondence",
+      "range": "ControlledTerm",
+      "cardinality": "1..*",
+      "definition": "Decision contexts (scheme decision-context: ctx.all, ctx.payables, ctx.spend-analytics, ctx.causal-modelling, ctx.performance-reporting) in which the convention is claimed to hold."
+    },
+    {
+      "name": "reviewedBy",
+      "kind": "object",
+      "domain": "PerspectiveCorrespondence",
+      "range": "hr:Person",
+      "cardinality": "0..1",
+      "definition": "The steward who adopted or rejected the record. Required once adoptionStatus is not 'proposed'."
+    },
+    {
+      "name": "handoffFrom",
+      "kind": "object",
+      "domain": "Handoff",
+      "range": "BusinessFunction",
+      "cardinality": "1..1",
+      "definition": "The providing function."
+    },
+    {
+      "name": "handoffTo",
+      "kind": "object",
+      "domain": "Handoff",
+      "range": "BusinessFunction",
+      "cardinality": "1..1",
+      "definition": "The receiving function. Must differ from the provider."
+    },
+    {
+      "name": "concernsObject",
+      "kind": "object",
+      "domain": "Handoff",
+      "range": "BoundaryObject",
+      "cardinality": "1..*",
+      "definition": "The boundary object (usually an ideal type) whose instances cross this interface."
+    },
+    {
+      "name": "mediatedBy",
+      "kind": "object",
+      "domain": "Handoff",
+      "range": "BoundaryObject",
+      "cardinality": "0..*",
+      "definition": "The standardized-form boundary object that carries the handoff (PO form, ticket, contract template)."
+    },
+    {
+      "name": "receiverCriterion",
+      "kind": "datatype",
+      "domain": "Handoff",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "What the receiving function requires of what it receives, in its own terms, e.g. 'supplier qualified at part-revision grain before first PO'. A definition, not a target, and the basis on which 'doing better for other departments' becomes checkable."
+    },
+    {
+      "name": "formality",
+      "kind": "datatype",
+      "domain": "Handoff",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "formal (designed, documented interface) | informal (observed practice with no designed interface)."
+    },
+    {
+      "name": "transferOf",
+      "kind": "object",
+      "domain": "Transfer",
+      "range": "Handoff | Decision | Commitment",
+      "cardinality": "1..1",
+      "definition": "The standing handoff, specific decision or commitment carrying this element. Union range stored null; enforced by SHACL-SPARQL."
+    },
+    {
+      "name": "transferTo",
+      "kind": "object",
+      "domain": "Transfer",
+      "range": "BusinessFunction",
+      "cardinality": "0..1",
+      "definition": "The receiving function, e.g. obligation borne by Operations, cost borne by Logistics. Implied by handoffTo on a Handoff; required when transferOf is a Decision or Commitment."
+    },
+    {
+      "name": "carriesKind",
+      "kind": "object",
+      "domain": "Transfer",
+      "range": "ControlledTerm",
+      "cardinality": "1..1",
+      "definition": "Term in scheme carried-kind: work, material, information, obligation, authority, resource (substance handed over), or cost, risk (consequence allocated)."
+    },
+    {
+      "name": "passesAt",
+      "kind": "datatype",
+      "domain": "Transfer",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The milestone at which this element passes, e.g. 'contract execution', 'goods receipt'. Risk and cost may pass at different points, as under the Incoterms C-rules."
+    },
+    {
+      "name": "acceptanceStatus",
+      "kind": "datatype",
+      "domain": "Transfer",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "accepted | acknowledged | disputed | unacknowledged. 'Asserted by the sender' and 'accepted by the receiver' are different events; the gap between them is the finding."
+    },
+    {
+      "name": "acceptedBy",
+      "kind": "object",
+      "domain": "Transfer",
+      "range": "hr:Person",
+      "cardinality": "0..1",
+      "definition": "The person in the receiving function who accepted. Required when acceptanceStatus = accepted."
+    },
+    {
+      "name": "transferBasis",
+      "kind": "datatype",
+      "domain": "Transfer",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "designed | contractual | observedPractice. 'claimed' is deliberately not a value: alleged transfers are EffectClaims."
+    },
+    {
+      "name": "governedBy",
+      "kind": "object",
+      "domain": "Transfer",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "The instrument that fixes the transfer: lgl:Clause, log:Incoterm, cmp:Policy, or a finance cost-allocation rule node. Open cross-module range (null slot)."
+    },
+    {
+      "name": "refersToItem",
+      "kind": "object",
+      "domain": "Transfer",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "The registered item carried, held in the module that owns it: cmp:Risk, lgl:Obligation, fin:CostCenter, log:InventoryItem. Open cross-module range (null slot); xfn links into each function's vocabulary instead of duplicating it."
+    },
+    {
+      "name": "holder",
+      "kind": "object",
+      "domain": "AccountabilityAssertion",
+      "range": "Position",
+      "cardinality": "1..1",
+      "definition": "The seat that holds, owes or is evaluated on this. Always a Position, never a Person."
+    },
+    {
+      "name": "basis",
+      "kind": "datatype",
+      "domain": "AccountabilityAssertion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "formal (conferred by an instrument; grantedUnder required) | attested (observed practice; evidenceRef required)."
+    },
+    {
+      "name": "grantedUnder",
+      "kind": "object",
+      "domain": "AccountabilityAssertion",
+      "range": "cmp:Policy",
+      "cardinality": "0..1",
+      "definition": "The governing instrument, e.g. the Delegation-of-Authority policy cmp:Policy/POL-03. Required when basis = formal."
+    },
+    {
+      "name": "evidenceRef",
+      "kind": "object",
+      "domain": "AccountabilityAssertion",
+      "range": "EvidenceItem",
+      "cardinality": "0..*",
+      "definition": "Evidence of observed practice. Required when basis = attested."
+    },
+    {
+      "name": "answerableTo",
+      "kind": "object",
+      "domain": "AccountabilityAssertion",
+      "range": "Position",
+      "cardinality": "0..1",
+      "definition": "The forum or principal seat. Absent only for the root seat."
+    },
+    {
+      "name": "overDomain",
+      "kind": "object",
+      "domain": "DecisionRight",
+      "range": "DecisionDomain",
+      "cardinality": "1..1",
+      "definition": "The lever the right applies to."
+    },
+    {
+      "name": "rightKind",
+      "kind": "datatype",
+      "domain": "DecisionRight",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "initiate | ratify | veto | implement | monitor | consult | inform: the Fama & Jensen decision process plus participation rights."
+    },
+    {
+      "name": "delegatedFrom",
+      "kind": "object",
+      "domain": "DecisionRight",
+      "range": "DecisionRight",
+      "cardinality": "0..1",
+      "definition": "The right this was delegated from. Chains must end at a formal root right held by the root seat."
+    },
+    {
+      "name": "authorityLimit",
+      "kind": "datatype",
+      "domain": "DecisionRight",
+      "datatype": "xsd:decimal",
+      "cardinality": "0..1",
+      "definition": "Monetary ceiling per decision. A constitutive rule of authority, not a measured value; same standing as lgl:contractValue."
+    },
+    {
+      "name": "authorityCurrency",
+      "kind": "datatype",
+      "domain": "DecisionRight",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "ISO 4217 code for authorityLimit."
+    },
+    {
+      "name": "scopedTo",
+      "kind": "object",
+      "domain": "DecisionRight",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "Scope entities (hr:OrgUnit, lgl:Jurisdiction, fin:CostCenter, log:Route); open range. Values of the same class are OR-ed and different classes are AND-ed. None = enterprise-wide."
+    },
+    {
+      "name": "answersFor",
+      "kind": "object",
+      "domain": "Answerability",
+      "range": "null",
+      "cardinality": "1..1",
+      "definition": "The object the seat renders account for: Outcome, cmp:Risk, cmp:Control, fin:CostCenter, lgl:Contract, BoundaryObject. Open range, enforced by SHACL. Never a metric: seats answer for outcomes and are evaluated on metrics."
+    },
+    {
+      "name": "accountabilityKind",
+      "kind": "datatype",
+      "domain": "Answerability",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "outcome-owner | decision-accountable | cost-center | revenue-center | profit-center | investment-center | risk-owner | control-owner | definition-steward."
+    },
+    {
+      "name": "bindsMetric",
+      "kind": "object",
+      "domain": "MetricBinding",
+      "range": "MetricDefinition",
+      "cardinality": "1..1",
+      "definition": "The metric the seat is evaluated on or reports. The measurement layer resolves which version is live in bindingPeriod. No values, targets or weights are held."
+    },
+    {
+      "name": "bindingPurpose",
+      "kind": "datatype",
+      "domain": "MetricBinding",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "evaluated-on (on the seat's scorecard) | reports-on (an information obligation up a channel; the attenuated signal made explicit)."
+    },
+    {
+      "name": "bindingPeriod",
+      "kind": "object",
+      "domain": "MetricBinding",
+      "range": "fin:FiscalPeriod",
+      "cardinality": "0..1",
+      "definition": "The evaluation or reporting period. Reuses Finance's calendar so scorecard and P&L periods line up."
+    },
+    {
+      "name": "domainCode",
+      "kind": "datatype",
+      "domain": "DecisionDomain",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Stable code; also the IRI local id (xfn:DecisionDomain/SUPPLIER-SELECTION-DM)."
+    },
+    {
+      "name": "domainOwner",
+      "kind": "object",
+      "domain": "DecisionDomain",
+      "range": "BusinessFunction",
+      "cardinality": "1..1",
+      "definition": "The one function that owns the lever. A single owner is what makes cross-boundary exposure detectable."
+    },
+    {
+      "name": "actsOnClass",
+      "kind": "datatype",
+      "domain": "DecisionDomain",
+      "datatype": "xsd:anyURI",
+      "cardinality": "1..1",
+      "definition": "IRI of the entity class the decisions select or set (fin:Vendor, fin:Budget, lgl:Contract). A literal because kg_edges cannot target classes. Single-valued: split a domain rather than list several classes."
+    },
+    {
+      "name": "gapRight",
+      "kind": "object",
+      "domain": "ExposureGap",
+      "range": "DecisionRight",
+      "cardinality": "1..1",
+      "definition": "Decider side: the in-force ratify or veto right."
+    },
+    {
+      "name": "gapAnswerability",
+      "kind": "object",
+      "domain": "ExposureGap",
+      "range": "Answerability",
+      "cardinality": "1..1",
+      "definition": "Bearer side: another seat's answerability for the outcome of the claimed effect."
+    },
+    {
+      "name": "gapClaim",
+      "kind": "object",
+      "domain": "ExposureGap",
+      "range": "EffectClaim",
+      "cardinality": "1..1",
+      "definition": "The claim the gap is conditional on. Withdraw the claim and the gap closes on re-derivation."
+    },
+    {
+      "name": "convergesAt",
+      "kind": "object",
+      "domain": "ExposureGap",
+      "range": "Position",
+      "cardinality": "0..1",
+      "definition": "The lowest common superior of decider and bearer over in-force solid lines: the first seat whose chain contains both ends. Absent = no common root."
+    },
+    {
+      "name": "sharedForum",
+      "kind": "object",
+      "domain": "ExposureGap",
+      "range": "Position",
+      "cardinality": "0..*",
+      "definition": "Collective seats that both decider and bearer sit on (via seatOn): lateral convergence points below the common superior."
+    },
+    {
+      "name": "derivationRule",
+      "kind": "datatype",
+      "domain": "ExposureGap",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Versioned id of the published derivation, e.g. xfn:rule/exposure-gap@1.0."
+    },
+    {
+      "name": "derivedAt",
+      "kind": "datatype",
+      "domain": "ExposureGap",
+      "datatype": "xsd:dateTime",
+      "cardinality": "1..1",
+      "definition": "Derivation instant; also the as-of time for validity evaluation."
+    },
+    {
+      "name": "gapStatus",
+      "kind": "datatype",
+      "domain": "ExposureGap",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "open | closed. Set only by re-derivation. The gap closes when any premise lapses, including when the decider gains its own answerability for the outcome."
+    },
+    {
+      "name": "decisionId",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Stable id; also the IRI local id (xfn:Decision/PROC-2025-014)."
+    },
+    {
+      "name": "decisionStatement",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "What was decided, stated without reference to effects, e.g. 'replace primary supplier of component C'."
+    },
+    {
+      "name": "decisionKind",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "ControlledTerm",
+      "cardinality": "1..1",
+      "definition": "Term in scheme decision-kind, e.g. supplier-switch, supplier-award, consolidation, specification-change, payment-terms-change, budget-cut, phasing-shift, hiring-freeze, sourcing-model-change, capital-allocation, accounting-treatment, cost-allocation-rule, concession, roadmap-deferral, deprecation, risk-acceptance, exception-action, regulatory-interpretation. Replaces per-function decision subclasses."
+    },
+    {
+      "name": "inDecisionDomain",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "DecisionDomain",
+      "cardinality": "0..1",
+      "definition": "The lever this decision instance belongs to."
+    },
+    {
+      "name": "exercisedRight",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "DecisionRight",
+      "cardinality": "0..1",
+      "definition": "The right under which the decision was taken. Makes limit, scope and validity at the decision date checkable. A decision without it is reportable as unattributed authority."
+    },
+    {
+      "name": "decidedBy",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "hr:Person",
+      "cardinality": "1..1",
+      "definition": "The accountable individual. Committees are recorded via decidedInCapacityOf a collective Position."
+    },
+    {
+      "name": "decidedInCapacityOf",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "Position",
+      "cardinality": "0..1",
+      "definition": "The seat in which the person decided. Answers 'who was CPO when this was ratified'."
+    },
+    {
+      "name": "decidingFunction",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "BusinessFunction",
+      "cardinality": "1..1",
+      "definition": "The function on whose authority the decision was made."
+    },
+    {
+      "name": "decidedOn",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:date",
+      "cardinality": "1..1",
+      "definition": "Date the decision was taken; the proposed date while status = proposed."
+    },
+    {
+      "name": "effectiveFrom",
+      "kind": "datatype",
+      "domain": "null",
+      "datatype": "xsd:date",
+      "cardinality": "0..1",
+      "definition": "Shared property, no rdfs:domain. On a Decision: the date it started landing on the business (e.g. first PO at new terms); lag zero for every claim about it, often months after decidedOn. On a MetricVersion: the first date whose observations bind to it, required once published."
+    },
+    {
+      "name": "decisionStatus",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "proposed | approved | enacted | reversed | withdrawn. Proposed decisions let ex-ante claims attach to options a CEO has not yet taken. This is the status of the act, and it is excluded from the content digest."
+    },
+    {
+      "name": "intervenesOn",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "Variable",
+      "cardinality": "1..*",
+      "definition": "The variables the decision sets directly: the do() target. Consequences are never listed here, including the one the decider is scored on; those are EffectClaims."
+    },
+    {
+      "name": "baselineState",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "State of the target variables without the decision, i.e. the contrast baseline, e.g. 'V-2305 under ACME-CTR-0017'."
+    },
+    {
+      "name": "interventionState",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The state the decision sets, e.g. 'V-2688 under ACME-CTR-0101'."
+    },
+    {
+      "name": "changesObject",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "BoundaryObject",
+      "cardinality": "0..*",
+      "definition": "Boundary objects the decision changes: the unit of analysis, on which other functions hold perspectives."
+    },
+    {
+      "name": "involvesEntity",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "Module records the decision concerns: fin:Vendor, lgl:Contract, log:PurchaseOrder, fin:Budget, fin:CostCenter. Open cross-module range."
+    },
+    {
+      "name": "consultedFunction",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "BusinessFunction",
+      "cardinality": "0..*",
+      "definition": "Functions consulted before deciding. Compared with the impactedFunction of claims about the decision, this is the Ashby variety check."
+    },
+    {
+      "name": "consultationComplete",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:boolean",
+      "cardinality": "0..1",
+      "definition": "True = consultedFunction is exhaustive, so a function's absence means it was not consulted (closed world for this list only). Absent = unknown."
+    },
+    {
+      "name": "statedRationale",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "The reasoning given at the time, in the decider's words, captured before hindsight."
+    },
+    {
+      "name": "statedBenefitMetric",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "MetricDefinition",
+      "cardinality": "0..*",
+      "definition": "The metrics the decision was justified by. Recording what a decision was scored on is the precondition for asking what it was not scored on."
+    },
+    {
+      "name": "declaredScope",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "local | cross-functional | enterprise: the scope the decider claimed at the time. The gap between a declared 'local' and a cross-functional landing is observable."
+    },
+    {
+      "name": "reversalLeadTimeDays",
+      "kind": "datatype",
+      "domain": "Decision",
+      "datatype": "xsd:integer",
+      "cardinality": "0..1",
+      "definition": "The decider's stated estimate of days to undo the decision, including requalification. A stated planning parameter, not a measurement."
+    },
+    {
+      "name": "supersedesDecision",
+      "kind": "object",
+      "domain": "Decision",
+      "range": "Decision",
+      "cardinality": "0..1",
+      "definition": "A prior decision this one reverses or replaces."
+    },
+    {
+      "name": "commitmentKind",
+      "kind": "object",
+      "domain": "Commitment",
+      "range": "ControlledTerm",
+      "cardinality": "1..1",
+      "definition": "Term in scheme commitment-kind: minimum-volume, exclusivity, rebate-tier, spend-commitment, service-entitlement, delivery-promise, roadmap-promise, price-concession, term-concession."
+    },
+    {
+      "name": "commitmentStatement",
+      "kind": "datatype",
+      "domain": "Commitment",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The commitment in the words given to the counterparty."
+    },
+    {
+      "name": "madeUnderDecision",
+      "kind": "object",
+      "domain": "Commitment",
+      "range": "Decision",
+      "cardinality": "0..1",
+      "definition": "The decision that created the commitment."
+    },
+    {
+      "name": "commitmentCounterparty",
+      "kind": "object",
+      "domain": "Commitment",
+      "range": "LegalEntity | lgl:Party | fin:Vendor",
+      "cardinality": "0..1",
+      "definition": "The party the commitment is made to or received from. Union range stored null; enforced by SHACL."
+    },
+    {
+      "name": "commitmentDirection",
+      "kind": "datatype",
+      "domain": "Commitment",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "given (Acme owes it) | received (the counterparty owes it)."
+    },
+    {
+      "name": "isContractual",
+      "kind": "datatype",
+      "domain": "Commitment",
+      "datatype": "xsd:boolean",
+      "cardinality": "1..1",
+      "definition": "True only where evidenced in an executed lgl:Contract. How often it is false is the point of the field."
+    },
+    {
+      "name": "capturedIn",
+      "kind": "datatype",
+      "domain": "Commitment",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "contract | order-form | price-file | email | slide | verbal | tool-configuration | none. Where the commitment is actually visible to the functions that must honour it."
+    },
+    {
+      "name": "evidencedIn",
+      "kind": "object",
+      "domain": "Commitment",
+      "range": "lgl:Contract | lgl:Clause",
+      "cardinality": "0..*",
+      "definition": "The contract or clause evidencing the commitment. Absent wherever isContractual is false."
+    },
+    {
+      "name": "bindsFrom",
+      "kind": "datatype",
+      "domain": "Commitment",
+      "datatype": "xsd:date",
+      "cardinality": "1..1",
+      "definition": "Date it begins to bind."
+    },
+    {
+      "name": "bindsUntil",
+      "kind": "datatype",
+      "domain": "Commitment",
+      "datatype": "xsd:date",
+      "cardinality": "0..1",
+      "definition": "Date it ceases to bind. Its absence is itself the exposure."
+    },
+    {
+      "name": "exitTerms",
+      "kind": "datatype",
+      "domain": "Commitment",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "Stated notice period, penalty or exit-cost basis: the switching cost that makes a decision practically irreversible. A term, not a measurement."
+    },
+    {
+      "name": "judgedBy",
+      "kind": "object",
+      "domain": "Commitment",
+      "range": "MetricDefinition",
+      "cardinality": "0..*",
+      "definition": "The metric definition(s) used to judge performance against the commitment, e.g. an SLA's response metric, whose clock convention is in the version."
+    },
+    {
+      "name": "deviationInContract",
+      "kind": "object",
+      "domain": "TermDeviation",
+      "range": "lgl:Contract",
+      "cardinality": "1..1",
+      "definition": "The contract in which the deviation occurs. Always present, including for absences, which is what makes an absence queryable."
+    },
+    {
+      "name": "termKind",
+      "kind": "datatype",
+      "domain": "TermDeviation",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "indemnity | liability-cap | warranty | termination-right | payment-terms | sla | data-processing | other. The typed discriminator that the lgl:Clause kind is supposed to be and, in the seed, is not."
+    },
+    {
+      "name": "deviationDirection",
+      "kind": "datatype",
+      "domain": "TermDeviation",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "more-favourable | equivalent | less-favourable | absent."
+    },
+    {
+      "name": "deviatingClause",
+      "kind": "object",
+      "domain": "TermDeviation",
+      "range": "lgl:Clause",
+      "cardinality": "0..1",
+      "definition": "The clause that deviates. Null when direction is 'absent'."
+    },
+    {
+      "name": "benchmarkContract",
+      "kind": "object",
+      "domain": "TermDeviation",
+      "range": "lgl:Contract",
+      "cardinality": "0..1",
+      "definition": "The contract compared against, e.g. the displaced supplier's contract. Together with the switch Decision, this makes 'we gave up the indemnity we used to have' a query."
+    },
+    {
+      "name": "benchmarkClause",
+      "kind": "object",
+      "domain": "TermDeviation",
+      "range": "lgl:Clause",
+      "cardinality": "0..1",
+      "definition": "The clause in the benchmark contract that the deviation is measured against."
+    },
+    {
+      "name": "standardReference",
+      "kind": "datatype",
+      "domain": "TermDeviation",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "The internal playbook position or policy that the term fell short of, cited verbatim with its version."
+    },
+    {
+      "name": "deviationApprovedBy",
+      "kind": "object",
+      "domain": "TermDeviation",
+      "range": "hr:Person",
+      "cardinality": "0..1",
+      "definition": "The person who approved the deviation. Its absence, where approval happened in a thread, is the highest-value query on this class."
+    },
+    {
+      "name": "deviationApprovedOn",
+      "kind": "datatype",
+      "domain": "TermDeviation",
+      "datatype": "xsd:date",
+      "cardinality": "0..1",
+      "definition": "Approval date. A date later than the contract's effective date means the approval was retrospective."
+    },
+    {
+      "name": "variableDefinition",
+      "kind": "datatype",
+      "domain": "Variable",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "What state or quantity this is, independent of any metric that measures it."
+    },
+    {
+      "name": "valueType",
+      "kind": "datatype",
+      "domain": "Variable",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "binary | categorical | ordinal | count | rate | proportion | continuous. Needed to read sign: a categorical cause has no sign without a contrast."
+    },
+    {
+      "name": "outcomeStatement",
+      "kind": "datatype",
+      "domain": "Outcome",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The outcome as a desirable state, with no numbers, e.g. 'few customer contacts caused by product defects'. A material change of meaning creates a new Outcome that revises this one."
+    },
+    {
+      "name": "statedOver",
+      "kind": "object",
+      "domain": "Outcome",
+      "range": "Variable",
+      "cardinality": "1..1",
+      "definition": "The neutral variable whose state the outcome is about. This is how propagation maps a claimed sign on a Variable to good or bad for a function."
+    },
+    {
+      "name": "preferredDirection",
+      "kind": "datatype",
+      "domain": "Outcome",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "increase | decrease | maintain | within-band. Part of the outcome's meaning. Band limits and targets belong to the incentive layer."
+    },
+    {
+      "name": "inRemitOf",
+      "kind": "object",
+      "domain": "Outcome",
+      "range": "BusinessFunction",
+      "cardinality": "1..*",
+      "definition": "The function(s) whose remit includes the outcome: exactly one for a functional outcome; several, or 'enterprise', for a shared one."
+    },
+    {
+      "name": "hasConstituent",
+      "kind": "object",
+      "domain": "Outcome",
+      "range": "Outcome",
+      "cardinality": "0..*",
+      "definition": "Definitional decomposition: by definition the outcome is made up of these. Example: total cost of supply = unit cost + expediting cost + cost of poor quality + uncovered liability. Acyclic, unweighted, never causal. Two or more constituents spanning two or more remits make an outcome shared."
+    },
+    {
+      "name": "metricCode",
+      "kind": "datatype",
+      "domain": "MetricDefinition",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Stable catalogue identifier (MET-nnn). Never reused or reassigned."
+    },
+    {
+      "name": "metricName",
+      "kind": "datatype",
+      "domain": "MetricDefinition",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The name as spoken in meetings, e.g. 'OTIF'. Deliberately not unique across definitions."
+    },
+    {
+      "name": "definedByFunction",
+      "kind": "object",
+      "domain": "MetricDefinition",
+      "range": "BusinessFunction",
+      "cardinality": "1..1",
+      "definition": "The function whose definition this is and which reports it. Two functions defining 'availability' produce two MetricDefinitions."
+    },
+    {
+      "name": "reportedTo",
+      "kind": "object",
+      "domain": "MetricDefinition",
+      "range": "Position",
+      "cardinality": "0..*",
+      "definition": "The seat whose forum receives the metric: the channel through which it is raised to the C-suite."
+    },
+    {
+      "name": "versionOf",
+      "kind": "object",
+      "domain": "MetricVersion",
+      "range": "MetricDefinition",
+      "cardinality": "1..1",
+      "definition": "The catalogue metric this version operationalises."
+    },
+    {
+      "name": "versionLabel",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "MAJOR.MINOR. MAJOR increments exactly on a break in series."
+    },
+    {
+      "name": "definitionText",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Plain-language statement of what one value means."
+    },
+    {
+      "name": "populationClass",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:anyURI",
+      "cardinality": "1..1",
+      "definition": "CURIE of the KG class whose instances are the units of observation (fin:Vendor, log:Shipment)."
+    },
+    {
+      "name": "inclusionCriteria",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Membership rule over the population, including every exclusion, e.g. 'excludes customer-caused delays, lines re-promised by agreement, intercompany'. Mandatory text, because exclusions move metrics further than performance does."
+    },
+    {
+      "name": "populationPerspective",
+      "kind": "object",
+      "domain": "MetricVersion",
+      "range": "Perspective",
+      "cardinality": "0..1",
+      "definition": "The function's perspective whose criterion defines the population, e.g. Finance's 'vendor'. Pins whose definition the metric uses, so two 'vendor' metrics over different populations read as two metrics, not as conflicting numbers."
+    },
+    {
+      "name": "computationDescription",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Formula in words or notation over ontology terms. Never executable code: implementations live in layer 3, keyed by this version's IRI."
+    },
+    {
+      "name": "baselineDescription",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "What 'before' means for change-against-baseline metrics (savings, reductions), including the baseline method: last-paid price, budget, should-cost, supplier opening ask. Required for such metrics."
+    },
+    {
+      "name": "recognitionEvent",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Business event at which a contribution enters the metric: PO issue at new price, goods receipt, ticket creation, contract signature. Fixes the metric's time horizon."
+    },
+    {
+      "name": "measurementBoundary",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "Where the clock starts and stops, and what pauses it, for duration and timeliness metrics. Examples: 'PO issue to supplier ship-ready; excludes transit and inspection'; 'against generation-N promise'."
+    },
+    {
+      "name": "numerator",
+      "kind": "object",
+      "domain": "MetricVersion",
+      "range": "MetricVersion",
+      "cardinality": "0..1",
+      "definition": "Component version above the line of a ratio."
+    },
+    {
+      "name": "denominator",
+      "kind": "object",
+      "domain": "MetricVersion",
+      "range": "MetricVersion",
+      "cardinality": "0..1",
+      "definition": "Component version below the line of a ratio."
+    },
+    {
+      "name": "derivedFrom",
+      "kind": "object",
+      "domain": "MetricVersion",
+      "range": "MetricVersion",
+      "cardinality": "0..*",
+      "definition": "Other component versions that a derived, non-ratio metric combines. Acyclic."
+    },
+    {
+      "name": "unitIri",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:anyURI",
+      "cardinality": "1..1",
+      "definition": "QUDT unit IRI in which every bound value must be expressed. For money, the ISO 4217 currency goes in currencyCode."
+    },
+    {
+      "name": "currencyCode",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "ISO 4217 code for monetary metrics, and with it the FX basis."
+    },
+    {
+      "name": "scaleType",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "nominal | ordinal | interval | ratio (Stevens). Constrains which arithmetic is meaningful: no sums or products of ordinal risk scores."
+    },
+    {
+      "name": "accumulationType",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "stock | flow | auxiliary (XMILE). The binding contract for system-dynamics variables."
+    },
+    {
+      "name": "valueDatatype",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:anyURI",
+      "cardinality": "1..1",
+      "definition": "XSD datatype IRI of every bound value (xsd:decimal)."
+    },
+    {
+      "name": "hasDimensionBinding",
+      "kind": "object",
+      "domain": "MetricVersion",
+      "range": "DimensionBinding",
+      "cardinality": "1..*",
+      "definition": "The grain: one binding per dimension indexing an observation."
+    },
+    {
+      "name": "supersedesVersion",
+      "kind": "object",
+      "domain": "MetricVersion",
+      "range": "MetricVersion",
+      "cardinality": "0..1",
+      "definition": "The version this one replaces for new observations."
+    },
+    {
+      "name": "comparability",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "comparable | comparable-after-restatement | break-in-series. Required whenever supersedesVersion is present. Makes mid-year redefinition visible instead of silent."
+    },
+    {
+      "name": "lifecycleStatus",
+      "kind": "datatype",
+      "domain": "MetricVersion",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "draft | published | deprecated | retired. Only published and deprecated versions may receive bound values."
+    },
+    {
+      "name": "onDimension",
+      "kind": "object",
+      "domain": "DimensionBinding",
+      "range": "GrainDimension",
+      "cardinality": "1..1",
+      "definition": "The conformed dimension this binding indexes."
+    },
+    {
+      "name": "rollupRule",
+      "kind": "datatype",
+      "domain": "DimensionBinding",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "sum | recompute-from-components | period-end | period-start | time-weighted-mean | minimum | maximum | not-derivable. The algebra permitted along this dimension; declared here, never executed here."
+    },
+    {
+      "name": "dimensionOrder",
+      "kind": "datatype",
+      "domain": "DimensionBinding",
+      "datatype": "xsd:integer",
+      "cardinality": "1..1",
+      "definition": "1-based position of this coordinate in the canonical observation key. Unique within a version."
+    },
+    {
+      "name": "memberClass",
+      "kind": "datatype",
+      "domain": "GrainDimension",
+      "datatype": "xsd:anyURI",
+      "cardinality": "0..1",
+      "definition": "CURIE of the KG class whose instances are coordinates (hr:OrgUnit, fin:Vendor, xfn:LegalEntity, fin:FiscalPeriod, log:InventoryItem)."
+    },
+    {
+      "name": "rollupPredicate",
+      "kind": "datatype",
+      "domain": "GrainDimension",
+      "datatype": "xsd:anyURI",
+      "cardinality": "0..1",
+      "definition": "CURIE of the KG predicate from a member to its parent member (hr:parentUnit, xfn:parentEntity): the hierarchy propagation walks."
+    },
+    {
+      "name": "timeUnit",
+      "kind": "datatype",
+      "domain": "GrainDimension",
+      "datatype": "xsd:anyURI",
+      "cardinality": "0..1",
+      "definition": "OWL-Time unit IRI for calendar dimensions with no KG members (time:unitWeek)."
+    },
+    {
+      "name": "isTemporal",
+      "kind": "datatype",
+      "domain": "GrainDimension",
+      "datatype": "xsd:boolean",
+      "cardinality": "1..1",
+      "definition": "True for time dimensions."
+    },
+    {
+      "name": "statement",
+      "kind": "datatype",
+      "domain": "Claim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The claim verbatim, in its author's words. Where the structured encoding disagrees, the statement is the record and the encoding is wrong."
+    },
+    {
+      "name": "encodedBy",
+      "kind": "object",
+      "domain": "Claim",
+      "range": "hr:Person | AnalyticAgent",
+      "cardinality": "0..1",
+      "definition": "Who translated the statement into structured fields, when this was not the author. The claim stays draft until the author confirms the encoding."
+    },
+    {
+      "name": "citesEvidence",
+      "kind": "object",
+      "domain": "Claim",
+      "range": "EvidenceItem",
+      "cardinality": "0..*",
+      "definition": "Evidence the author relies on. Only the author cites evidence for their own claim. Others bring evidence through their own appraisals, so every evidence link is attributable."
+    },
+    {
+      "name": "statedCredence",
+      "kind": "datatype",
+      "domain": "Claim",
+      "datatype": "xsd:decimal",
+      "cardinality": "0..1",
+      "definition": "The author's own stated probability (0-1) that the claim holds. Quoted; never computed, adjusted, defaulted or aggregated."
+    },
+    {
+      "name": "statedLikelihoodTerm",
+      "kind": "datatype",
+      "domain": "Claim",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "The verbal likelihood the author used, from the IPCC calibrated scale (virtually-certain ... exceptionally-unlikely). Stored as said."
+    },
+    {
+      "name": "conditionalOnModel",
+      "kind": "datatype",
+      "domain": "Claim",
+      "datatype": "xsd:anyURI",
+      "cardinality": "0..1",
+      "definition": "Identifier of the external, versioned model (DAG, SCM, simulation) whose assumptions the claim depends on. Opaque to the ontology. Mandatory for claims authored by an AnalyticAgent."
+    },
+    {
+      "name": "claimedCause",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "Variable",
+      "cardinality": "1..1",
+      "definition": "The variable whose change is claimed to produce the effect. When viaDecision is given, it must be one of that decision's intervenesOn variables."
+    },
+    {
+      "name": "claimedEffect",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "Variable",
+      "cardinality": "1..1",
+      "definition": "The variable claimed to change as a result. Must differ from claimedCause."
+    },
+    {
+      "name": "viaDecision",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "Decision",
+      "cardinality": "0..1",
+      "definition": "The actual or proposed decision the claim is about. It supplies the do() contrast and lag zero. All claims that share it are claimed effects of one decision; this shared node is 'the arrow no single system holds'."
+    },
+    {
+      "name": "causeContrast",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "The baseline-to-alternative change in the cause, when no decision fixes it, e.g. 'per 60 additional days of payment terms'."
+    },
+    {
+      "name": "claimedSign",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Direction of change in the effect variable: increase | decrease | no-effect | non-monotonic | unknown-direction. Direction, not valence; valence comes from the Outcome stated over the variable. 'no-effect' makes exclusions first-class and owned."
+    },
+    {
+      "name": "dependencyKind",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The Pearl rung the claimant asserts: associational | interventional | counterfactual | definitional. Records what is claimed, not what the evidence supports."
+    },
+    {
+      "name": "orientation",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "prospective (a forecast made before the cause changes) | retrospective (an explanation made after) | standing (a general dependency). A prospective claim must predate the decision's effectiveFrom."
+    },
+    {
+      "name": "magnitudeBand",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "immaterial | minor | material | severe, relative to the effect variable's normal range, as the claimant states it. Deliberately coarse and ordinal so it cannot be summed."
+    },
+    {
+      "name": "magnitudeStatement",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "The claimant's own words on magnitude, e.g. '+15-45% tickets', 'roughly triple'. A quotation for layer 2 to parse, never a value to aggregate."
+    },
+    {
+      "name": "onsetLagMin",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:duration",
+      "cardinality": "0..1",
+      "definition": "Shortest claimed delay from the cause change to effect onset, as a single-unit ISO 8601 duration (P3M)."
+    },
+    {
+      "name": "onsetLagMax",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:duration",
+      "cardinality": "0..1",
+      "definition": "Longest claimed delay, in the same unit. The lag is exactly why no single function connects the two ends."
+    },
+    {
+      "name": "temporalProfile",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "step | transient | accumulating | decaying | oscillating | unknown."
+    },
+    {
+      "name": "claimedMechanism",
+      "kind": "datatype",
+      "domain": "EffectClaim",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "The stated 'because', in prose. A claim with no mechanism cannot be falsified; SHACL warns."
+    },
+    {
+      "name": "claimedMediator",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "Variable",
+      "cardinality": "0..*",
+      "definition": "Variables the claimant says the effect passes through. A hypothesis for layer 2, not structure the ontology uses."
+    },
+    {
+      "name": "effectModifier",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "Variable",
+      "cardinality": "0..*",
+      "definition": "Variables the claimant says the size or sign of the effect depends on."
+    },
+    {
+      "name": "allegedPathway",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "Handoff",
+      "cardinality": "0..*",
+      "definition": "Standing handoffs through which the claimant says the effect travels. A structural hypothesis, not an asserted edge."
+    },
+    {
+      "name": "allegedKind",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "ControlledTerm",
+      "cardinality": "0..*",
+      "definition": "What the claimant says crosses the boundary (carried-kind terms: work, cost, risk ...). Uses the same vocabulary as Transfer, so structure and allegation can be compared directly."
+    },
+    {
+      "name": "scopeEntity",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "Entities delimiting where the claim is asserted to hold: product, route, vendor, region, fiscal period. Open cross-module range."
+    },
+    {
+      "name": "originFunction",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "BusinessFunction",
+      "cardinality": "0..*",
+      "definition": "The function(s) the claimant says control the cause. This is the claimant's framing, recorded on the claim."
+    },
+    {
+      "name": "impactedFunction",
+      "kind": "object",
+      "domain": "EffectClaim",
+      "range": "BusinessFunction",
+      "cardinality": "1..*",
+      "definition": "The function(s) the claimant says bear the effect; 'enterprise' = the whole business. This is the load-bearing edge of the topology that propagation walks. It sits on the claim so that decision-to-bearers is depth 2."
+    },
+    {
+      "name": "proxyMetric",
+      "kind": "object",
+      "domain": "ProxyClaim",
+      "range": "MetricDefinition",
+      "cardinality": "1..1",
+      "definition": "The metric claimed to indicate the outcome."
+    },
+    {
+      "name": "forOutcome",
+      "kind": "object",
+      "domain": "ProxyClaim",
+      "range": "Outcome",
+      "cardinality": "1..1",
+      "definition": "The outcome the metric is claimed to indicate."
+    },
+    {
+      "name": "operationalQuestion",
+      "kind": "datatype",
+      "domain": "ProxyClaim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The question the metric actually answers (GQM). Its gap from the outcome statement is where Goodhart lives."
+    },
+    {
+      "name": "indicatedDirection",
+      "kind": "datatype",
+      "domain": "ProxyClaim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "increase | decrease | within-band | non-monotonic: the movement of the metric that is claimed to signal progress on this outcome. It belongs to the claim, never to the metric."
+    },
+    {
+      "name": "validityCondition",
+      "kind": "datatype",
+      "domain": "ProxyClaim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Ceteris-paribus conditions under which the metric is claimed to track the outcome, e.g. 'like-for-like specification, quality tier, delivery terms and risk allocation incl. indemnity'. Outside them the claim asserts nothing."
+    },
+    {
+      "name": "coversOutcome",
+      "kind": "object",
+      "domain": "ProxyClaim",
+      "range": "Outcome",
+      "cardinality": "0..*",
+      "definition": "Constituents of forOutcome the metric is claimed to capture. Constituents that no proxy covers are the unmeasured tasks."
+    },
+    {
+      "name": "assessedVersion",
+      "kind": "object",
+      "domain": "ProxyClaim",
+      "range": "MetricVersion",
+      "cardinality": "0..*",
+      "definition": "Versions against which the claim's evidence was gathered. A proxy not assessed against the live version is stale."
+    },
+    {
+      "name": "divergenceOf",
+      "kind": "object",
+      "domain": "DivergenceClaim",
+      "range": "ProxyClaim",
+      "cardinality": "1..1",
+      "definition": "The proxy claim this divergence qualifies."
+    },
+    {
+      "name": "divergenceMode",
+      "kind": "object",
+      "domain": "DivergenceClaim",
+      "range": "ControlledTerm",
+      "cardinality": "1..*",
+      "definition": "Terms in scheme divergence-mode: regressional, extremal, causal, adversarial (Manheim & Garrabrant); multitask-omission (Holmstrom & Milgrom); externality; horizon-mismatch (Forrester)."
+    },
+    {
+      "name": "triggerCondition",
+      "kind": "datatype",
+      "domain": "DivergenceClaim",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The behaviour or regime under which metric and outcome come apart, e.g. 'saving achieved by a lower quality tier or weaker terms', or 're-promising against generation-N dates'."
+    },
+    {
+      "name": "outcomeAtRisk",
+      "kind": "object",
+      "domain": "DivergenceClaim",
+      "range": "Outcome",
+      "cardinality": "0..*",
+      "definition": "Outcomes, often in other remits, that can deteriorate while the metric improves."
+    },
+    {
+      "name": "observableVia",
+      "kind": "object",
+      "domain": "DivergenceClaim",
+      "range": "MetricDefinition",
+      "cardinality": "0..*",
+      "definition": "Counter-metrics whose movement would reveal the divergence (paired indicators). SHACL warns if none."
+    },
+    {
+      "name": "mechanismClaim",
+      "kind": "object",
+      "domain": "DivergenceClaim",
+      "range": "EffectClaim",
+      "cardinality": "0..*",
+      "definition": "The effect claims describing the mechanism. Referenced here, never asserted."
+    },
+    {
+      "name": "forecastsMetric",
+      "kind": "object",
+      "domain": "ForecastClaim",
+      "range": "MetricVersion",
+      "cardinality": "1..1",
+      "definition": "The metric version projected. The value itself is held in layer 3, keyed by this claim's IRI."
+    },
+    {
+      "name": "forecastPeriod",
+      "kind": "object",
+      "domain": "ForecastClaim",
+      "range": "fin:FiscalPeriod",
+      "cardinality": "1..1",
+      "definition": "The period projected."
+    },
+    {
+      "name": "forecastScope",
+      "kind": "object",
+      "domain": "ForecastClaim",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "Coordinates delimiting the forecast (fin:CostCenter, hr:OrgUnit, product), matching the version's grain. Open cross-module range."
+    },
+    {
+      "name": "forecastMethod",
+      "kind": "datatype",
+      "domain": "ForecastClaim",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "run-rate | bottom-up | driver-based | top-down-target | management-override | pipeline-weighted. Top-down-target and management-override are forecasts in name only and must be distinguishable."
+    },
+    {
+      "name": "consumedBy",
+      "kind": "object",
+      "domain": "ForecastClaim",
+      "range": "BusinessFunction",
+      "cardinality": "0..*",
+      "definition": "Functions that have declared they plan against this submission (supply build, requisitions, facility sizing). The known blast radius of a revision."
+    },
+    {
+      "name": "appraises",
+      "kind": "object",
+      "domain": "Appraisal",
+      "range": "AttributedRecord",
+      "cardinality": "1..1",
+      "definition": "The record this appraisal takes a position on. It must already exist, which keeps appraisal chains acyclic."
+    },
+    {
+      "name": "stance",
+      "kind": "datatype",
+      "domain": "Appraisal",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "endorses | disputes | qualifies | not-identifiable | abstains. The author's position, never the ontology's verdict."
+    },
+    {
+      "name": "onAspect",
+      "kind": "object",
+      "domain": "Appraisal",
+      "range": "ControlledTerm",
+      "cardinality": "0..*",
+      "definition": "Terms in scheme appraisal-aspect: existence, direction, sign, magnitude, lag, scope, contrast, mechanism, confounding, alternative-cause, evidence-validity, variable-definition, proxy-validity. Required when disputing or qualifying."
+    },
+    {
+      "name": "advances",
+      "kind": "object",
+      "domain": "Appraisal",
+      "range": "AttributedRecord",
+      "cardinality": "0..*",
+      "definition": "Records put forward with the stance: a rival EffectClaim, a refined estimate, an alternative Variable. Rivals are not assumed to be mutually exclusive."
+    },
+    {
+      "name": "invokesVariable",
+      "kind": "object",
+      "domain": "Appraisal",
+      "range": "Variable",
+      "cardinality": "0..*",
+      "definition": "Variables pointed to without claiming anything about them, e.g. an alleged confounder or a seasonal driver."
+    },
+    {
+      "name": "evidenceClass",
+      "kind": "object",
+      "domain": "EvidenceItem",
+      "range": "ControlledTerm",
+      "cardinality": "1..1",
+      "definition": "Term in scheme evidence-class: randomized-experiment, natural-experiment, observational-analysis, model-output, structured-elicitation, expert-judgement, case-anecdote, mechanistic-argument, documentary-record, external-study. Classifies the design; never ranks it."
+    },
+    {
+      "name": "evidenceSummary",
+      "kind": "datatype",
+      "domain": "EvidenceItem",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "What the evidence shows and does not show, in the preparer's words."
+    },
+    {
+      "name": "evidenceSourceSystem",
+      "kind": "datatype",
+      "domain": "EvidenceItem",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "The system the evidence came from. 'none: recollection' is valid and visible, so an anecdote and a regression never look alike."
+    },
+    {
+      "name": "evidenceSource",
+      "kind": "object",
+      "domain": "EvidenceItem",
+      "range": "null",
+      "cardinality": "0..*",
+      "definition": "KG artefacts the evidence rests on: cmp:Evidence, cmp:AuditFinding, lgl:Contract, lgl:Clause, fin:Transaction, log:Shipment, dtwin twins (prov:hadPrimarySource). Open cross-module range."
+    },
+    {
+      "name": "sourceLocator",
+      "kind": "datatype",
+      "domain": "EvidenceItem",
+      "datatype": "xsd:anyURI",
+      "cardinality": "0..1",
+      "definition": "Locator of a source outside the graph: ticket export, dataset, report, layer-3 series, insight finding."
+    },
+    {
+      "name": "observationStart",
+      "kind": "datatype",
+      "domain": "EvidenceItem",
+      "datatype": "xsd:date",
+      "cardinality": "0..1",
+      "definition": "Start of the period covered. Whether the window starts before the decision took effect is a checkable fact."
+    },
+    {
+      "name": "observationEnd",
+      "kind": "datatype",
+      "domain": "EvidenceItem",
+      "datatype": "xsd:date",
+      "cardinality": "0..1",
+      "definition": "End of the period covered, so a consumer can check that it spans the claimed lag."
+    },
+    {
+      "name": "selectionCriteria",
+      "kind": "datatype",
+      "domain": "EvidenceItem",
+      "datatype": "xsd:string",
+      "cardinality": "0..1",
+      "definition": "Machine-readable predicate (SPARQL or DSL) that reproduces the evidence population, e.g. a ticket cohort, so the accused function can re-run it. Defines membership, never counts."
+    },
+    {
+      "name": "comparisonBaseline",
+      "kind": "object",
+      "domain": "EvidenceItem",
+      "range": "EvidenceItem",
+      "cardinality": "0..1",
+      "definition": "The evidence item this one should be read against, e.g. the two quarters before the switch. Declaring a baseline is semantic; computing the difference is not."
+    },
+    {
+      "name": "readingOf",
+      "kind": "datatype",
+      "domain": "Reading",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "Identifier of the artefact interpreted, e.g. 'insight-rule:vendor-payment-without-contract' or 'nlq-intent:vendors-with-payments-no-contract'. The artefact's logic stays in its own engine."
+    },
+    {
+      "name": "readingPerspective",
+      "kind": "object",
+      "domain": "Reading",
+      "range": "Perspective",
+      "cardinality": "1..*",
+      "definition": "The perspectives, on ideal-type boundary objects, whose criteria this reading uses for each term of the artefact."
+    },
+    {
+      "name": "joinCriterion",
+      "kind": "datatype",
+      "domain": "Reading",
+      "datatype": "xsd:string",
+      "cardinality": "1..1",
+      "definition": "How records from different modules are matched: same-node | same-source-key | same-entity (via BoundaryObject aboutEntity) | same-corporate-group (via parentEntity*). 'same-node' across modules is the R1 hazard, now visible."
+    },
+    {
+      "name": "isImplemented",
+      "kind": "datatype",
+      "domain": "Reading",
+      "datatype": "xsd:boolean",
+      "cardinality": "1..1",
+      "definition": "True for the reading the deployed implementation actually follows. At most one per artefact."
+    }
+  ],
+  "crossModuleLinks": [
+    {
+      "fromClass": "AttributedRecord",
+      "predicate": "xfn:attributedTo",
+      "toClass": "hr:Person",
+      "note": "Every claim, perspective, definition and accountability record names an answerable human, or an hr:OrgUnit or AnalyticAgent. The range is stored as null in PROP_DEFS and enforced by SHACL sh:or of sh:class."
+    },
+    {
+      "fromClass": "BusinessFunction",
+      "predicate": "xfn:performedBy",
+      "toClass": "hr:OrgUnit",
+      "note": "Functions map to structure many-to-many. The reporting tree is left untouched."
+    },
+    {
+      "fromClass": "Position",
+      "predicate": "xfn:instantiatesRole",
+      "toClass": "hr:Role",
+      "note": "Gives hr:Role's 'responsibility set' somewhere to live, without subclassing hr."
+    },
+    {
+      "fromClass": "Position",
+      "predicate": "xfn:positionIn",
+      "toClass": "hr:OrgUnit",
+      "note": "Seats sit in existing units. hr:reportsTo (person level) stays authoritative for insight rule R2."
+    },
+    {
+      "fromClass": "Decision",
+      "predicate": "xfn:decidedBy",
+      "toClass": "hr:Person",
+      "note": "The same target is used by TermDeviation.deviationApprovedBy, Transfer.acceptedBy and PerspectiveCorrespondence.reviewedBy."
+    },
+    {
+      "fromClass": "LegalEntity",
+      "predicate": "xfn:incorporatedIn",
+      "toClass": "lgl:Jurisdiction",
+      "note": "Reuses Legal's jurisdiction class rather than minting a second one."
+    },
+    {
+      "fromClass": "Perspective",
+      "predicate": "xfn:representedBy",
+      "toClass": "fin:Vendor",
+      "note": "Finance's payee-row view of a supplier boundary object. This replaces silent identity via lgl:withParty -> fin:Vendor edges. Those edges remain, but SHACL flags them when their endpoints do not share a BoundaryObject."
+    },
+    {
+      "fromClass": "Perspective",
+      "predicate": "xfn:representedBy",
+      "toClass": "lgl:Party",
+      "note": "Legal's signatory view of the same boundary object."
+    },
+    {
+      "fromClass": "Perspective",
+      "predicate": "xfn:representedBy",
+      "toClass": "lgl:Contract",
+      "note": "Legal's view of a supply arrangement. Perspective versions revisedBy a switch Decision hold the old contract and the new one."
+    },
+    {
+      "fromClass": "Perspective",
+      "predicate": "xfn:representedBy",
+      "toClass": "log:PurchaseOrder",
+      "note": "The Operations/Logistics view of a supply arrangement. Carriers are represented by log:Carrier and contingent labour by hr:Contractor."
+    },
+    {
+      "fromClass": "TermDeviation",
+      "predicate": "xfn:deviationInContract",
+      "toClass": "lgl:Contract",
+      "note": "Together with benchmarkContract -> lgl:Contract and deviatingClause/benchmarkClause -> lgl:Clause, this makes the absent indemnity an addressable node."
+    },
+    {
+      "fromClass": "Commitment",
+      "predicate": "xfn:evidencedIn",
+      "toClass": "lgl:Clause",
+      "note": "Or lgl:Contract. Absent where isContractual = false, and that absence is the finding."
+    },
+    {
+      "fromClass": "Transfer",
+      "predicate": "xfn:refersToItem",
+      "toClass": "cmp:Risk",
+      "note": "Also lgl:Obligation, fin:CostCenter and log:InventoryItem. Whatever crosses the boundary points into the module that registers it."
+    },
+    {
+      "fromClass": "Transfer",
+      "predicate": "xfn:governedBy",
+      "toClass": "log:Incoterm",
+      "note": "Also lgl:Clause and cmp:Policy. Incoterms is the precedent for recording where risk passes separately from where cost passes."
+    },
+    {
+      "fromClass": "Answerability",
+      "predicate": "xfn:answersFor",
+      "toClass": "cmp:Control",
+      "note": "Also cmp:Risk, fin:CostCenter and lgl:Contract. This supersedes the free-text owner string on cmp:Control and gives fin:CostCenter an accountable seat."
+    },
+    {
+      "fromClass": "AccountabilityAssertion",
+      "predicate": "xfn:grantedUnder",
+      "toClass": "cmp:Policy",
+      "note": "The Delegation-of-Authority policy (POL-03) is the instrument behind formal rights."
+    },
+    {
+      "fromClass": "MetricBinding",
+      "predicate": "xfn:bindingPeriod",
+      "toClass": "fin:FiscalPeriod",
+      "note": "Also ForecastClaim.forecastPeriod. There is one shared calendar, owned by Finance."
+    },
+    {
+      "fromClass": "EvidenceItem",
+      "predicate": "xfn:evidenceSource",
+      "toClass": "cmp:Evidence",
+      "note": "Also cmp:AuditFinding, fin:Transaction, log:Shipment and lgl:Clause. cmp:Evidence is cited, never subclassed, so its meaning ('a control operated') and its 90-day freshness rule stay intact."
+    },
+    {
+      "fromClass": "Variable",
+      "predicate": "xfn:aboutEntity",
+      "toClass": "log:InventoryItem",
+      "note": "Also fin:Vendor, log:Route and hr:OrgUnit. This is the feature of interest whose state the variable describes."
+    },
+    {
+      "fromClass": "GrainDimension",
+      "predicate": "xfn:memberClass",
+      "toClass": "hr:OrgUnit",
+      "note": "Also fin:Vendor, fin:CostCenter, fin:FiscalPeriod and log:InventoryItem, with rollupPredicate hr:parentUnit. Conformed dimensions reuse the existing hierarchies."
+    },
+    {
+      "fromClass": "Decision",
+      "predicate": "xfn:involvesEntity",
+      "toClass": "fin:Vendor",
+      "note": "Also lgl:Contract, fin:Budget, fin:CostCenter and log:PurchaseOrder: the records a decision concerns."
+    },
+    {
+      "fromClass": "log:PurchaseOrder",
+      "predicate": "REQUIRED-UPSTREAM log:orderLineItem",
+      "toClass": "log:InventoryItem",
+      "note": "Not an xfn property. Logistics must add a line property from PO to InventoryItem. Without it, evidence cannot trace a support complaint on SKU-1042 back to the supplier that made the part. xfn deliberately does not model this itself."
+    },
+    {
+      "fromClass": "lgl:Contract",
+      "predicate": "REQUIRED-UPSTREAM lgl:contractSide / lgl:status",
+      "toClass": "lgl:Contract",
+      "note": "Not an xfn property. Legal must declare 'status', because R1 filters on an undeclared props key, and must add a buy-side/sell-side discriminator. Readings and TermDeviations rely on both."
+    }
+  ],
+  "extensionPoints": [
+    {
+      "name": "EP1 Effect-claim intake",
+      "anchorClass": "EffectClaim",
+      "consumedByLayer": "2 CAUSAL",
+      "contract": "Select ?c a xfn:EffectClaim ; xfn:recordStatus 'asserted'.\n\nAlways present on every such claim:\n- exactly one claimedCause and one claimedEffect: distinct xfn:Variable IRIs, and this pair is the key of the candidate edge;\n- claimedSign, dependencyKind (the rung), orientation;\n- at least one impactedFunction;\n- attributedTo, onBehalfOf, recordedAt, and the claimant's verbatim statement.\n\nOptional, and always the claimant's own quotation:\n- magnitudeBand and magnitudeStatement;\n- onsetLagMin and onsetLagMax (single-unit xsd:duration);\n- temporalProfile, claimedMechanism, claimedMediator, effectModifier, scopeEntity;\n- allegedPathway (Handoff IRIs);\n- statedCredence and the likelihood term;\n- conditionalOnModel.\n\nWhen viaDecision is present:\n- claimedCause is one of that decision's intervenesOn variables;\n- baselineState to interventionState is the do() contrast;\n- the decision's effectiveFrom is lag zero.\n\nImmutability:\n- content under an IRI never changes after draft, and contentDigest lets you verify that;\n- a refinement is a new claim linked by revises;\n- withdrawn and superseded claims remain queryable.\n\nGuaranteed absences:\n- no triple links two Variables;\n- the claim set is not a DAG, is not complete, and may contain cycles;\n- a pair of Variables that nobody has claimed about is unknown. Exclusions exist only as owned claims with claimedSign 'no-effect'."
+    },
+    {
+      "name": "EP2 Verdict write-back",
+      "anchorClass": "Appraisal",
+      "consumedByLayer": "2 CAUSAL (writes); 4 and 5 (read)",
+      "contract": "Set up:\n- Register one xfn:AnalyticAgent per engine version, with agentVersion and accountableOwner.\n- Record each run as an xfn:Deliberation (deliberationKind analysis-run) with concernsDecision.\n\nWrite verdicts:\n- One xfn:Appraisal per appraised record, with appraises, stance, onAspect terms and citesEvidence.\n- Set generatedIn to the run, attributedTo to the agent, onBehalfOf to the owning function, and conditionalOnModel to the model IRI.\n\nThe engine's own estimates and its assumed structure, including arrows it assumes absent, are EffectClaims attributed to the agent. Model assumptions are therefore visible and contestable like anyone else's.\n\nRules:\n- The engine never mutates any existing record.\n- xfn never aggregates appraisals, ranks appraisers or marks a claim settled.\n- Effect sizes and posteriors stay in layer 2, keyed by claim IRI."
+    },
+    {
+      "name": "EP3 Intervention anchors",
+      "anchorClass": "Decision",
+      "consumedByLayer": "2 CAUSAL",
+      "contract": "Every xfn:Decision has:\n- decisionId, decisionStatement (no reference to effects), decisionKind;\n- decidedBy (hr:Person), decidingFunction, decidedOn, decisionStatus;\n- intervenesOn (one or more Variables), baselineState, interventionState.\n\nWhat a causal layer can derive:\n- Unit population: the instance BoundaryObjects in changesObject that exemplify the same ideal type.\n- Candidate concurrent confounders: other Decisions on the same changesObject or intervenesOn variables, queryable by effectiveFrom.\n- Counterfactual questions about CEO options: proposed decisions (status proposed). Their predicted effects exist only as prospective EffectClaims.\n- Type-level lever family: inDecisionDomain -> xfn:DecisionDomain, which has a single actsOnClass and a single domainOwner."
+    },
+    {
+      "name": "EP4 Observation binding",
+      "anchorClass": "MetricVersion",
+      "consumedByLayer": "3 MEASUREMENT",
+      "contract": "Key: every observation references exactly one xfn:MetricVersion IRI, never a MetricDefinition. Use qb:Observation or dqv:isMeasurementOf, or a metric_version_iri column.\n\nAdmissibility:\n- published versions, for observation dates on or after effectiveFrom;\n- deprecated versions, for dates before the successor's effectiveFrom.\n\nCoordinates:\n- exactly one per DimensionBinding, ordered by dimensionOrder;\n- each is a KG instance IRI of the dimension's memberClass, or the ISO date of a timeUnit period;\n- the GrainDimension IRI itself means 'all members'.\n\nValues:\n- literals of valueDatatype, in unitIri/currencyCode;\n- converted before binding, never at read time.\n\nLayer 3's obligations:\n- attest that the observed set satisfies populationClass + inclusionCriteria (+ populationPerspective);\n- register its implementations keyed by version IRI.\n\nxfn guarantees:\n- a published version and its component closure (numerator, denominator, derivedFrom, bindings) never change;\n- IRIs are never reused;\n- xfn stores no value, now or later."
+    },
+    {
+      "name": "EP5 Series continuity",
+      "anchorClass": "MetricVersion",
+      "consumedByLayer": "3 MEASUREMENT, 5 PROPAGATION",
+      "contract": "Follow supersedesVersion and act on comparability:\n- comparable: concatenate the series.\n- comparable-after-restatement: recompute history under the new version first.\n- break-in-series: never concatenate (SDMX OBS_STATUS B).\n\nMAJOR increments if and only if there is a break in series. Each definition has at most one live version.\n\nWhen a new version goes live, every ProxyClaim whose assessedVersion excludes it is stale. That list is the layer-2 retest queue."
+    },
+    {
+      "name": "EP6 Proxy and divergence facts",
+      "anchorClass": "ProxyClaim",
+      "consumedByLayer": "3 MEASUREMENT, 4 INCENTIVE",
+      "contract": "Two attributed claim types:\n- xfn:ProxyClaim: proxyMetric, forOutcome, operationalQuestion, indicatedDirection, validityCondition, coversOutcome, assessedVersion, statedCredence.\n- xfn:DivergenceClaim: divergenceOf, divergenceMode, triggerCondition, outcomeAtRisk, observableVia, mechanismClaim.\n\nDerivable facts:\n- Unmeasured tasks: Outcome constituents covered by no active ProxyClaim (the Holmstrom-Milgrom check).\n- Self-attested proxies: ProxyClaim.onBehalfOf equals the proxy's definedByFunction.\n- Paired indicators: the observableVia sets.\n\nLayer 4 should attach targets, bands and weights to the key (ProxyClaim IRI or MetricDefinition IRI, Position IRI, fin:FiscalPeriod IRI). A target then inherits direction, validity domain and known failure modes.\n\nThe ontology holds no target, band, weight or payout."
+    },
+    {
+      "name": "EP7 Accountability facts",
+      "anchorClass": "AccountabilityAssertion",
+      "consumedByLayer": "4 INCENTIVE",
+      "contract": "Agents are Positions (holder). Principals are answerableTo.\n\nAvailable facts:\n- Scorecard: MetricBinding evaluated-on, with bindsMetric and bindingPeriod.\n- Authority: DecisionRight (overDomain, rightKind, authorityLimit, scopedTo, delegatedFrom).\n- Consequence exposure: Answerability (answersFor, accountabilityKind).\n- Internal-customer relations: Handoff handoffFrom/handoffTo/receiverCriterion.\n- What a receiver has not agreed to bear: Transfer.acceptanceStatus.\n- Claimant interest position: Claim.onBehalfOf.\n\nBasis formal vs attested separates de jure from real authority. All assertions are valid-time bounded (validFrom/validTo) and immutable (changed only via revises).\n\nThe multitask gap is computable: an Answerability with no evaluated-on MetricBinding whose metric has an active ProxyClaim for the answered Outcome.\n\nNo incentive term is ever added to xfn."
+    },
+    {
+      "name": "EP8 Forecast value binding",
+      "anchorClass": "ForecastClaim",
+      "consumedByLayer": "3 MEASUREMENT, 4 INCENTIVE",
+      "contract": "The layer-3 store holds the projected value keyed by the ForecastClaim IRI, in the forecastsMetric version's unit and grain.\n\nGuaranteed on the claim: submitter (attributedTo), recordedAt (the vintage, never back-dated), forecastPeriod, forecastScope coordinates, forecastMethod and consumedBy.\n\nRevisions form a chain through revises. Forecast accuracy may be scored against the first, the last or any vintage by walking the chain. Which vintage counts is a layer-4 choice, made openly."
+    },
+    {
+      "name": "EP9 Propagation topology",
+      "anchorClass": "Outcome",
+      "consumedByLayer": "5 PROPAGATION",
+      "contract": "Walkable relations:\n(a) Outcome -hasConstituent-> Outcome: definitional, acyclic, unweighted, never causal.\n(b) Outcome -inRemitOf-> BusinessFunction.\n(c) Outcome -statedOver-> Variable, with preferredDirection. This maps a claimedSign to good or bad per function.\n(d) Decision <-viaDecision- EffectClaim -claimedEffect-> Variable <-statedOver- Outcome, and EffectClaim -impactedFunction-> BusinessFunction. Decision-to-bearers is depth 2, within ADR-002's cap.\n(e) Handoff handoffFrom/handoffTo, with its Transfers.\n(f) Position solidLineTo/dottedLineTo/seatOn.\n(g) MetricVersion hasDimensionBinding -> GrainDimension.rollupPredicate, with the rollupRule algebra.\n\nEvery relation a consumer may annotate either has its own IRI (claims, Handoff, Transfer, Perspective, DimensionBinding) or is a set-valued plain edge with a stable (s,p,o) key.\n\nDivision of labour:\n- Layer 5 takes effect sizes from layer 2 and values from layer 3.\n- An unappraised EffectClaim contributes nothing numeric.\n- xfn defines no traversal weights or closure."
+    },
+    {
+      "name": "EP10 Structural diagnostics",
+      "anchorClass": "ExposureGap",
+      "consumedByLayer": "5 PROPAGATION (and the Ontos insight engine)",
+      "contract": "xfn:ExposureGap nodes are produced only by the published rule xfn:rule/exposure-gap@<version>.\n- IRI: xfn:ExposureGap/G-{first 16 hex of sha256(right|answerability|claim)}.\n- Idempotent. When a premise lapses the gap is closed, never deleted.\n- Fields: gapRight, gapAnswerability, gapClaim, convergesAt, sharedForum, derivedAt, gapStatus.\n\nCompanion named queries (stored nowhere):\n- Variety deficit: the impactedFunction set of claims on decision d, minus d.consultedFunction. Valid only when consultationComplete = true.\n- Missing return channel: an active claim whose impacted function has no Handoff back to the deciding function.\n- Clause regression: a TermDeviation with direction absent whose benchmarkContract is the displaced arrangement's contract.\n- Unstewarded boundary objects.\n\nThe ontology asserts nothing about a gap beyond its premises."
+    },
+    {
+      "name": "EP11 Cross-module identity",
+      "anchorClass": "BoundaryObject",
+      "consumedByLayer": "2, 3, 4, 5",
+      "contract": "There is one sanctioned way to treat records from different modules as the same thing. Walk Perspective.representedBy to the shared BoundaryObject IRI, optionally continue via aboutEntity to xfn:LegalEntity, and use parentEntity* for group grain.\n\nGuarantees:\n- Each correspondence is attributed (attributedTo, identityBasis) and can be revoked by superseding the Perspective.\n- owl:sameAs never appears in xfn exports.\n- LegalEntity IRIs are opaque and permanent. Duplicates are deprecated with a replacement, never deleted or re-pointed.\n\nServe the four-hop join as a derived view; no shortcut edge is asserted.\n\nWhose definition an artefact uses is declared by a Reading (readingPerspective + joinCriterion) or by MetricVersion.populationPerspective.\n\nThe only licence to merge two functions' definitions is an adopted PerspectiveCorrespondence with matchRelation exact and appliesInContext ctx.all (or the consumer's own context)."
+    },
+    {
+      "name": "EP12 Claim-type extension",
+      "anchorClass": "Claim",
+      "consumedByLayer": "2, 3, 4, 5",
+      "contract": "New claim kinds (constraint declarations, contribution-factor claims, opportunity-cost claims, churn attributions) are added as rdfs:subClassOf xfn:Claim or xfn:EffectClaim, in a consumer's own module or a minor xfn version.\n\nThey inherit the full provenance envelope (attributedTo, onBehalfOf, recordedAt, recordStatus, statement, citesEvidence, revises, contentDigest) and all SHACL on it.\n\nRestrictions:\n- They must not subclass PerspectiveCorrespondence, the only adoptable class. Empirical claims can never be 'adopted'.\n- They must never be projected into a direct triple between their endpoints. The RDF 1.2 export form is rdf:reifies <<( s p o )>>."
+    },
+    {
+      "name": "EP13 IRIs and standard export",
+      "anchorClass": "AttributedRecord",
+      "consumedByLayer": "2, 3, 4, 5 (external systems)",
+      "contract": "Namespaces and IRIs:\n- Namespace: https://{client-base}/ontology/xfn/. Pin it before first external consumption.\n- Classes: xfn:<Label>.\n- Instances: xfn:<Class>/<stable-id>, minted once, never derived from mutable labels, never reused. Ids follow the EC-yyyy-nnnn / AP-yyyy-nnnn style, like AF-2025-014.\n- Module key = prefix = xfn, so propsJson keys export in the right namespace today.\n\nVersioning:\n- Minor versions only add classes, properties and ControlledTerms.\n- Removals go through owl:deprecated.\n- Breaking changes bump the major version and keep old IRIs resolvable.\n\nData conventions: datatype properties are single-valued scalars; all multi-valued facts are object properties.\n\nArtefacts:\n- module Turtle/OWL/JSON-LD via exportModule;\n- SHACL via shaclJsonToTurtle;\n- ControlledTerm individuals with the instance export;\n- a static xfn-alignment.ttl with PROV-O/SKOS/ORG subclass and subproperty axioms.\n\nMeaning never depends on Ontos internals."
+    }
+  ],
+  "reconciledConflicts": [
+    {
+      "term": "Vendor / supplier / counterparty / party",
+      "resolution": "One word covers four legitimate concepts: Finance's remit-to payee row, Procurement's managed trading relationship, Legal's signing entity, and Logistics' ship-from site. Picking one of them is exactly what makes R1 silently wrong in both directions.",
+      "modelledAs": "- An ideal-type BoundaryObject 'supplier'.\n- One Perspective per function, each with its own localCriterion and localClass (fin:Vendor, lgl:Party, log:Carrier).\n- Pairwise PerspectiveCorrespondences, e.g. finance->procurement as close/semantic on facet 'identity grain', plus an adopted negated exact match.\n- One instance BoundaryObject per supply arrangement. Its Perspectives point representedBy at each module's records, and aboutEntity -> xfn:LegalEntity (with parentEntity for group grain).\n- R1 becomes several Readings: Finance joins on same-node, Legal on same-corporate-group. How their results differ is queryable."
+    },
+    {
+      "term": "Savings / cost / unit cost vs total cost",
+      "resolution": "Procurement's negotiated delta against a baseline it chose and Finance's year-on-year reduction in recognised expense are both true in their own vocabularies. Unit price is a part of total cost of ownership, not a synonym for it.",
+      "modelledAs": "- Two MetricDefinitions. Each MetricVersion carries a baselineDescription naming the baseline method, and a recognitionEvent.\n- The Outcome 'lowest total cost of supply' hasConstituent unit-cost, expediting-cost, cost-of-poor-quality and uncovered-liability.\n- A PerspectiveCorrespondence on the ideal-type 'cost': broad, hierarchyType partitive.\n- Procurement's ProxyClaim coversOutcome only the unit-cost constituent.\n- A DivergenceClaim with modes externality, horizon-mismatch and multitask-omission names the other three constituents as outcomeAtRisk."
+    },
+    {
+      "term": "On-time / OTIF",
+      "resolution": "There are at least four definitions, which routinely differ by 6 to 15 points:\n- Operations: despatch vs the latest confirmed promise, at line or order grain.\n- Logistics: carrier delivery within log:DeliveryWindow.\n- Sales: against the generation-1 date.\n- Procurement: supplier delivery vs the latest confirmation.",
+      "modelledAs": "- Separate MetricDefinitions sharing metricName 'OTIF'.\n- Each MetricVersion states its own grain (a DimensionBinding on order vs line), measurementBoundary (clock stop and promise generation) and inclusionCriteria.\n- PerspectiveCorrespondences on the ideal-type 'on-time', divergenceKind semantic, with a compound AND for Sales.\n- Promise generations stay in the source systems. The generation a version uses is stated in its definition."
+    },
+    {
+      "term": "Lead time",
+      "resolution": "Procurement quotes PO issue to ship-ready. Logistics measures dock to dock. Planning needs reorder trigger to available-to-promise. Sales promises whatever figure reached it.",
+      "modelledAs": "- measurementBoundary is required on every duration MetricVersion.\n- A lead-time commitment is an xfn:Commitment whose judgedBy points at the version with the explicit boundary.\n- Correspondences between the perspectives on the ideal-type 'lead time' are narrow/partitive: the supplier's segment is part of the replenishment cycle."
+    },
+    {
+      "term": "Margin",
+      "resolution": "Sales' margin is list price minus discount and contains no cost. Finance's margin tiers depend on allocation rules and which cost elements are in scope. Services means realised margin after delivery.",
+      "modelledAs": "- One MetricDefinition per tier and per function.\n- Allocation rules and cost-element scope are written into each version's computationDescription and inclusionCriteria, with derivedFrom pointing at the component versions.\n- A DivergenceClaim records that excluding cost-to-serve lets Sales optimise its margin while Support's cost-to-serve outcome is at risk.\n- No fin:MarginDefinition class is needed."
+    },
+    {
+      "term": "Committed / commitment",
+      "resolution": "Five functions use the word differently:\n- Finance: a non-cancellable encumbrance.\n- Procurement: a PO has been issued.\n- Revenue: the forecast category at 90% confidence.\n- Legal: signed and enforceable.\n- Operations: capacity is reserved.",
+      "modelledAs": "- xfn:Commitment covers only promises to or from counterparties, with isContractual and capturedIn made explicit.\n- Revenue's 'commit' is a ForecastClaim with method pipeline-weighted, never a Commitment.\n- The PO-versus-encumbrance dispute is a pragmatic PerspectiveCorrespondence on the ideal-type 'committed spend'."
+    },
+    {
+      "term": "Account / customer",
+      "resolution": "In the existing seed, fin:Account is a GL account. Support's and Revenue's 'account' is a customer organisation, at a grain (tenant, logo, bill-to) that differs by function.",
+      "modelledAs": "- xfn introduces no Account or Customer class.\n- Customers are an ideal-type BoundaryObject 'customer'. Each function's Perspective records its grain in localCriterion and points representedBy at its own records.\n- aboutEntity -> LegalEntity gives the payer and signatory referent.\n- A negated exact correspondence protects fin:Account's meaning."
+    },
+    {
+      "term": "Contract / arrangement",
+      "resolution": "For Legal, the contract is the executed document and its clauses. For Procurement, it is the whole commercial arrangement, including price files, rebates and side letters.",
+      "modelledAs": "- lgl:Contract stays Legal's.\n- The arrangement is an instance BoundaryObject. Procurement's Perspective includes the contract among its representedBy records.\n- xfn:Commitments with isContractual=false carry the economics Legal cannot see."
+    },
+    {
+      "term": "Claim status (the experts' own conflict)",
+      "resolution": "The eight experts proposed eight different status vocabularies. Several mixed discourse state with social agreement ('accepted-by-both-functions', 'corroborated'), or came close to asserting truth ('confirmed').",
+      "modelledAs": "- One speech-act lifecycle for every record: draft | asserted | withdrawn | superseded.\n- Agreement and dispute are Appraisal records with a stance. 'Contested' is derived from the existence of a disputing Appraisal and never stored.\n- There is no truth value anywhere, and SHACL patterns enforce this."
+    },
+    {
+      "term": "Evidence",
+      "resolution": "cmp:Evidence means 'a control operated' and carries a 90-day freshness warning. Reusing it would put every cross-functional claim into the control-evidence staleness report.",
+      "modelledAs": "- New class xfn:EvidenceItem, with evidenceClass (classified, never ranked) and a mandatory evidenceSourceSystem.\n- cmp:Evidence and cmp:AuditFinding are cited through evidenceSource."
+    },
+    {
+      "term": "Function vs org unit",
+      "resolution": "Several experts used hr:OrgUnit as 'the function'. But the seed has no Procurement, Support or Legal unit, and org charts are re-cut every 12 to 18 months.",
+      "modelledAs": "- xfn:BusinessFunction with a stable functionKey, performedBy hr:OrgUnit (many-to-many), and headedBy a Position.\n- Claims, remits and handoffs all point at BusinessFunction."
+    },
+    {
+      "term": "Owner",
+      "resolution": "One word covers the definition steward, the accountable signatory, the team that runs something, the cost-centre owner and the party scored on it.",
+      "modelledAs": "Kept as separate facts:\n- stewardedBy, for definitions;\n- Answerability, with accountabilityKind control-owner, cost-center, outcome-owner or definition-steward;\n- Position.positionIn, for who runs it;\n- MetricBinding evaluated-on, for who is scored.\nThere is no generic 'owner'."
+    },
+    {
+      "term": "Severity / materiality / risk scores",
+      "resolution": "Support's S1-S4 measures customer impact. Engineering's SEV measures blast radius. cmp:severity measures audit risk. Finance's materiality is a threshold. The risk register's 1-5 scores are ordinal.",
+      "modelledAs": "- Each scale stays in its source module.\n- Any metric over them must declare scaleType.\n- SHACL-SPARQL blocks deriving interval or ratio metrics from ordinal scores, which exposes R9-style arithmetic.\n- Comparing severity across functions is a semantic PerspectiveCorrespondence, never a merged field."
+    },
+    {
+      "term": "Incident / breach",
+      "resolution": "Support means a service disruption; Engineering, a SEV incident; Compliance, a notifiable breach on a 72-hour clock; Legal, a breach of contract.",
+      "modelledAs": "- An ideal-type BoundaryObject 'incident' with one Perspective per function.\n- The regulatory clock is the measurementBoundary of Legal's MetricVersion.\n- A decision not to notify is recorded as an xfn:Decision (kind regulatory-interpretation) with decidedBy."
+    },
+    {
+      "term": "Headcount / FTE / contractor",
+      "resolution": "HR counts filled employee seats. Finance counts budgeted FTE plus contingent labour. Operations counts productive hours. The same contractor is hr:Contractor to HR and fin:Vendor to Finance.",
+      "modelledAs": "- Separate MetricDefinitions with explicit inclusionCriteria.\n- Each contingent worker is an instance BoundaryObject with an HR Perspective (representedBy hr:Contractor) and a Finance Perspective (representedBy fin:Vendor).\n- A sourcing-model-change Decision can therefore be traced to both sides, where R1 currently misattributes it."
+    },
+    {
+      "term": "Regulation",
+      "resolution": "lgl:Regulation (legal instruments) and cmp:Regulation (control frameworks, including ISO 27001) are two classes with the same label and overlapping instances.",
+      "modelledAs": "- Neither class is merged.\n- Each record's Perspective points at a BoundaryObject whose aboutEntity is the legislation's ELI IRI. This makes the correspondence explicit, and shows that ISO 27001 is a standard, not a law.\n- Whether to merge is left to the owners of those modules."
+    },
+    {
+      "term": "Goal / outcome / KPI",
+      "resolution": "The experts used Goal, StatedGoal, Outcome and proxyForGoal as a string. Several put polarity on the metric itself.",
+      "modelledAs": "- One class: xfn:Outcome = a Variable + preferredDirection + remit + definitional constituents.\n- Metrics relate to outcomes only through ProxyClaims, which carry indicatedDirection.\n- Metrics themselves carry no polarity."
+    }
+  ],
+  "anchorScenarioWalkthrough": "0. VOCABULARY.\nxfn:BusinessFunction instances: procurement, finance, operations, support, legal and enterprise. They are performedBy the hr:OrgUnits that exist. Support and legal have none, and that absence is itself a finding.\n\nxfn:Position seats: CPO, COO, VP-Support and GC, each solidLineTo CEO. CPO also has seatOn S&OP-Council.\n\nxfn:DecisionDomain/SUPPLIER-SELECTION-DM has domainOwner procurement and actsOnClass fin:Vendor.\n\nxfn:DecisionRight/DR-2025-0101: holder CPO, rightKind ratify, authorityLimit 5000000 USD, basis formal, grantedUnder cmp:Policy/POL-03. No consult or veto right is recorded for GC. That gap can be queried.\n\n1. VARIABLES (xfn:Variable).\n- V1 component-c-primary-supplier: categorical; aboutEntity log:InventoryItem/SKU-1042.\n- V2 component-c-unit-price.\n- V3 component-c-landed-cost: Finance's definition.\n- V4 product-p-defect-ticket-rate: Support.\n- V5 component-c-field-failure-rate.\n- V6 eu-central-inbound-otif.\n- V7 component-c-indemnity-cover: binary; Legal.\n- V8 firmware-r7-deployed.\n\n2. OUTCOMES (xfn:Outcome).\n- O-unit-cost: statedOver V2, decrease, procurement.\n- O-quality-contacts: statedOver V4, decrease, support.\n- O-otif: statedOver V6, increase, operations.\n- O-risk-transfer: statedOver V7, maintain, legal.\n- O-tco: inRemitOf enterprise; hasConstituent all four above.\n\nxfn:Answerability records: CPO answersFor O-unit-cost, VP-Support for O-quality-contacts, COO for O-otif, GC for O-risk-transfer. Each is answerableTo CEO.\n\n3. METRICS.\nxfn:MetricDefinition MET-001 'Procurement unit-cost saving': definedByFunction procurement, stewardedBy CPO.\nIts MetricVersion 1.0 records:\n- baselineDescription: 'last price paid, prior 4 quarters';\n- recognitionEvent: 'PO issue at new price';\n- grain: vendor + fiscal-period, recompute-from-components.\n\nxfn:MetricBinding: CPO evaluated-on MET-001 for 2025-Q1..Q4.\n\nFurther definitions:\n- MET-014 defect-ticket-rate (SKU + week);\n- MET-021 OTIF (line grain, generation-1 boundary);\n- MET-033 indemnity coverage.\n\nxfn:ProxyClaim PR-0001, by the CPO on behalf of procurement: MET-001 is a proxy for O-tco.\n- coversOutcome: only O-unit-cost;\n- validityCondition: 'like-for-like spec, quality tier, delivery terms and risk allocation incl. indemnity'.\n\n4. DECISION.\nxfn:Decision/PROC-2025-014:\n- decisionKind supplier-switch; inDecisionDomain SUPPLIER-SELECTION-DM; exercisedRight DR-2025-0101;\n- decidedBy the CPO person, decidedInCapacityOf CPO, decidingFunction procurement;\n- decidedOn 2024-12-02, effectiveFrom 2025-01-15, status enacted;\n- intervenesOn V1;\n- baselineState 'V-2305 under ACME-CTR-0017'; interventionState 'V-2688 under ACME-CTR-0101';\n- changesObject supply-component-c;\n- involvesEntity both fin:Vendors and both lgl:Contracts;\n- consultedFunction {finance}, consultationComplete true;\n- statedBenefitMetric MET-001; declaredScope local; reversalLeadTimeDays 270.\n\nxfn:Commitment for a 3-year minimum volume:\n- isContractual false, capturedIn price-file, exitTerms '12 months notice'.\nIts xfn:Transfer (carriesKind obligation, transferTo operations) is unacknowledged.\n\n5. IDENTITY.\nThe instance BoundaryObject supply-component-c exemplifies the ideal type 'supply arrangement'. Its Perspectives are revisedBy PROC-2025-014:\n- procurement and finance: representedBy fin:Vendor/V-2688;\n- legal v2: representedBy lgl:Contract/ACME-CTR-0101. It revises legal v1, which pointed at ACME-CTR-0017;\n- operations: representedBy log:PurchaseOrder/...;\n- support: criterion only, no record.\n\nThe BoundaryObject for NewCo has aboutEntity xfn:LegalEntity/P-000412 (LEI, parentEntity). Nobody stewards it.\n\n6. THE SAVING.\nxfn:EffectClaim EC-2025-0101:\n- CPO on behalf of procurement, recordedAt 2024-11-20;\n- V1 -> V2 viaDecision PROC-2025-014;\n- claimedSign decrease; magnitudeStatement '-12% unit price'; magnitudeBand material;\n- dependencyKind interventional; orientation prospective; onsetLagMin P0D;\n- citesEvidence EV-01 (documentary-record: the quotes);\n- impactedFunction procurement.\nIt is a claim like any other. Being on a scorecard gives it no special truth.\n\n7. THE MISSING INDEMNITY.\nxfn:TermDeviation TD-2025-007, recorded by GC:\n- deviationInContract ACME-CTR-0101; termKind indemnity; direction absent;\n- benchmarkContract ACME-CTR-0017, benchmarkClause its Indemnification clause;\n- deviationApprovedBy empty.\n\nEC-2025-0144, by GC on behalf of legal:\n- V1 -> V7, decrease, counterfactual, lag P0D, virtually-certain;\n- evidence EV-05 (documentary-record over both contracts);\n- impactedFunction legal and enterprise.\n\nOn the procurement->legal contract-handover Handoff, a Transfer records:\n- carriesKind risk, passesAt 'contract execution', acceptanceStatus unacknowledged, basis contractual;\n- refersToItem a cmp:Risk.\n\n8. THE OTIF SLIP.\nEC-2025-0143, by the COO on behalf of operations:\n- V1 -> V6, decrease, magnitudeStatement '-4pp', counterfactual, lag P3M-P6M;\n- allegedPathway: the procurement->operations onboarding Handoff; allegedKind risk;\n- evidence EV-04: observational, evidenceSource log:Shipment/SHP-001..010;\n- impactedFunction operations.\n\n9. THE TICKET RISE (the arrow).\nEC-2025-0142, by VP-Support on behalf of support, recordedAt 2025-08-04:\n- V1 -> V4 viaDecision PROC-2025-014; claimedMediator V5;\n- increase; band material; '+15-45%';\n- counterfactual, retrospective, lag P5M-P7M, accumulating;\n- mechanism: 'new supplier not qualified at part-revision grain';\n- evidence EV-02: observational-analysis, source Zendesk, selectionCriteria defines the ticket cohort, comparisonBaseline EV-02b covers the prior two quarters;\n- evidence EV-03: case-anecdote, 23 RMA teardowns;\n- originFunction procurement; impactedFunction support; status asserted.\n\nThe saving (EC-0101) and the tickets (EC-0142) are both effects of the same decision, joined at PROC-2025-014. Nothing asserts saving -> tickets, and nothing asserts either claim is true.\n\n10. CONTEST.\nxfn:Appraisal AP-2025-0031, by the CPO on behalf of procurement, disputes EC-0142:\n- onAspect alternative-cause and magnitude;\n- invokesVariable V8;\n- advances EC-2025-0151: V8 -> V4 via Decision ENG-2025-R7.\n\nFinance's AP-0032 disputes EC-0101 on variable-definition and advances EC-0160: V1 -> V3, '-3% [-6,+1]'.\n\nxfn:DivergenceClaim KD-0001, by VP-Support, is divergenceOf PR-0001:\n- modes externality, horizon-mismatch, multitask-omission;\n- outcomeAtRisk O-quality-contacts, O-otif, O-risk-transfer;\n- observableVia MET-014/021/033;\n- mechanismClaim EC-0142/0143/0144.\n\n11. REVIEW AND LAYER 2.\nxfn:Deliberation DL-2025-019 (decision-review) is convenedBy the CEO and concernsDecision PROC-2025-014.\n- The claims were generatedIn it: Support, Operations and Legal were solicited; Procurement volunteered.\n- Layer 2 later writes Appraisal AP-0077, by xfn:AnalyticAgent/causal-engine-0.9 with conditionalOnModel supply-quality-dag/v7. It qualifies EC-0142 on magnitude and advances the engine's own EC-0170.\n\n12. DERIVED, WITH NO VALUES STORED.\nRule exposure-gap@1.0 emits three xfn:ExposureGap nodes. Each pairs DR-2025-0101 with one bearer: VP-Support via EC-0142, COO via EC-0143, GC via EC-0144. All three converge at CEO with no shared forum.\n\nQueries now expose:\n- a variety deficit: support, operations and legal were affected but not consulted;\n- no Support -> Procurement return Handoff;\n- 3 of the 4 O-tco constituents unproxied;\n- a clause regression: TD-2025-007;\n- an unaccepted risk Transfer.",
+  "designRationale": "MERGES\n(1) CLAIMS. Eight function-specific claim classes collapse into one xfn:EffectClaim under an AttributedRecord/Claim envelope: FinancialEffectClaim, CrossFunctionalClaim, ops:EffectClaim, ServiceImpactClaim, CommercialEffectClaim, CrossBoundaryAssertion/ExposureAssertion, SpilloverClaim, and the eng claim subclasses.\nI chose the clm design because it is the only one that makes the endpoints neutral Variables and the do() contrast a shared Decision. That rules out three failure modes in the other designs:\n- 'any node' endpoints, which the causal layer cannot bind;\n- claims that point at a metric definition, which confuses the construct with its proxy;\n- a direct saving->tickets edge, which is a confounded arrow between two effects of the same decision.\nMagnitude is an ordinal band plus the claimant's quoted words, never a number, so layer 5 cannot sum claims and bypass layer 2.\nThe eight status vocabularies became one speech-act lifecycle plus Appraisal records. 'Contested', 'accepted-by-both' and 'corroborated' were pseudo-verdicts.\n\n(2) DECISIONS. About twenty decision classes become one xfn:Decision whose kind is a ControlledTerm: FinanceDecision and its subclasses, SourcingDecision and its subclasses, OperationalDecision, WorkforceDecision and its subclasses, Concession, RoadmapDecision, ArchitectureDecision, DeprecationDecision, RiskAcceptance, LocalChange, Intervention.\nThe causal layer needs one intervention class. Subclassing per function would rebuild the silos inside the ontology. Kind-specific operational fields stay in the source systems, or become baselineState/interventionState text.\n\n(3) METRICS. The met design wins: a mutable catalogue identity plus an immutable version that is the only binding target. It is the only design that supports series continuity, and series breaks are where redefinition gaming hides.\nPopulation and ComputationSpec fold into MetricVersion properties. UnitOfMeasure becomes a QUDT IRI literal.\nDimensionBinding and GrainDimension stay as classes, because shared grain is what makes 'no single system holds the arrow' queryable, and it is the rollup algebra layer 5 needs.\n\n(4) GOALS. Goal, StatedGoal, Outcome and proxyForGoal strings become one Outcome: a Variable plus preferredDirection plus remit plus constituents. Claims stay free of valence, and propagation can still tell good from bad for each function.\n\n(5) PROXY FAILURE. Gaming-risk, proxy-gap, substitution-risk and excluded-signal strings become ProxyClaim plus DivergenceClaim. They are attributed, contestable, and linked to counter-metrics and mechanism claims.\n\n(6) IDENTITY AND TERMINOLOGY. Four identity mechanisms and three terminology mechanisms collapse into BoundaryObject + Perspective + PerspectiveCorrespondence, with LegalEntity as the real-world referent.\n- Identity mechanisms merged: AccountAlignment, payeeVendor/sameAsCounterparty, clo:denotesEntity, aln:IdentityAssertion.\n- Terminology mechanisms merged: aln Concept/Scheme/Correspondence, xfn Divergence, and the conflict lists.\nStar & Griesemer's model does both jobs. Ideal-type boundary objects carry definitions; instance boundary objects carry records.\nFrom aln I kept the rigour of graded matches: exact/close/broad/narrow, negation, compound targets, hierarchy type, contexts, and steward adoption.\n\n(7) ACCOUNTABILITY. The acc design, as proposed: seats; DecisionRight, Answerability and MetricBinding kept separate (RACI's fusion of authority and exposure is exactly where externalities come from); and a derived ExposureGap.\nCut from acc:\n- PositionAssignment: the Decision records decidedBy and decidedInCapacityOf instead;\n- AccountabilityInstrument: cmp:Policy serves;\n- the reified ReportingLine: replaced by solidLineTo and dottedLineTo.\n\n(8) COMMITMENTS. Nine commitment and concession classes become xfn:Commitment. isContractual and capturedIn were the fields every expert called load-bearing.\nInternal bearing becomes xfn:Transfer: obligationBorneBy, costBorneBy, ObligationAssignment and constrainsFunction all map to it. The same class serves standing Handoffs, so 'who bears it, and did they accept' has one representation.\n\n(9) TermDeviation (from clo) is kept, because an absent indemnity can only be a node if the gap itself is reified, and it carries the approver. StandardPosition is cut; standardReference text and benchmarkContract replace it.\n\n(10) EvidenceItem absorbs TicketCohort through selectionCriteria and comparisonBaseline. Reading absorbs aln TermBinding.\n\nCUTS\nOperational detail stays in the source systems and is reached through aboutEntity, evidenceSource or representedBy. Cut classes:\n- Ticket, Incident, Defect, Change, Release, Service, FlowUnit, OrderLine, FulfilmentPromise, Nonconformance, CapacityPool;\n- Category, SupplierSite, SourceQualification, SupplierScorecard;\n- CloseCycle, ManualJournalEntry, CostAllocationRule, CostObject, Provision, Quota;\n- Opportunity, Booking, Renewal, Customer, Contact;\n- Capability, SeparationEvent, JobRequisition, HeadcountPlan;\n- RegulatoryObligation, RemediationAction, ControlReliance, ObligationConflict, ThroughputConstraint.\nLegitimate extensions among these belong to the owning module (hr, fin, log, lgl). New claim kinds plug in via EP12.\nNine code-list classes collapse into one ControlledTerm. Closed lists are string enumerations enforced by sh:pattern, the only enumeration mechanism the Ontos SHACL compiler emits.\nResult: 35 classes.\n\nIDENTITY\nkey = prefix = 'xfn'. rdfBridge qualifies unprefixed props with moduleKey, so every existing module whose key differs from its prefix exports undeclared namespaces; xfn does not.\nColour #A3E635 (lime-400): matches the 400-shade palette, and three experts converged on it.\n\nCONVENTIONS USED IN THIS OUTPUT\n- The string 'null' in domain or range stands for the Ontos null slot: either a shared property with no rdfs:domain, or an open cross-module range.\n- Prefixed ranges (hr:Person, lgl:Contract) and union ranges ('A | B') are stored as null in PROP_DEFS, with the target named in the definition as a cross-module axiom (house precedent: hr:signs). SHACL sh:class, and sh:or/SPARQL for unions, enforce them, and those constraints do export. A one-line change to the seed loader, resolving any label that contains ':' across modules, would populate rangeClassId directly; ontologyRouter.createClass already does this.\n- effectiveFrom is one shared property with no domain, used by both Decision and MetricVersion.\n- Every 0..* fact is an object property, because knowledgeGraphToTurtle drops arrays.\n- Values typed dateTime, duration or anyURI are also pattern-checked, until literal typing follows rangeDatatype.\n- Overlay rule: xfn edges start at xfn nodes, and seed-xfn.ts wipes only xfn rows (precedent: seed-twins).",
+  "shaclNotes": [
+    {
+      "className": "AttributedRecord",
+      "constraints": "attributedTo: minCount 1, maxCount 1; sh:or of sh:class hr:Person | hr:OrgUnit | lgl:Party | fin:Vendor | xfn:AnalyticAgent (Violation).\n\nrecordedAt: minCount 1, maxCount 1; pattern ^\\d{4}-\\d{2}-\\d{2}T.\n\nrecordStatus: minCount 1; pattern ^(draft|asserted|withdrawn|superseded)$. Violation message: 'speech-act status only; truth is never recorded here'.\n\nrevises: maxCount 1; must point at a record of the same class (SPARQL).\n\ncontentDigest: pattern ^[0-9a-f]{64}$; required once recordStatus != draft (Warning).\n\nSPARQL rules:\n- withdrawn ⇔ withdrawnAt is present.\n- attributedTo is an AnalyticAgent ⇒ onBehalfOf is present.",
+      "rationale": "No anonymous arrows: an unattributed claim is a rumour and must not be storable. The digest makes any breach of immutability detectable."
+    },
+    {
+      "className": "Claim",
+      "constraints": "statement: minCount 1, maxCount 1 (Violation).\n\nonBehalfOf: minCount 1, class xfn:BusinessFunction (Violation).\n\nstatedCredence: pattern ^(0(\\.\\d+)?|1(\\.0+)?)$ (a value between 0 and 1).\n\nstatedLikelihoodTerm: must match the IPCC likelihood terms.\n\nSPARQL: attributedTo is an AnalyticAgent ⇒ conditionalOnModel is present (Violation).\n\nencodedBy differs from attributedTo ⇒ the claim stays draft until the author confirms it (Warning).",
+      "rationale": "Provenance is required on every claim, whether human or machine. A machine claim that depends on a model can never masquerade as a finding."
+    },
+    {
+      "className": "EffectClaim",
+      "constraints": "Endpoints:\n- claimedCause and claimedEffect: minCount 1, maxCount 1 each; class xfn:Variable; SPARQL: the two must differ.\n\nClassification fields:\n- claimedSign: pattern ^(increase|decrease|no-effect|non-monotonic|unknown-direction)$.\n- dependencyKind: pattern ^(associational|interventional|counterfactual|definitional)$.\n- orientation: pattern ^(prospective|retrospective|standing)$.\n- impactedFunction: minCount 1.\n\nviaDecision: maxCount 1. SPARQL rules:\n- claimedCause ∈ viaDecision/intervenesOn (Violation).\n- orientation is prospective ⇒ recordedAt < viaDecision/effectiveFrom (Violation).\n- dependencyKind is counterfactual ⇒ viaDecision or causeContrast is present (Warning).\n\nLags and magnitude:\n- onsetLagMin and onsetLagMax: pattern ^P\\d+[DWMY]$; SPARQL: same unit, and min ≤ max.\n- magnitudeBand: pattern ^(immaterial|minor|material|severe)$.\n\nWarnings: claimedMechanism minCount 1; citesEvidence minCount 1.\n\nGlobal CI ASK, which must return false: any triple that links one xfn:Variable directly to another.",
+      "rationale": "The arrow must be an n-ary, attributed and falsifiable record between neutral variables. No direct causal edge may ever exist."
+    },
+    {
+      "className": "Appraisal",
+      "constraints": "appraises: minCount 1, maxCount 1, class xfn:AttributedRecord.\n- SPARQL: must not appraise itself, and recordedAt ≥ recordedAt of the appraised record (keeps appraisal chains acyclic).\n\nstance: pattern ^(endorses|disputes|qualifies|not-identifiable|abstains)$.\n\nstance is disputes or qualifies ⇒ onAspect minCount 1 (Violation).\n\nonAspect: IRI pattern ControlledTerm/appraisal-aspect\\.",
+      "rationale": "Every verdict, including the causal engine's, enters as an attributed position. A dispute must name its grounds."
+    },
+    {
+      "className": "PerspectiveCorrespondence",
+      "constraints": "Enumerations:\n- matchRelation: ^(exact|close|broad|narrow|related)$.\n- divergenceKind: ^(syntactic|semantic|pragmatic)$.\n- adoptionStatus: ^(proposed|adopted|rejected|reconciled|plural)$.\n- hierarchyType: ^(generic|partitive|instance)$.\n\nSPARQL rules:\n- All perspectives involved are on the same BoundaryObject.\n- hierarchyType is present ⇔ matchRelation is broad or narrow.\n- compoundOperator is present ⇔ there is more than one object.\n- adoptionStatus != proposed ⇒ reviewedBy is present, and reviewedBy is the steward of the object.\n- No pair may have both an adopted exact match and an adopted broad or related match.",
+      "rationale": "Terminology collisions are recorded as graded, attributed conventions that never name a winner. This is the only adoptable class."
+    },
+    {
+      "className": "Perspective",
+      "constraints": "Required: heldBy, perspectiveOn, localPurpose, localCriterion, validFrom (each 1..1, Violation).\n\nrepresentedBy: minCount 1 (Info).\n\nBoundaryObject: fewer than 2 distinct heldBy functions across its perspectives (Warning).\n\nCross-module check: a lgl:withParty or log:poVendor edge between records that share no BoundaryObject (Warning: silent identity).",
+      "rationale": "Every cross-module join must state whose definition it uses. This is the fix for R1."
+    },
+    {
+      "className": "Decision",
+      "constraints": "Required:\n- decidedBy: 1..1, class hr:Person.\n- decidingFunction: 1..1.\n- decidedOn: 1..1, xsd:date.\n- decisionStatus: pattern ^(proposed|approved|enacted|reversed|withdrawn)$.\n- intervenesOn: minCount 1.\n- baselineState and interventionState: 1..1 each.\n\nSPARQL rules:\n- Status is enacted or reversed ⇒ effectiveFrom is present (Warning).\n- exercisedRight is present ⇒ that right's holder equals decidedInCapacityOf, and the right is valid on decidedOn (Violation).\n\nexercisedRight: minCount 1 (Warning).",
+      "rationale": "Every intervention anchor is dated, owned and has an explicit contrast, so it can be bound to a causal model and checked against delegated authority."
+    },
+    {
+      "className": "MetricVersion",
+      "constraints": "Required text fields (1..1 each): versionOf, definitionText, populationClass, inclusionCriteria, computationDescription, recognitionEvent, unitIri, valueDatatype.\n\nEnumerations:\n- scaleType: nominal | ordinal | interval | ratio.\n- accumulationType: stock | flow | auxiliary.\n- lifecycleStatus: draft | published | deprecated | retired.\n\nhasDimensionBinding: minCount 1.\n\nSPARQL rules:\n- supersedesVersion is present ⇒ comparability is present.\n- Status is published ⇒ effectiveFrom is present.\n- At most one live version per metric.\n- rollupRule is recompute-from-components ⇒ components are declared.\n- No sum or mean over ordinal or nominal values.\n- No interval or ratio version derived from ordinal components.\n- A published version depends only on published or deprecated components.\n- dimensionOrder is unique within a version.\n- The derivation graph is acyclic.",
+      "rationale": "Values can bind only to an immutable, fully specified definition. Redefinition and ordinal arithmetic become visible."
+    },
+    {
+      "className": "ProxyClaim / DivergenceClaim",
+      "constraints": "ProxyClaim:\n- Required 1..1: proxyMetric, forOutcome, operationalQuestion, indicatedDirection, validityCondition.\n- SPARQL: coversOutcome ⊆ forOutcome/hasConstituent*.\n- Stale if assessedVersion does not include the live version (Warning).\n\nDivergenceClaim:\n- divergenceOf: 1..1.\n- divergenceMode: minCount 1.\n- triggerCondition: 1..1.\n- observableVia: minCount 1 (Warning).",
+      "rationale": "Goodhart made structural: every proxy states what question it answers, when it holds, and what it leaves uncovered."
+    },
+    {
+      "className": "Outcome / Variable",
+      "constraints": "Outcome:\n- statedOver: 1..1.\n- preferredDirection: pattern ^(increase|decrease|maintain|within-band)$.\n- inRemitOf: minCount 1.\n- hasConstituent: acyclic (SPARQL).\n- 2 or more constituents should span 2 or more remits (Warning).\n\nVariable:\n- aboutEntity must not point at any xfn:AttributedRecord (Violation).",
+      "rationale": "Decomposition stays definitional, and Variable-to-Variable edges cannot enter by the back door."
+    },
+    {
+      "className": "AccountabilityAssertion",
+      "constraints": "holder: 1..1, class Position.\n\nbasis: pattern ^(formal|attested)$.\n- formal ⇒ grantedUnder is present.\n- attested ⇒ evidenceRef is present.\n\nDecisionRight:\n- Every delegation chain reaches a formal root right.\n- A delegated right may not exceed its delegator's limit or validity.\n\nAnswerability: answersFor is never a MetricDefinition.\n\nMetricBinding: bindingPurpose pattern ^(evaluated-on|reports-on)$.\n\nPosition: solidLineTo forms a single-rooted tree (SPARQL).",
+      "rationale": "Accountability is recorded as sourced fact, with de jure and real authority kept apart. No incentive terms are admitted."
+    },
+    {
+      "className": "Transfer / Commitment / TermDeviation",
+      "constraints": "Transfer:\n- transferOf: 1..1, must be a Handoff, Decision or Commitment (SPARQL).\n- transferOf is not a Handoff ⇒ transferTo is present.\n- acceptanceStatus is accepted ⇒ acceptedBy is present.\n- transferBasis: pattern ^(designed|contractual|observedPractice)$.\n\nCommitment:\n- isContractual: 1..1.\n- capturedIn: 1..1.\n- SPARQL: isContractual is true ⇔ evidencedIn is present.\n\nTermDeviation:\n- deviationInContract: 1..1.\n- SPARQL: deviationDirection is absent ⇔ deviatingClause is absent.\n- deviationApprovedBy: minCount 1 (Warning).",
+      "rationale": "Unaccepted transfers and uncaptured commitments are the mechanism by which externalities arise. These shapes make them visible by default."
+    },
+    {
+      "className": "ExposureGap",
+      "constraints": "Required: gapRight, gapAnswerability, gapClaim, derivationRule, derivedAt (1..1 each).\n\ngapStatus: pattern open | closed.\n\nSPARQL: the IRI local id is G-{sha256(right|answerability|claim)[0:16]}.\n\nMutation guard: only the derivation job may create or close these nodes.",
+      "rationale": "Derived structure must be reproducible, and must never turn into a hand-asserted blame record."
+    }
+  ]
+}

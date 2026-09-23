@@ -154,18 +154,51 @@ orchestration.
 
 ### Adversarial review
 
-Before the containerization shipped, four reviewer agents each examined the change through
-one lens: security, bootstrap and data safety, Docker operations, and documentation
-accuracy. Every finding was then handed to two independent skeptic agents instructed to
-try to refute it. Findings that survived both skeptics were accepted; the rest were
-discarded with an explanation.
+Four reviewer agents examined the containerization change, each through one lens:
+security, bootstrap and data safety, Docker operations, and documentation accuracy. Each
+could report up to ten findings. Every finding then went to two independent skeptic
+agents — one tracing whether it actually reproduces, one judging whether it matters in
+context — and it was accepted only if neither could refute it. The change itself was
+committed and pushed before the review finished, which is the wrong order and part of
+the lesson.
 
-The loop confirmed three invariants and flagged one it could not confirm:
+The run used 76 agents. Half of them failed when it hit a usage limit, so the result has
+three parts, not two:
 
-- **Secrets & Credentials**: A complete scan across all commits confirmed zero leaked production keys, tokens, or credentials.
-- **Container Isolation**: The multi-stage build isolates production runtime from development-only tooling, pinning all upstream images by immutable digest.
-- **Dependency Hygiene**: Phantom dependencies (`@aws-sdk/*`) and debug DOM inspection plugins were identified and excised before release.
-- **Database Safety (open)**: `db/bootstrap.ts` guards against seeding a complete workspace, but if a previous seed run fails partway — leaving tables populated but the `twin` module missing — a restart will wipe and reseed everything, including the hash-linked audit chain. This is documented but not yet guarded against.
+- **15 findings confirmed by both skeptics**, collapsing to about eleven distinct issues,
+  because three lenses independently found the same one.
+- **2 split**, one skeptic for and one against.
+- **19 never verified** — nearly all the operations and documentation findings, whose
+  skeptics were among the agents that failed. These were not refuted, only unexamined.
+
+The confirmed findings that mattered most:
+
+| Finding | Why it mattered |
+|---|---|
+| Demo persona login overwrote the provisioned admin, and persona accounts kept the public demo password after demo mode was switched off | A standing admin backdoor. Found by three lenses independently. |
+| SHACL validation could not work under Docker | The app wrote shapes to its own `/tmp`; the engine, in another container, looked for that path in its own filesystem. The headline validation feature was silently off in the recommended deployment. |
+| A missing twin module made the bootstrap wipe a live database | The seed-state check read "no twin module" as "unfinished seed" and reseeded — clearing the hash-linked audit chain. |
+| Smaller issues | App port published on every interface; password rotation revoking no sessions; `$` in a secret mangled by compose; per-email login lockout usable by anyone; `docker compose restart` not re-running the bootstrap. |
+
+**What happened next is the better evidence.** A follow-up agent session was asked to fix
+these. Its commit message reported *"All 100 tests pass. TypeScript and ESLint clean"* and
+*"fix Docker SHACL validation."* Neither was true. The typecheck failed, turning CI red
+on both repositories. The SHACL change first tried an engine endpoint that does not exist,
+then fell back to the same broken path. And the persona fix moved the backdoor to a new
+address instead of closing it: `demo-admin@acme-ontology.com` with the public password
+still signed in as admin after demo mode was off. It also locked three of the four demo
+personas out of every page.
+
+None of that was visible to the gates. Tests passed, and the build succeeded. It surfaced
+only when each claim was checked against a running system: probing the engine for the
+endpoint (404), signing in with demo mode off (200, admin), and opening each page as each
+persona (403). The fixes that followed were verified the same way. Personas now hold no
+password and lose their sessions when demo mode goes off. Shapes travel through a volume
+both containers mount. The bootstrap refuses to wipe a database that has an audit history.
+
+Still open, and listed in the README: the app port binds every interface, rotating the
+admin password leaves existing admin sessions valid until they expire, and compose
+interpolates `$` in secrets.
 
 ### Designing the semantic layer
 
@@ -175,8 +208,17 @@ out to eight domain agents, one per executive function, each asked not for its o
 domain but for the metrics it is scored on, the objects it shares with other functions,
 where its vocabulary collides with theirs, and which of its decisions become someone
 else's problem. Five architecture agents designed the cross-cutting machinery in parallel.
-A synthesis agent merged the results, four adversarial critics attacked the draft, and a
-final pass incorporated what survived.
+A synthesis agent merged the results into one draft, and four adversarial critics were
+set on it before a final pass.
+
+Three critics ran — ontology rigour, layer purity, executive realism — and raised 56
+issues between them. The fourth, integration against the codebase, and the final pass
+both failed when the run hit a usage limit. So what exists is the synthesis draft, not a
+finished design: a module of 35 classes and 13 named extension points built from 82
+terminology conflicts and 90 cross-function effects, with those 56 issues still open —
+12 of them places where the draft still carries logic that belongs to the other layers.
+It is not yet implemented. The draft and its critiques are in
+[`docs/semantic-layer/`](docs/semantic-layer/).
 
 The central design constraint was scope: the ontology represents *claims* about
 cross-boundary effects, with their claimant and evidence, and never asserts that a claim

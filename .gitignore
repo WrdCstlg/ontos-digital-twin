@@ -38,6 +38,9 @@ app/bin/
 .tmp-ui-test/
 app/scratch/
 
+# Local git identity maps
+.mailmap
+
 # AI coding-agent local state (session locks, scratch, per-machine settings)
 .claude/
 .agents/

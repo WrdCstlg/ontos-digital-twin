@@ -125,19 +125,26 @@ database identically.
 
 ### Signing in
 
-In development, the login screen offers four one-click demo personas, created on first use:
+In development, the login screen offers four one-click demo personas, created on first use
+and enrolled in the demo workspace in their own role:
 
-| Role | Persona | Email |
+| Role | Persona | Account |
 |---|---|---|
-| `admin` | Elena Cortez | admin@acme-ontology.com |
-| `ontologist` | Dr. James Wei | ontologist@acme-ontology.com |
-| `editor` | Priya Sharma | editor@acme-ontology.com |
-| `viewer` | Alex Morgan | viewer@acme-ontology.com |
+| `admin` | Elena Cortez | demo-admin@acme-ontology.com |
+| `ontologist` | Dr. James Wei | demo-ontologist@acme-ontology.com |
+| `editor` | Priya Sharma | demo-editor@acme-ontology.com |
+| `viewer` | Alex Morgan | demo-viewer@acme-ontology.com |
+
+Personas have **no password**. They exist only behind the persona buttons, and the
+credential form refuses their addresses.
 
 **Production disables persona login**, which is why the Docker stack provisions a real
 admin account instead. To re-enable personas for a local demo, set `ALLOW_DEMO_LOGIN=true` —
 but understand that anyone who can reach the server can then sign in as any role, admin
 included, without a password. The server logs a warning at startup whenever it is on.
+Switching it off again is a real off switch: persona sessions stop authenticating
+immediately, and the bootstrap clears any password an older build left on a persona
+account.
 
 ---
 
@@ -153,7 +160,7 @@ required; `docker compose` refuses to start without them.
 | `APP_SECRET` | **yes** | Signs session tokens. 32+ random characters. |
 | `MYSQL_PASSWORD` | **yes** | Password for the `ontos` database user. Use hex — it is embedded in a URL. |
 | `MYSQL_ROOT_PASSWORD` | **yes** | MySQL root password. |
-| `ADMIN_PASSWORD` | **yes** | Password for the admin account. Re-applied on every start, so changing it and restarting rotates it. |
+| `ADMIN_PASSWORD` | **yes** | Password for the admin account. Re-applied whenever the bootstrap runs, so change it and run `docker compose up -d` to rotate it. `docker compose restart` does not re-run the bootstrap. |
 | `ADMIN_EMAIL` | no | Admin account address. Default `admin@acme-ontology.com`. |
 | `ONTOS_PORT` | no | Host port for the app. Default `3000`. |
 | `ALLOW_DEMO_LOGIN` | no | `true` re-enables persona login. Local demos only — see [Signing in](#signing-in). |
@@ -193,7 +200,9 @@ against **v1.3.0**.
 
 **With Docker** there is nothing to install. The `engine` service runs the official image,
 `ghcr.io/fabio-rovai/open-ontologies:1.3.0`, pinned by digest, as a non-root user on a
-read-only filesystem.
+read-only filesystem. The engine reads SHACL shapes only from a file path, so the app and
+engine share a small in-memory volume at `/exchange`: the app writes shapes there, the
+engine reads them.
 
 **For local development**, download the v1.3.0 binary for your platform from the
 [release page](https://github.com/fabio-rovai/open-ontologies/releases/tag/v1.3.0) — Linux
@@ -356,9 +365,22 @@ Ontos includes standard protocol adapters to ingest live telemetry directly from
 - **Universal MQTT (3.1.1 / 5.0)**: Connects to standard brokers like Mosquitto, EMQX, HiveMQ, or RabbitMQ. Supports wildcard topic patterns (`ontos/twins/+/telemetry`).
 - **AWS IoT Core**: Connects directly via MQTT over mTLS on port 8883 using X.509 device certificates and private keys.
 - **Azure IoT Hub**: Connects via MQTT over TLS with device connection strings or SAS tokens.
-- **HTTP Webhook Ingestion**: Ingest single or batch telemetry points via `POST /api/iot/telemetry` with API key authentication (`x-iot-api-key`).
+- **HTTP Webhook Ingestion**: Ingest single or batch telemetry points via `POST /api/iot/telemetry` with API key authentication (`x-iot-api-key`). The webhook is off until `IOT_WEBHOOK_API_KEY` is set, and the key writes to exactly one workspace — `IOT_WORKSPACE_ID`, or the demo workspace by default. Only that workspace's admins can see the key in the app.
 - **Device-to-Twin Resolution**: Matches incoming devices by explicit IRI (`dtwin:...`), device label, hardware serial number (`propsJson.deviceId`), or configurable custom mapping tables.
-- **Automated Anomaly Detection**: Live telemetry ingestion automatically synchronizes with deterministic insight rules (e.g. cold-chain excursions > 6°C, low battery warnings < 10%).
+- **Automated Anomaly Detection**: Live telemetry ingestion re-runs the deterministic insight rules, so a cold-chain reading outside the 2–6 °C band raises an excursion finding.
+
+Point Ontos only at a broker you control, over TLS, with authentication. Anyone who can
+publish to a public test broker's topic can write into your twins.
+
+#### Reading the graphs
+
+Arrows run from subject to object, the way the triple reads: `Engineering —parentUnit→ Acme
+Corp`, `Employee —is a→ Person`. Most structural predicates here point from child to
+parent — `memberOf`, `reportsTo`, `parentUnit` — so in a force layout arrows converge on
+the hubs. The Explorer's **Hierarchy** layout places every node below everything it points
+to, so parents sit above their children and arrows point up. In the Studio, subclass edges
+use the UML generalization mark — a hollow triangle at the parent, labelled "is a", dashed
+when inferred — to set them apart from property arrows.
 
 ---
 
@@ -371,7 +393,7 @@ router tree. Three plain HTTP routes exist alongside it:
 |---|---|---|
 | `GET /health`, `GET /api/health` | none | Liveness: database and semantic engine status |
 | `POST /api/sparql` | session | Read-only SPARQL 1.1 query against the loaded graph |
-| `POST /api/iot/telemetry` | `x-iot-api-key` / session | High-throughput IoT telemetry batch ingestion endpoint |
+| `POST /api/iot/telemetry` | `x-iot-api-key` | IoT telemetry ingestion into the key's workspace; off until a key is set |
 
 `/api/sparql` accepts `application/sparql-query`, `application/json` (`{"query": "..."}`)
 or a form body, and responds in SPARQL 1.1 JSON Results format. It requires a valid
@@ -466,5 +488,18 @@ These are tracked, known behaviours rather than surprises:
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that
   has no hash yet will accept a known fixed bootstrap password and be upgraded to a real
-  hash on first use. Production rejects those accounts outright.
-- The main client chunk is ~1.3 MB (~415 kB gzipped); the 3D hero graph is lazily loaded.
+  hash on first use. Production rejects those accounts outright. Demo personas are excluded
+  entirely: they never hold a password.
+- **The app port binds every network interface.** `ONTOS_PORT` publishes on all of the
+  host's addresses. For a machine-local demo, change the mapping in `compose.yaml` to
+  `127.0.0.1:3000:3000`.
+- **Rotating `ADMIN_PASSWORD` does not revoke existing admin sessions.** Session tokens stay
+  valid until they expire, up to seven days. Persona sessions, by contrast, end as soon as
+  persona login is switched off.
+- **Compose interpolates `$` in `.env` values.** A secret containing `$` is silently
+  altered. Generate secrets as hex, as `.env.example` suggests.
+- **A first-boot seed that dies partway needs a manual reset.** Once audit entries exist,
+  the bootstrap refuses to reseed rather than risk wiping real data, logs why, and carries
+  on. Run `docker compose down -v` to start clean.
+- The largest client bundles are the vendor chunks: Three.js at ~890 kB (~240 kB gzipped)
+  for the landing page's 3D graph, and Cytoscape and React at ~560 kB each.

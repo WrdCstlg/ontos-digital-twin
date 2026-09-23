@@ -1,0 +1,450 @@
+[
+  {
+    "lens": "Ontology engineering rigour (class/instance confusion, n-ary flattening, disjointness, domain/range consistency, over/under-modelling)",
+    "verdict": "REVISE, NOT REBUILD. All 35 parent links resolve (every parent is AttributedRecord, AccountabilityAssertion or Claim), and every class-typed domain and range resolves either to an xfn class or to a real class in app/db/seed.ts. I checked hr:Role, hr:Person, hr:Contractor, lgl:Party, lgl:Jurisdiction, lgl:Clause, lgl:Obligation, cmp:Policy, cmp:Risk, cmp:Evidence, cmp:AuditFinding, fin:FiscalPeriod, fin:Vendor, fin:Budget, fin:Transaction, log:Incoterm, log:PurchaseOrder, log:InventoryItem, log:Shipment, log:Route, log:Carrier and hr:parentUnit. The overall design is sound. The problems are internal contradictions and missing pieces: the spec breaks its own rules (no Variable-to-Variable triple, records frozen after draft, hasConstituent is never causal, 'solicited' means claimant is not the convener), reintroduces the vendor-identity ambiguity it set out to fix, and joins facts that change over time with binary edges that have no validity dates. It also leaves out two links that layers 2 and 4 need: which Person holds which Position, and which metric measures which Variable. Without these, a layer-2 or layer-4 team would have to change the ontology, which fails the stated success test.",
+    "issues": [
+      {
+        "severity": "critical",
+        "where": "AttributedRecord.revises, Appraisal.advances, Appraisal.invokesVariable vs EffectClaim SHACL 'Global CI ASK'",
+        "what": "The spec breaks its own central rule. Variable is a subclass of AttributedRecord, so a revised Variable definition is written as V_new xfn:revises V_old. That is a direct Variable-to-Variable triple, and the global ASK ('any triple that links one xfn:Variable directly to another' must return false) will fire on ordinary maintenance. The ASK as written cannot be satisfied.",
+        "fix": "Narrow the invariant to 'no triple whose predicate is not revises links two Variables', or better, make Variable revision go through a separate definitional-lineage predicate that the ASK allow-lists by name. State the allow-list explicitly in EP1."
+      },
+      {
+        "severity": "critical",
+        "where": "Position (no occupancy relation); Decision.decidedInCapacityOf; SHACL Decision rule 'exercisedRight holder equals decidedInCapacityOf'",
+        "what": "Nothing links an hr:Person to the Position they hold, or held, over a period. PositionAssignment was cut. The definition of Position promises 'several concurrent holders' for collective seats, but no property carries holders at all. 'Who was CPO on 2024-12-02' can only be guessed from Decisions. SHACL cannot check that decidedBy actually held decidedInCapacityOf. Layer 4 pays people, not seats, so it cannot join MetricBinding to anyone without inventing this link itself.",
+        "fix": "Restore a reified xfn:PositionTenure (subclass of AccountabilityAssertion, or at least attributed): tenureHolder hr:Person 1..1, tenureOf Position 1..1, validFrom/validTo, tenureKind (substantive|acting|delegate). Add SHACL requiring decidedBy to hold a tenure of decidedInCapacityOf that is valid on decidedOn."
+      },
+      {
+        "severity": "critical",
+        "where": "MetricDefinition / MetricVersion ↔ Variable",
+        "what": "There is no operationalisation link saying which metric measures which Variable. The only path is ProxyClaim → Outcome → statedOver → Variable, which is an attributed claim about a goal, not a definitional 'MET-014 measures V4'. Layer 2 binds data to SCM variables and layer 3 binds values to MetricVersions, so the bridge between them is missing. Under-modelling the anchor scenario needs: EC-0142 is about V4, the evidence is MET-014, and nothing connects the two.",
+        "fix": "Add MetricVersion.measuresVariable → Variable (0..1 or 1..1; it is definitional, the operational measure of the construct), distinct from ProxyClaim, which stays the contested 'indicates the outcome' relation. Add it to the EP4 guarantees."
+      },
+      {
+        "severity": "high",
+        "where": "Decision.baselineState, Decision.interventionState, Decision.intervenesOn (1..*)",
+        "what": "An n-ary relation flattened into two strings. intervenesOn allows several variables, but there is one baseline string and one intervention string for all of them, so the per-variable (variable, from, to) triple is lost. The anchor shows the damage: 'V-2305 under ACME-CTR-0017' bundles supplier and contract. As a result EC-0144 (V1 → V7, lag P0D, 'counterfactual') presents what is really a directly set variable (the new contract removed the indemnity) as a downstream effect.",
+        "fix": "Reify xfn:InterventionSetting (settingOf Decision, setsVariable Variable 1..1, baselineState, interventionState). intervenesOn then becomes derivable. Let EffectClaim.claimedCause point at a setting, or allow 1..* causes for joint interventions. Re-express the indemnity as an intervention on V7 in the anchor."
+      },
+      {
+        "severity": "high",
+        "where": "AttributedRecord immutability + contentDigest vs MetricVersion.lifecycleStatus, PerspectiveCorrespondence.adoptionStatus/reviewedBy, Reading.isImplemented",
+        "what": "These records are frozen once they leave draft, and contentDigest excludes only recordStatus, withdrawnAt and decisionStatus. Yet lifecycleStatus (published→deprecated→retired), adoptionStatus (proposed→adopted) with reviewedBy set later, and isImplemented (flips when a deployment changes) are designed to change after the record is asserted. Every one of those changes is a 'detectable contract violation' by the spec's own rule. contentDigest also names decisionStatus, but Decision is not an AttributedRecord, so the exclusion list covers a property its domain never has.",
+        "fix": "Move state that changes after assertion off the frozen record. Adoption becomes an attributed act by the steward, i.e. an Appraisal subtype or xfn:Adoption. isImplemented becomes a dated Deployment/Reading-binding record. For lifecycleStatus, either exclude it from the digest explicitly or model deprecation as a record. Remove decisionStatus from the exclusion list."
+      },
+      {
+        "severity": "high",
+        "where": "MetricVersion: recordStatus + lifecycleStatus, revises + supersedesVersion; Perspective.revisedBy; Decision.supersedesDecision",
+        "what": "There are four overlapping supersession mechanisms and two status vocabularies on one class. A MetricVersion can have recordStatus=superseded while lifecycleStatus=published, and revises can point at a different version than supersedesVersion. Perspective.revisedBy has range Decision, but its name reads as the inverse of revises (range AttributedRecord). That is a naming trap for any RDF consumer.",
+        "fix": "State that supersedesVersion is rdfs:subPropertyOf revises and add SHACL that the two agree. Map lifecycleStatus to recordStatus (published implies asserted; retired implies superseded or withdrawn). Rename Perspective.revisedBy to producedByDecision."
+      },
+      {
+        "severity": "high",
+        "where": "Perspective (revises + validFrom), Outcome, anchor step 5 'legal v2 revises legal v1'",
+        "what": "Transaction-time correction is conflated with valid-time succession. After the supplier switch, Legal's v1 perspective (ACME-CTR-0017) was not wrong. It was true for an earlier valid period. Recording v2 as revises v1 marks v1 superseded, which reads as a retraction. It also breaks the before/after comparison the spec claims to enable, because 'what was true in Q4-2024' now needs superseded records.",
+        "fix": "Use validTo on v1 and validFrom on v2 for change in the world, linked by a succession predicate (e.g. succeedsPerspective), and keep revises only for corrections. Document the two time axes in the house rules."
+      },
+      {
+        "severity": "high",
+        "where": "Outcome.hasConstituent; anchor O-tco hasConstituent O-unit-cost, O-quality-contacts, O-otif, O-risk-transfer",
+        "what": "The spec says hasConstituent is 'definitional, never causal', but the anchor breaks this. OTIF and defect-contact rate are not constituents of total cost of supply by definition; they are claimed drivers of expediting cost and cost of poor quality. Even the textual example is wrong on units, since unit price is not a constituent of total cost; unit price times volume is. Definitional decomposition is also put on Outcomes, whose preferredDirections may not compose ('maintain' under 'decrease'). It really belongs to Variables, where the rule 'Variables never linked' forbids it. Meanwhile EffectClaim.dependencyKind 'definitional' offers a second, contradictory way to state definitional relations.",
+        "fix": "In the anchor, give O-tco constituents that are cost Outcomes (unit cost, expediting cost, cost of poor quality, uncovered-liability cost), and link OTIF and tickets to them only through EffectClaims. Drop 'definitional' from dependencyKind, or state that hasConstituent is the only definitional mechanism. Add SHACL requiring constituents' Variables to share the parent's unit dimension."
+      },
+      {
+        "severity": "high",
+        "where": "attributedTo range (lgl:Party | fin:Vendor), commitmentCounterparty (LegalEntity | lgl:Party | fin:Vendor), DecisionDomain.actsOnClass fin:Vendor, anchor 'SUPPLIER-SELECTION-DM actsOnClass fin:Vendor'",
+        "what": "The R1 identity ambiguity comes back. The reconciledConflicts section says fin:Vendor is Finance's payee row and lgl:Party is a contract role, not the supplier. Yet agents, counterparties and the supplier-selection lever are typed by those function-local rows. A counterparty reachable three ways gives three non-joinable answers to 'commitments with NewCo'. Typing the lever as fin:Vendor makes the causal layer's intervention family Finance's perspective.",
+        "fix": "Set attributedTo (external agents) and commitmentCounterparty to xfn:LegalEntity only. Point actsOnClass at xfn:LegalEntity or the ideal-type BoundaryObject 'supplier'. Module rows are reached through Perspective.representedBy, as EP11 says."
+      },
+      {
+        "severity": "high",
+        "where": "BoundaryObject (boundaryForm idealType | coincidentBoundaries | standardizedForm | repository), BoundaryObject.exemplifies, Perspective",
+        "what": "Class/instance confusion. One class holds concepts ('supplier', 'on-time', which are skos:Concept-like and overlap ControlledTerm), particulars ('supply of component C') and document media ('PO form'), told apart by a string. Perspective is then two different relators: on concepts it is a definition (localClass, no representedBy), and on particulars it is a record link. SHACL cannot enforce either profile, and Reading.readingPerspective 'on ideal-type boundary objects' can only be checked with SPARQL.",
+        "fix": "Split into subclasses xfn:BoundaryConcept, xfn:BoundaryInstance and xfn:BoundaryMedium under BoundaryObject, declared pairwise disjoint. Restrict exemplifies to BoundaryInstance → BoundaryConcept, and Handoff.mediatedBy to BoundaryMedium. Give each form a profile shape for Perspective."
+      },
+      {
+        "severity": "high",
+        "where": "Position.solidLineTo, dottedLineTo, seatOn; BusinessFunction.performedBy, headedBy; ExposureGap.convergesAt 'over in-force solid lines'",
+        "what": "Facts that change over time are modelled as plain binary edges with no validity dates. The SHACL rule 'solidLineTo forms a single-rooted tree at any instant' and the ExposureGap derivation over 'in-force' lines cannot be evaluated, because the edges carry no interval. A reorg silently rewrites history, which the BusinessFunction definition says it must not.",
+        "fix": "Reify reporting and membership lines (xfn:SeatRelation with kind solid|dotted|member, from, to, validFrom/validTo, attributed). Do the same for FunctionAssignment (performedBy/headedBy). Alternatively, EP9 must state that these edges are current-state only, and ExposureGap cannot then claim 'in-force'."
+      },
+      {
+        "severity": "high",
+        "where": "Decision (not an AttributedRecord); decidedBy 1..1, decidedOn 1..1 on status=proposed; generatedIn domain",
+        "what": "Proposed options (the CEO's alternatives) and enacted acts are merged into one class. A proposed option has no decider and no decision date, yet both are required. Decision has no attributedTo or recordedAt, so who recorded it, and when, is lost, including whether the rationale really predates hindsight. generatedIn (domain AttributedRecord) cannot link a decision to the Deliberation where it was made. There is also no node for the choice the CEO faces, grouping mutually exclusive options, and that is the client's core scenario.",
+        "fix": "Make Decision a subclass of AttributedRecord. Add xfn:DecisionQuestion (the choice), with Decision.optionOf → DecisionQuestion. Make decidedBy/decidedOn required only when decisionStatus is not proposed (SHACL conditional), and add proposedBy for options."
+      },
+      {
+        "severity": "medium",
+        "where": "Answerability.accountabilityKind 'definition-steward' vs SHACL 'answersFor is never a MetricDefinition' vs stewardedBy (BoundaryObject, MetricDefinition)",
+        "what": "A direct contradiction plus duplicated representation. Definition stewardship is allowed as an Answerability kind, but the answered object may not be a MetricDefinition, the main thing that gets stewarded. Stewardship is also held separately by stewardedBy, with no validity dates or attribution, so the two can disagree.",
+        "fix": "Pick one. Either remove stewardedBy and model stewardship as an Answerability (kind definition-steward) with answersFor allowed to be a MetricDefinition or BoundaryObject, or remove the definition-steward kind. Relax the 'never a MetricDefinition' rule to 'unless kind = definition-steward'."
+      },
+      {
+        "severity": "medium",
+        "where": "Deliberation.convenedBy + definition ('solicited if claimant is not the convener'); anchor step 11 'Procurement volunteered'",
+        "what": "Solicitation is inferred from who convened the meeting, and the anchor contradicts that rule. The CPO is not the convener (the CEO is), so by definition the CPO's input was solicited, yet the walkthrough says Procurement volunteered. EC-0101 (recordedAt 2024-11-20) also predates any 2025 deliberation, so it could not have been generatedIn DL-2025-019. convenedBy's range (hr:Person | AnalyticAgent) differs from attributedTo's (which also allows OrgUnit, Party and Vendor), so the comparison is ill-typed.",
+        "fix": "Add an explicit solicitation record or property (Claim.solicitedBy → Position/Person, or Deliberation.solicits → BusinessFunction). Drop the convener-based inference. Correct the anchor."
+      },
+      {
+        "severity": "medium",
+        "where": "Transfer (transferTo only; acceptanceStatus/acceptedBy; not attributed)",
+        "what": "The Transfer relation is missing an argument and does not say who recorded it. There is no transferFrom, so for a Decision- or Commitment-borne transfer, who sheds the risk or cost is lost (Commitment has no originating function either). Acceptance by the receiver is a second agent's act, stored as a mutable field on a record that is not attributed. transferBasis 'observedPractice' is an observation with no observer.",
+        "fix": "Add transferFrom → BusinessFunction (implied for Handoff, required otherwise). Make Transfer an AttributedRecord. Model acceptance as an attributed act (an Appraisal-like Acceptance with stance accepted|disputed), and derive acceptanceStatus from it. Add Commitment.madeByFunction and Commitment.madeBy."
+      },
+      {
+        "severity": "medium",
+        "where": "PerspectiveCorrespondence SHACL 'all perspectives involved are on the same BoundaryObject' vs compoundOperator example 'Sales on-time = AND(line in-full, generation-1 date)'",
+        "what": "The motivating example for compoundOperator breaks the same-object rule. 'Line in-full' and 'generation-1 date' are perspectives on different concepts, not on 'on-time'.",
+        "fix": "Allow compound objects to be on different BoundaryConcepts, restricted by partitive hierarchyType. Alternatively, drop compoundOperator and express the composite with Outcome/Variable decomposition."
+      },
+      {
+        "severity": "medium",
+        "where": "BusinessFunction individual 'enterprise'; subFunctionOf; EffectClaim.impactedFunction 'legal and enterprise'; Outcome.inRemitOf",
+        "what": "The whole is modelled as a peer of its parts. 'Enterprise' sits beside Procurement as an ordinary function, is not the root of subFunctionOf, and can be listed next to a function in the same impactedFunction set. A propagation walk will count the same bearing twice (legal plus enterprise), and 'shared outcome' has two different definitions: several remits, or inRemitOf enterprise.",
+        "fix": "Make Enterprise a distinguished individual that is the root of subFunctionOf (every other function reaches it). Forbid listing enterprise together with any of its sub-functions in one impactedFunction set. Give one definition of 'shared'."
+      },
+      {
+        "severity": "medium",
+        "where": "Shared properties with no domain: effectiveFrom (Decision vs MetricVersion), aboutEntity (BoundaryObject denotation vs Variable feature-of-interest)",
+        "what": "One predicate carries two meanings. effectiveFrom means 'started landing on the business' on a Decision and 'first observation date bound' on a MetricVersion. aboutEntity means 'denotes' on a BoundaryObject and 'describes the state of' on a Variable. Outside Ontos, with no domain, consumers cannot tell which meaning applies from the triple alone.",
+        "fix": "Split into decisionEffectiveFrom / versionEffectiveFrom, and denotes (BoundaryObject → LegalEntity/authority IRI) / featureOfInterest (Variable → any; sosa:hasFeatureOfInterest alignment)."
+      },
+      {
+        "severity": "medium",
+        "where": "MetricBinding.bindingPeriod 0..1 + validFrom/validTo; anchor 'CPO evaluated-on MET-001 for 2025-Q1..Q4'",
+        "what": "Two temporal mechanisms on one record, and the cardinality does not fit the example. One FiscalPeriod cannot express Q1 to Q4 without four bindings or an unstated reliance on validity dates. bindsMetric targets MetricDefinition, and the spec itself says a MetricDefinition 'has no operational meaning', so which version is scored when a redefinition happens mid-period is left to layer 3.",
+        "fix": "Choose bindingPeriod 1..1 with one binding per period, or drop it in favour of valid time. Add optional bindsVersion, or a rule that the binding follows the version live at period start, so mid-period redefinition is visible in the ontology."
+      },
+      {
+        "severity": "medium",
+        "where": "ProxyClaim.proxyMetric, Decision.statedBenefitMetric, Commitment.judgedBy, DivergenceClaim.observableVia, MetricDefinition.reportedTo (all → MetricDefinition)",
+        "what": "Every semantic relation points at the node that is defined as meaningless (MetricDefinition), while meaning lives on MetricVersion. A proxy claim about OTIF cannot say which OTIF definition it is about until assessedVersion is supplied, and assessedVersion is optional.",
+        "fix": "Make assessedVersion minCount 1 on ProxyClaim. Add an optional version-level target on statedBenefitMetric and judgedBy, where the time of the fact fixes the version."
+      },
+      {
+        "severity": "medium",
+        "where": "EffectClaim.onsetLagMin/Max SHACL pattern ^P\\d+[DWMY]$",
+        "what": "'P2W' is valid ISO 8601 but not a valid xsd:duration lexical form (xsd:duration has no W designator). The Turtle export will contain ill-typed xsd:duration literals that standard RDF tooling rejects.",
+        "fix": "Use the pattern ^P\\d+[YMD]$ and express weeks as days, or use xsd:dayTimeDuration/xsd:yearMonthDuration explicitly."
+      },
+      {
+        "severity": "medium",
+        "where": "ControlledTerm termScheme id rule vs appliesInContext examples",
+        "what": "termScheme says the scheme name is the first segment of the local id ('evidence-class.natural-experiment'), but the decision-context terms are given as 'ctx.all' and 'ctx.payables'. termScheme is a string, not a skos:ConceptScheme node, so the SKOS export has nothing to point skos:inScheme at. Which enumerations are open ControlledTerms and which are closed regex strings is unprincipled: termKind ends in 'other' and capturedIn will grow, yet both are closed.",
+        "fix": "Use 'decision-context.all' and so on. Mint scheme IRIs (xfn:ControlledTerm/scheme/evidence-class) and export them as skos:ConceptScheme. State the rule for open versus closed lists, and move termKind and capturedIn to ControlledTerm."
+      },
+      {
+        "severity": "medium",
+        "where": "Whole AttributedRecord / Claim / AccountabilityAssertion hierarchy; Variable vs Outcome; BoundaryObject vs LegalEntity",
+        "what": "The OWL export declares no disjointness. Ontos gives each node one class, but external consumers, which the brief makes the audience, cannot infer that an EffectClaim is not an Appraisal, a DecisionRight not an Answerability, or a Variable not an Outcome, and reasoners will accept mistyped merged data.",
+        "fix": "Put owl:AllDisjointClasses in xfn-alignment.ttl for {EffectClaim, ProxyClaim, DivergenceClaim, ForecastClaim, Appraisal}, {DecisionRight, Answerability, MetricBinding}, the direct children of AttributedRecord, and {BoundaryObject, LegalEntity, BusinessFunction, Position}. Mark abstract classes (AttributedRecord, Claim, AccountabilityAssertion) with SHACL so they cannot have direct instances."
+      },
+      {
+        "severity": "low",
+        "where": "ExposureGap.derivationRule (string) vs AnalyticAgent",
+        "what": "Derived nodes are the only machine-authored records not attributed to an AnalyticAgent. The derivation rule is exactly a versioned software agent with an owner, but it is referenced by a string, so ExposureGap bypasses the provenance model everyone else must follow.",
+        "fix": "Register exposure-gap@1.0 as an AnalyticAgent and add ExposureGap.derivedBy → AnalyticAgent (or make it an AttributedRecord with recordStatus limited to asserted)."
+      },
+      {
+        "severity": "low",
+        "where": "LegalEntity definition 'company, branch, natural person'",
+        "what": "A branch is not a legal person. GLEIF registers branches as separate records that point at their head office. Calling a branch a LegalEntity breaks 'registered legal person' and the group-grain rollup through parentEntity, because a branch is not consolidated the way a subsidiary is.",
+        "fix": "Remove 'branch', or add entityForm (legal-person|branch|natural-person) and a separate branchOf property, kept distinct from parentEntity."
+      },
+      {
+        "severity": "low",
+        "where": "Handoff, BoundaryObject, Commitment, DecisionDomain (not AttributedRecords)",
+        "what": "Several facts that are observed or agreed carry no attribution: Handoff.formality 'informal = observed practice', BoundaryObject.scopeStatement 'every function accepts', Commitment.isContractual/capturedIn, DecisionDomain.domainOwner. Holding every such record to attribution is the module's own premise.",
+        "fix": "Make Handoff, Commitment and DecisionDomain AttributedRecords, or at minimum give them attributedTo and recordedAt. Give BoundaryObject scope an attributed, steward-adopted record."
+      },
+      {
+        "severity": "low",
+        "where": "Reading.readingOf (xsd:string); localClass/actsOnClass/populationClass/memberClass (xsd:anyURI holding CURIEs)",
+        "what": "A CURIE is not an absolute URI, so the export must expand these values, and the rule for doing so is not specified. readingOf is a free string although it identifies an artefact.",
+        "fix": "Store full IRIs, or specify that export expands them against the module prefix map. Type readingOf as xsd:anyURI with a stated scheme (insight-rule:, nlq-intent:)."
+      }
+    ],
+    "keepUnchanged": [
+      "EffectClaim as an n-ary, attributed node between neutral Variables, with no direct cause-to-effect triple, and the saving and the tickets joined only through the shared Decision. Rejecting a saving → tickets edge as a confounded arrow is correct.",
+      "Decision as a single intervention anchor class whose kind is a ControlledTerm, rather than per-function decision subclasses.",
+      "Appraisal as the only way a verdict, human or causal-engine, enters the ontology, and recordStatus as a speech-act lifecycle that never encodes truth.",
+      "The MetricDefinition (catalogue identity) / MetricVersion (immutable binding target) split, with comparability on supersession.",
+      "Perspective plus representedBy as the replacement for owl:sameAs and silent cross-module pointer edges; Reading and populationPerspective to declare whose definition an artefact uses.",
+      "xfn:LegalEntity as a separate class from lgl:Party (a role) and fin:Vendor (a payee row), with parentEntity for group grain.",
+      "TermDeviation, reifying a gap so that an absent indemnity becomes an addressable node.",
+      "Keeping DecisionRight, Answerability and MetricBinding as separate assertion types held by seats, with formal vs attested basis.",
+      "BusinessFunction kept separate from hr:OrgUnit, linked many-to-many through performedBy.",
+      "EvidenceItem kept separate from cmp:Evidence, with evidenceClass that classifies without ranking and an explicit 'none: recollection' source.",
+      "ControlledTerm as instance data (adding a term changes data, not schema) with broaderTerm fallback.",
+      "Magnitude held only as an ordinal band plus the claimant's quoted words, so layer 5 cannot sum claims."
+    ],
+    "missing": [
+      "PositionTenure: which Person holds which Position, over which valid interval (needed by layers 4 and 2, and by the decidedBy/decidedInCapacityOf check).",
+      "MetricVersion.measuresVariable: the definitional operationalisation link from metric to Variable, distinct from ProxyClaim.",
+      "InterventionSetting: a per-variable (variable, baseline, new state) record on a Decision, plus support for joint-intervention causes on EffectClaim.",
+      "DecisionQuestion / option grouping: the CEO's choice as a node with mutually exclusive proposed Decisions as options.",
+      "Valid-time reified reporting and membership lines (solid, dotted, seatOn, performedBy, headedBy) so that 'in-force' is evaluable.",
+      "Transfer.transferFrom and an attributed acceptance act; Commitment.madeByFunction / madeBy.",
+      "A valid-time succession predicate kept distinct from revises (correction).",
+      "owl:AllDisjointClasses axioms and SHACL shapes that block direct instances of the abstract classes (AttributedRecord, Claim, AccountabilityAssertion).",
+      "skos:ConceptScheme individuals for each termScheme.",
+      "A statement that the REQUIRED-UPSTREAM changes (log:orderLineItem, lgl:status, lgl:contractSide) contradict the documentation's claim that xfn relates modules 'without editing them'; the anchor scenario depends on edits to the upstream modules."
+    ],
+    "smuggledLayerViolations": [
+      "ExposureGap.convergesAt / sharedForum and the exposure-gap rule compute lowest-common-superior results and store them as graph nodes whose gapStatus is changed by a job. That is diagnostic or propagation output held in layer 1. Keep it only if it is attributed to an AnalyticAgent and treated as a derived record like any other; otherwise move it to layer 5 as a named query.",
+      "DimensionBinding.rollupRule and the SHACL rule 'no sum or mean over ordinal values' declare aggregation algebra. Declaring it is defensible, but EP5's 'comparable-after-restatement: recompute history under the new version first' tells layer 3 how to compute and should be phrased as meaning only.",
+      "EffectClaim.magnitudeBand 'relative to the effect variable's normal range' presupposes a measured range (layer 3). Reword it as the claimant's own judgement with no reference range."
+    ]
+  },
+  {
+    "lens": "Layer purity (no causal, measurement, incentive or propagation logic smuggled into xfn) and extension-point sufficiency (could a separate team build layers 2 to 5 on this without changing the schema?)",
+    "verdict": "MAJOR REVISION. The core design is right: the n-ary EffectClaim, the speech-act status, the Appraisal-only verdict channel, and the MetricDefinition/MetricVersion split with no values. Five things still need fixing. (1) One stored class is layer-5/4 logic (ExposureGap), and one relation carries causal content while calling itself definitional (Outcome.hasConstituent, as the walkthrough uses it). (2) The causal-layer extension points are not sufficient. A layer-2 team would have to come back for schema changes on the first day: there is no link from Variable to MetricVersion, no per-variable do() values, no type-level (population) variables, no way to relate rival Variables, and magnitude exists only as free text. (3) The provenance envelope leaves out exactly the records where incentives bite: Decision, Transfer, Commitment and Handoff. (4) The immutability rules contradict several mutable status fields. (5) The spec says its SHACL constraints export, but they do not. rdfBridge.ts shaclJsonToTurtle (lines 280-304) emits only minCount, maxCount, datatype, class, pattern, severity and message. It emits no sh:or, no sh:sparql and no node-level constraint. So every union range, every SPARQL rule, the acyclicity checks and the global 'no Variable-Variable triple' ASK are absent from the standard export that independent systems consume.",
+    "issues": [
+      {
+        "severity": "critical",
+        "where": "ExposureGap (class) + gapRight/gapAnswerability/gapClaim/convergesAt/sharedForum/derivationRule/derivedAt/gapStatus; EP10",
+        "what": "This is layer-5/4 logic stored as ontology instances. A derivation job walks the solid-line tree to compute a lowest common superior (convergesAt), sets gapStatus through re-derivation, and writes nodes. The rule's premises also build in an incentive theory. Only 'ratify|veto' rights count. 'P has no answerability of its own' is treated as misalignment. The bearer is chosen by mapping the claimed effect Variable to an Outcome through statedOver, even though Outcomes are attributed records and there can be rival Outcomes on the same Variable. Which author's Outcome counts is not defined. Worst of all, one asserted, unappraised EffectClaim is enough to mint a persistent node naming a seat as the one who 'decides what Q bears'. Any claimant can therefore manufacture structural blame records against a rival seat. The spec's own rationale ('must never turn into a hand-asserted blame record') is defeated by automation rather than prevented by it.",
+        "fix": "Remove ExposureGap and its 8 properties from the module. Publish the derivation as a versioned named query (e.g. xfn-queries.rq, exposure-gap@1.0) over the facts xfn already holds: DecisionRight, Answerability, EffectClaim, Outcome.statedOver, solidLineTo and seatOn. Layer 5, or the Ontos insight engine, can materialise the results in its own store, keyed by the (right, answerability, claim) triple. If a stored diagnostic has to exist, subclass it from Claim and attribute it to an AnalyticAgent with conditionalOnModel = the rule IRI, so it is contestable like everything else."
+      },
+      {
+        "severity": "critical",
+        "where": "Outcome.hasConstituent; walkthrough step 2 (O-tco hasConstituent O-unit-cost, O-quality-contacts, O-otif, O-risk-transfer); reconciledConflicts 'Savings'",
+        "what": "This is causal content inside a 'definitional, never causal' relation. Total cost of supply is not, by definition, made up of the weekly defect-ticket rate (V4), inbound OTIF (V6) or a binary indemnity flag (V7). Those are claimed CAUSES of cost of poor quality, expediting cost and uncovered liability. The walkthrough therefore turns the anchor scenario's own contested arrows ('supplier quality affects cost') into unappraisable definitional structure that propagation walks. The constituents' preferredDirections (OTIF increase, indemnity maintain) also cannot be composed into the parent's (minimise cost). In addition, O-tco has no statedOver Variable, which breaks the 1..1 cardinality: the composite construct has no Variable at all. Finally, Outcome A statedOver Va hasConstituent Outcome B statedOver Vb is a two-hop Variable-to-Variable structure that the global ASK does not catch. EffectClaim.dependencyKind 'definitional' is a second, competing mechanism for the same thing.",
+        "fix": "Restrict hasConstituent with a rule: a constituent's statedOver Variable must be a declared definitional component of the parent's Variable, with the same unit family. Give O-tco a Variable V-tco. Model cost-of-poor-quality, expediting-cost and uncovered-liability-cost as Variables and constituents. Carry the links 'tickets -> cost of poor quality' and 'indemnity -> uncovered liability' as EffectClaims. Choose ONE home for definitional dependency: an attributed DefinitionalDecomposition record (Claim subclass) or hasConstituent, and drop the other. Remove 'definitional' from dependencyKind if hasConstituent is kept."
+      },
+      {
+        "severity": "critical",
+        "where": "Variable (no link to MetricVersion); ProxyClaim (links MetricDefinition to Outcome only); EP1, EP4",
+        "what": "There is no route from a Variable to the data that measures it. The causal layer binds its model nodes to Variables, but the measurement layer keys observations only by MetricVersion. The only path is Variable <-statedOver- Outcome <-forOutcome- ProxyClaim -proxyMetric-> MetricDefinition. That path (a) exists only for Variables that someone has turned into an Outcome, and so misses V1 (supplier), V5 (field failure rate) and V8 (firmware), including the mediator in the arrow claim, and (b) passes through a claim about proxy validity for a goal, which is not operationalisation. A layer-2 engineer cannot fetch the data series for claimedCause, claimedEffect or claimedMediator.",
+        "fix": "Add an attributed record, xfn:Operationalisation (a Claim subclass): operationalises -> Variable 1..1, byMetricVersion -> MetricVersion 1..1, plus mappingNote and validityCondition. Rival operationalisations then coexist and can be appraised. Alternatively add MetricVersion.measuresVariable 0..*. The first option is preferred because the mapping is contestable. Extend EP1 and EP4 to state the join."
+      },
+      {
+        "severity": "high",
+        "where": "Decision.baselineState / Decision.interventionState (xsd:string, 1..1) vs intervenesOn (1..*)",
+        "what": "A do() operator is not machine-readable. With several intervenesOn Variables there is one baseline string and one intervention string, so it is impossible to tell which state belongs to which Variable. The states are prose ('V-2305 under ACME-CTR-0017'), even though the referents exist as KG IRIs (fin:Vendor/V-2305, lgl:Contract/ACME-CTR-0017). A causal engine must NLP-parse the intervention before it can set it.",
+        "fix": "Reify each setting as xfn:InterventionSetting: ofDecision, onVariable 1..1, baselineRef / interventionRef (open-range object property to KG IRIs, for categorical settings), baselineLiteral / interventionLiteral (for quantitative settings), and settingNote. Keep the prose strings as the verbatim statement. Update the EffectClaim SHACL rule: claimedCause must be the onVariable of one of the viaDecision's settings."
+      },
+      {
+        "severity": "high",
+        "where": "Variable (aboutEntity only); EffectClaim.orientation 'standing'; EP3 'unit population'",
+        "what": "There are no type-level (population) variables. Every Variable in the walkthrough is a single token (component-c-primary-supplier). A 'standing' general dependency ('switching to an unqualified supplier raises field failures for any component') has nothing to be about. The causal layer needs units and populations to estimate anything. EP3 derives the population from BoundaryObject.exemplifies, but Variables are not linked to BoundaryObjects or to an ideal type, so the derivation cannot be done.",
+        "fix": "Add Variable.variableKind (token | family) and Variable.instanceOfFamily -> Variable. Add unitClass (anyURI, the class whose instances are the units) or unitsExemplify -> BoundaryObject (ideal type). Whitelist instanceOfFamily in the no-Variable-edge ASK, since it is typing, not dependence."
+      },
+      {
+        "severity": "high",
+        "where": "Global CI ASK 'no triple links one xfn:Variable directly to another'; AttributedRecord.revises; Variable",
+        "what": "The spec contradicts itself, and rival variables cannot be related. Variable is an AttributedRecord, and 'a change is a new record that revises the old one'. Variable-revises-Variable is exactly a triple between two Variables, so the global ASK fails on every revised Variable. Separately, rival definitions 'are distinct Variables' (V2 CPO unit price vs V3 Finance landed cost, where EC-0101 and EC-0160 compete), but nothing can record that V2 is a partitive part of V3 or that two Variables are close matches. PerspectiveCorrespondence works only on Perspectives. A causal engine reconciling rival claims has no attributed correspondence to use.",
+        "fix": "Narrow the ASK to a denylist of dependence-bearing predicates, or to 'no predicate outside {revises, instanceOfFamily, correspondence nodes}'. Model each Variable as having an optional Perspective on an ideal-type BoundaryObject, or allow PerspectiveCorrespondence subject and object to be Variables. Either way, rival constructs get graded, attributed, never-resolved correspondences."
+      },
+      {
+        "severity": "high",
+        "where": "Decision, Commitment, Transfer, Handoff, BusinessFunction, DecisionDomain, BoundaryObject, LegalEntity (not subclasses of AttributedRecord)",
+        "what": "The provenance envelope stops exactly where the incentive problem lives. Nothing says who recorded a Decision's consultedFunction / consultationComplete=true / statedRationale / declaredScope 'local'. In practice it is the decider, self-reporting the very facts the variety check relies on. Transfer.acceptanceStatus changes from unacknowledged to accepted in place, with no author, time or revision. The walkthrough also shows a DecisionRight basis gap without saying who asserted it. Meanwhile contentDigest explicitly excludes 'decisionStatus', which implies Decision was meant to be an AttributedRecord. Layers 4 and 5 are told to treat these as facts (EP7) with no way to see who asserted them.",
+        "fix": "Make Decision, Commitment, Transfer and Handoff subclasses of AttributedRecord. Move the mutable lifecycle fields (decisionStatus, acceptanceStatus) into separate attributed status-event records, e.g. xfn:StatusAssertion {about, statusValue, attributedTo, recordedAt}, so each change has an author and a time. Alternatively require revises-chains. Reference and identity classes (BusinessFunction, BoundaryObject, LegalEntity, DecisionDomain) need at least attributedTo and recordedAt."
+      },
+      {
+        "severity": "high",
+        "where": "AttributedRecord immutability vs PerspectiveCorrespondence.adoptionStatus/reviewedBy, MetricVersion.lifecycleStatus, Perspective validTo; contentDigest exclusions",
+        "what": "Mutable fields sit on records declared immutable. 'Records freeze when they leave draft' and 'a changed digest under the same IRI is a contract violation'. Yet adoptionStatus 'changes at most once' after assertion, MetricVersion.lifecycleStatus moves from published to deprecated to retired (MetricVersion is an AttributedRecord), and valid-time end dates are set later. None of these fields is in the digest exclusion list (recordStatus, withdrawnAt, decisionStatus). Consumers verifying digests (EP1, EP4) will see false violations, or they will learn to ignore digests.",
+        "fix": "Declare one explicit list of lifecycle properties that is excluded from the digest: recordStatus, withdrawnAt, adoptionStatus, reviewedBy, lifecycleStatus, validTo. Better still, move lifecycle into StatusAssertion records (see the previous issue) so that content records really are immutable. State the rule in EP13."
+      },
+      {
+        "severity": "high",
+        "where": "shaclNotes (all SPARQL rules, sh:or unions, acyclicity, global ASK); designRationale 'those constraints do export'; EP13",
+        "what": "The spec claims enforcement that the export cannot carry. api/services/rdfBridge.ts shaclJsonToTurtle emits only property-level minCount/maxCount/datatype/class/pattern/severity/message. There is no sh:or, sh:in, sh:sparql, sh:node or node-level constraint. The following therefore exist only inside Ontos, if they are enforced at all: the range of attributedTo; the unions on transferOf and commitmentCounterparty; the answersFor range; the rule claimedCause ∈ intervenesOn; the no-direct-Variable-edge ASK; acyclicity; and 'answersFor is never a MetricDefinition'. The stated goal that 'meaning never depends on Ontos internals' fails, because independent layer systems validate against a much weaker shapes graph. In addition, sh:targetClass on AttributedRecord reaches subclass instances only if rdfs:subClassOf triples are in the data graph.",
+        "fix": "Either extend ClassShaclJson and shaclJsonToTurtle to emit sh:or, sh:in and sh:sparql, as a stated prerequisite of xfn 1.0, or publish a hand-authored xfn-shapes.ttl beside the generated one and name it in EP13 as normative. Mark every constraint 'exported' or 'Ontos-only'. Tell consumers to load the ontology's subClassOf axioms into the validation data graph."
+      },
+      {
+        "severity": "high",
+        "where": "MetricBinding.bindsMetric -> MetricDefinition ('the measurement layer resolves which version is live'); EP6 layer-4 key",
+        "what": "The scorecard binding floats across versions. The spec's own rationale says series breaks are where redefinition gaming hides, yet the fact 'CPO is evaluated on MET-001 in 2025' does not pin which operational definition was agreed. A mid-year MAJOR version (break-in-series) silently changes what the seat is scored on. The incentive layer cannot tell which definition was contracted without re-deriving it from time, and layer 3's choice of 'live' version becomes an unrecorded incentive decision.",
+        "fix": "Add MetricBinding.boundVersion -> MetricVersion 0..* (the versions agreed at binding time), and require a new MetricBinding revision whenever the bound version is superseded mid-period. Key EP6 on the MetricVersion IRI or the MetricBinding IRI, never on the bare MetricDefinition."
+      },
+      {
+        "severity": "medium",
+        "where": "EffectClaim.impactedFunction ('the load-bearing edge of the topology that propagation walks'); EP9 (d) 'depth 2, within ADR-002's cap'",
+        "what": "This smuggles in a propagation shortcut and ties the model to an Ontos internal. Bearers come from two sources that can disagree: the claimant's self-declared impactedFunction, and claimedEffect -> Variable <- statedOver Outcome -> inRemitOf. Propagation is told to walk the self-declared one, so a claimant chooses whose scorecard their claim lands on. The stated reason is the Ontos graphRouter depth limit (api/graphRouter.ts:104 allows depth 1|2). That is an implementation cap of one UI, shaping a model meant for external consumers.",
+        "fix": "Keep impactedFunction only as the claimant's framing, the same way originFunction is described. Make the normative bearer relation the derived path through Outcome.inRemitOf. Remove the ADR-002 / depth reasoning from EP9. External propagation engines are not bound by it."
+      },
+      {
+        "severity": "medium",
+        "where": "EffectClaim.magnitudeStatement / magnitudeBand; walkthrough EC-0160 '-3% [-6,+1]', EC-0142 '+15-45%'",
+        "what": "The structured part of the claim content is missing. Priors from structured elicitation (evidence-class 'structured-elicitation' exists) cannot be used without parsing text. The band 'relative to the effect variable's normal range' is undefined, because no range is recorded anywhere. A claimant's stated interval is attributed content, not a measured value. Refusing to structure it does not keep layer 3 out; it only makes layer 2 parse English.",
+        "fix": "Add optional attributed-content fields: claimedChangeLow, claimedChangeHigh (xsd:decimal), claimedChangeScale (absolute | relative | percentage-point), claimedChangeUnit (QUDT IRI), claimedIntervalProbability. Document them as a quotation of the claimant, not to be summed. The EP1 contract already forbids layer 5 from using unappraised claims numerically."
+      },
+      {
+        "severity": "medium",
+        "where": "EffectClaim.claimedCause (1..1)",
+        "what": "Joint and conjunctive causes cannot be expressed. The Support mechanism is really 'supplier switch AND no part-revision qualification'. Decisions intervene on 1..* variables, but a claim can name only one of them. effectModifier covers moderation, not joint interventions.",
+        "fix": "Make claimedCause 1..* with a causeConjunction flag (joint | any), or allow viaDecision alone to stand for the whole setting bundle of the decision."
+      },
+      {
+        "severity": "medium",
+        "where": "Outcome.preferredDirection 'within-band' / 'maintain'; EP9 (c)",
+        "what": "Propagation depends on the incentive layer. 'within-band' is part of the outcome's meaning, but the band limits are declared incentive-layer data. Layer 5 therefore cannot map a claimed sign to good or bad without first reading layer 4, which breaks the stated independence of the layers.",
+        "fix": "Treat the band as definitional: add bandDescription (text), or a band-defining reference, on Outcome, as a definition and not a target. Alternatively, state in EP9 that within-band outcomes yield an 'indeterminate' valence unless a layer-4 band is supplied."
+      },
+      {
+        "severity": "low",
+        "where": "DimensionBinding.rollupRule; accountabilityKind (cost-center|profit-center|investment-center)",
+        "what": "These border on layers 3, 4 and 5. rollupRule values such as time-weighted-mean are aggregation procedures rather than additivity semantics. The responsibility-centre kinds come from management-control and evaluation design, not from facts about consequence exposure.",
+        "fix": "Recast rollupRule as additivity semantics (additive | semi-additive-over-time | non-additive | recompute-from-components), with the procedure left to layer 3. Keep the responsibility-centre kinds only if they are recorded as the organisation's formally declared designation (basis formal, grantedUnder)."
+      },
+      {
+        "severity": "low",
+        "where": "Appraisal SHACL 'recordedAt ≥ appraised recordedAt keeps chains acyclic'",
+        "what": "Two records with equal timestamps can appraise each other, so the rule does not guarantee that appraisal chains are acyclic.",
+        "fix": "Use strict '>', or add an explicit acyclicity check over appraises+."
+      }
+    ],
+    "keepUnchanged": [
+      "EffectClaim as an n-ary node with neutral Variable endpoints and a shared viaDecision. The saving and the tickets are joined at PROC-2025-014 and there is no saving->tickets edge. This is exactly right for the anchor scenario.",
+      "The speech-act recordStatus (draft|asserted|withdrawn|superseded), with no truth value, and 'contested' derived from disputing Appraisals.",
+      "Appraisal as the only channel for verdicts, including the causal engine's. Engine assumptions are EffectClaims attributed to a versioned AnalyticAgent with conditionalOnModel.",
+      "MetricDefinition / MetricVersion split, with observations bound only to an immutable version, comparability on supersession, and scaleType guards against ordinal arithmetic.",
+      "MetricBinding without weights, targets or payouts, and Answerability with the sanctions leg excluded.",
+      "BoundaryObject + Perspective + PerspectiveCorrespondence in place of owl:sameAs, and Reading making the R1 join-criterion choice queryable.",
+      "Transfer.acceptanceStatus and transferBasis excluding 'claimed'. TermDeviation with direction 'absent' making the missing indemnity a node.",
+      "A single Decision class with a decisionKind ControlledTerm, rather than per-function decision subclasses.",
+      "ProxyClaim / DivergenceClaim, with coversOutcome enabling the Holmstrom-Milgrom unmeasured-task query.",
+      "EvidenceItem classified but never ranked, with a mandatory evidenceSourceSystem ('none: recollection').",
+      "The DecisionDomain comment 'the ontology never states what a domain affects'.",
+      "The ForecastClaim value held in layer 3 keyed by the claim IRI, with the revises chain providing vintages."
+    ],
+    "missing": [
+      "Variable -> MetricVersion operationalisation (an attributed record), which the causal layer needs to fetch data.",
+      "A per-variable, IRI-valued do() setting (InterventionSetting) instead of prose baselineState/interventionState.",
+      "Type-level Variable families with a unit population class, which standing claims and estimation need.",
+      "An attributed correspondence between rival Variables (V2 vs V3).",
+      "A provenance envelope (attributedTo/recordedAt/revises) on Decision, Transfer, Commitment and Handoff, and attributed status-change events.",
+      "Version pinning on MetricBinding.",
+      "Structured claimant-stated magnitude intervals, as quoted content.",
+      "A normative, hand-authored SHACL Turtle including sh:or / sh:sparql, because the Ontos exporter cannot emit them (rdfBridge.ts:280-304).",
+      "A Variable for composite outcomes (O-tco has no statedOver in the walkthrough).",
+      "Joint-cause expression on EffectClaim."
+    ],
+    "smuggledLayerViolations": [
+      "Layer 5/4: xfn:ExposureGap, a derived and stored node produced by a derivation job. convergesAt is computed by tree-walk, gapStatus is set by re-derivation, and the premises encode which right kinds constitute misalignment.",
+      "Layer 2: Outcome.hasConstituent as used for O-tco. Ticket rate, OTIF and indemnity cover are causes of cost, not definitional constituents of it.",
+      "Layer 5: EffectClaim.impactedFunction declared 'the load-bearing edge propagation walks', a self-declared shortcut that bypasses Outcome.inRemitOf.",
+      "Layer 4 dependency: Outcome.preferredDirection 'within-band', whose meaning requires incentive-layer band limits.",
+      "Layer 3/5 (mild): DimensionBinding.rollupRule procedure values (time-weighted-mean, period-end) instead of additivity semantics.",
+      "Ontos-internal leak: EP9 justifies the topology by 'depth 2, within ADR-002's cap' (graphRouter depth 1|2)."
+    ]
+  },
+  {
+    "lens": "Executive and operational realism: would a real CFO, COO, CPO or GC recognise this model, populate it, and survive it politically?",
+    "verdict": "This is intellectually the strongest cross-functional design I have seen, and most of its core should stay as it is. As a system that has to be filled in by a real executive team, though, it will fail in its current form. It assumes the party that exports an externality will record the facts that expose it. It leaves the most politically contested facts (Decision, Commitment, Transfer, Handoff) outside the attribution envelope it builds for everything else. It forces senior people to write Variables and sign immutable, discoverable records they will never sign. It lets any function generate a named \"ExposureGap\" against a peer from a claim with no evidence. The anchor walkthrough is tidier than reality: someone gets there first and names the Variables, the CEO convenes a review of a sub-authority-limit supplier switch, Quality Engineering (the function that actually does the RMA teardowns and owns supplier qualification) is missing, and the \"TCO\" decomposition is not really definitional. None of this is fatal to the semantic core. All of it will be fatal to adoption, and to trust in the output, if it goes out as written.",
+    "issues": [
+      {
+        "severity": "critical",
+        "where": "Decision, Commitment, Transfer, Handoff, BoundaryObject (none are subclasses of AttributedRecord)",
+        "what": "The facts most likely to be fought over carry no attribution: who recorded the decision, whether consultation was complete, where a commitment was 'actually captured', and whether a transfer was 'unacknowledged'. In the anchor case, Support or Legal will be the ones who enter PROC-2025-014 after the fact, so they can hang claims on it. Its baselineState, declaredScope 'local', consultationComplete true, statedRationale and reversalLeadTimeDays will then be one function's framing of another function's act, with no author, no recordedAt and no digest. Transfer.acceptanceStatus='unacknowledged' is a charge against the sender, and it too has no author. The spec's own rule is 'no anonymous arrows', and it breaks that rule exactly where the politics sit.",
+        "fix": "Make Decision, Commitment, Transfer and Handoff subclasses of AttributedRecord, or add a mandatory recordedBy/recordedAt/onBehalfOf envelope. Move the decider's self-descriptions (statedRationale, declaredScope, consultationComplete, reversalLeadTimeDays) into an attributed DecisionStatement record, so a rival description is an Appraisal and not an overwrite. Record acceptanceStatus changes as attributed events by the receiver, not as a mutable field."
+      },
+      {
+        "severity": "critical",
+        "where": "AttributedRecord immutability and retirement ('retired rather than deleted'); EffectClaim and TermDeviation authored by the GC",
+        "what": "No General Counsel will let a permanent, undeletable, personally attributed record saying 'virtually-certain we lost indemnity cover' (EC-2025-0144) sit in an operational knowledge graph outside legal privilege. It is discoverable in litigation against the supplier or by a customer. The same holds for a VP-Support claim naming a defect cause, which is a product-liability exposure. It also clashes with GDPR erasure and records-retention rules for person-attributed records. As modelled, Legal will refuse to author anything, and TermDeviation will stay empty.",
+        "fix": "Add a confidentiality or privilege classification to AttributedRecord (e.g. accessClass: open|restricted|privileged, plus privilegeHolder → Position) and a retention-policy reference. Allow the content to be redacted by a governed tombstone that keeps the IRI and digest, which is distinct from withdrawal. Let a privileged claim expose its structure (cause and effect Variables, impactedFunction, sign) while its statement and evidence stay in the legal system, reached by sourceLocator."
+      },
+      {
+        "severity": "critical",
+        "where": "ExposureGap derivation rule; EffectClaim citesEvidence (Warning only)",
+        "what": "One asserted EffectClaim with no evidence and statedCredence 0.1 is enough to derive an ExposureGap node that names the CPO's right as 'deciding what Q bears'. That node lands on a CEO dashboard and works as a blame instrument. Politics being what they are, functions will file claims against peers before bonus season, and the deciding function will answer by filing blanket Appraisals. The first time a CPO finds an 'open gap' raised against them on an anecdote, the programme loses executive sponsorship. The spec says the gap 'asserts nothing about truth', but executives read a derived node with their seat on it as an accusation.",
+        "fix": "Keep the gap non-judgemental, and gate derivation on structural admission facts that are not truth: at least one cited EvidenceItem whose evidenceSourceSystem is not 'none: recollection'; the claim solicited in a Deliberation, OR the claimant's function holds an Answerability for the effect Outcome; and the claim past a mandatory reply window, during which the decider's function may attach an Appraisal. Record the gating criteria in derivationRule. Also derive the symmetric view (claims filed per function against others) so claim-flooding is itself visible."
+      },
+      {
+        "severity": "high",
+        "where": "Decision.intervenesOn (1..*, Violation), baselineState/interventionState (1..1), Variable authoring",
+        "what": "No CPO, and no sourcing tool feed (Ariba, Coupa), will produce 'V1 component-c-primary-supplier' when a supplier award is made. Making Variables mandatory means decisions go unrecorded until an analyst reconstructs them, which usually happens after the damage, when the record gets written by the aggrieved party. In practice the Decision layer will be empty for everything below CEO level, and that is exactly where the anchor scenario lives (a ratify right under $5M).",
+        "fix": "Let a Decision be recorded from a source-system event with intervenesOn 0..* (Warning), and declare per-decisionKind Variable templates (supplier-switch ⇒ 'primary supplier of {aboutEntity}') so an AnalyticAgent can mint the do() target automatically and attribute it to itself. Treat 'decisions recorded from the S2P, HRIS or ERP change log' as the primary ingestion path, not the CEO review."
+      },
+      {
+        "severity": "high",
+        "where": "Variable ('rival definitions are distinct Variables'); PerspectiveCorrespondence restricted to Perspective",
+        "what": "Support's 'weekly defect tickets on P', Engineering's 'field failure rate' and Quality's 'PPM on component C' will be minted independently by each claimant. There is no graded correspondence mechanism between Variables. The only one is Appraisal.advances, which offers rivals and does not map them. Within a year layer 2 gets 400 near-duplicate Variables, cannot tell which claims concern the same construct, and the EffectClaim graph fragments. This is the most common way enterprise ontology programmes die: identifier sprawl nobody is paid to reconcile.",
+        "fix": "Either make Variables attach to ideal-type BoundaryObjects through Perspective, so the existing PerspectiveCorrespondence machinery applies, or add a VariableCorrespondence (attributed, graded, adoptable convention, same shape). Add a Variable stewardship requirement (stewardedBy) so someone is answerable for de-duplication."
+      },
+      {
+        "severity": "high",
+        "where": "anchorScenarioWalkthrough step 2: O-tco hasConstituent {O-unit-cost, O-quality-contacts, O-otif, O-risk-transfer}; Outcome.hasConstituent",
+        "what": "The walkthrough contradicts the design rationale. The rationale says TCO = unit cost + expediting cost + cost of poor quality + uncovered liability. The walkthrough instead makes TCO 'made up of' a ticket rate (V4), an OTIF percentage (V6) and a binary indemnity flag (V7). Total cost is not defined as ticket rate. That link is a causal claim (tickets drive CoPQ) presented as definitional decomposition, which is exactly the layer-2 smuggling the spec says it forbids. A CFO would reject this at once: you cannot add OTIF points to dollars.",
+        "fix": "Fix the walkthrough to use cost-denominated constituent Outcomes (CoPQ, expediting cost, uncovered-liability exposure), each statedOver a cost Variable. Add a SHACL rule that constituent Outcomes of a sum-type parent share a unit dimension, or declare a compositionKind (additive|conjunctive) on hasConstituent. Keep the ticket→CoPQ and OTIF→expedite links as EffectClaims."
+      },
+      {
+        "severity": "high",
+        "where": "BusinessFunction functionKey list; anchor walkthrough",
+        "what": "Quality (supplier quality engineering, incoming inspection, RMA teardown) is missing. In a real supplier-switch failure, Quality owns part-revision qualification, and Quality does the 23 RMA teardowns cited as EV-03. The walkthrough gives that evidence to VP-Support, who in real life has no view of component supplier lineage: tickets are keyed to product or SKU, not to the component's vendor, and the spec admits the log:orderLineItem lineage does not exist. The scenario also stops at internal pain. It never reaches Finance's warranty provision or Revenue's churn and credits, which is where the CEO and CFO actually feel it. FP&A is also absent, as the function that owns PPV versus standard cost, the Finance-side counterpart to procurement 'savings'.",
+        "fix": "Add quality and fpa (or finance.fpa as a subFunctionOf) to the functionKey list. Rewrite step 9 so the arrow is surfaced by Quality (EffectClaim V1→V5 on a teardown EvidenceItem) and Support claims V5→V4. Add a Finance claim on the warranty provision and a Revenue claim on credits or churn, so the walkthrough reaches the P&L. Add PPV as a Finance MetricDefinition in the savings reconciliation."
+      },
+      {
+        "severity": "high",
+        "where": "EP1 (only recordStatus 'asserted' is consumed); Claim.encodedBy ('stays draft until the author confirms')",
+        "what": "The claims that matter most are the ones a senior author will be slowest to sign: a VP criticising a peer's decision, or a GC conceding exposure. Analysts will encode them, and they will sit in draft forever. Layer 2 never sees them. The system then fills with claims from people who like writing claims, not from the people who hold the evidence.",
+        "fix": "Allow attribution to a delegated seat (chief of staff, function analytics lead) through an explicit actedOnBehalfOf chain to the executive Position. Add a 'submitted' state, or let draft claims be visible to EP1 with a flag, so layer 2 can see pending claims without treating them as asserted. Add a staleness warning on drafts older than N days."
+      },
+      {
+        "severity": "medium",
+        "where": "Decision.decidedBy (hr:Person 1..1), Decision.decidedOn (1..1)",
+        "what": "Many of the most damaging cross-functional shifts are not decisions. They are drift: incoming inspection quietly dropped, a buyer moving volume to the cheaper supplier line by line, a re-promising practice that spreads. There is no single decider or date. Forcing a Person and a date either misattributes the drift to whoever signed last, or leaves it unrepresentable. Committee decisions (ExCo, S&OP) likewise have no honest single decidedBy.",
+        "fix": "Make decidedBy 0..1 when decidedInCapacityOf is a collective Position. Add a decisionKind or decisionMode of 'emergent-practice' with an observedFrom window instead of decidedOn, attributed to whoever documented it, so an EffectClaim can hang off drift."
+      },
+      {
+        "severity": "medium",
+        "where": "Commitment.isContractual/capturedIn; Transfer.acceptanceStatus; TermDeviation.deviationApprovedBy",
+        "what": "These are the best fields in the model, and they depend on the exporter volunteering data against itself. Procurement will not record a 3-year minimum-volume promise sitting in a price file; Operations finds it when volumes bind. Nobody records an unapproved deviation, because recording it is admitting it. The spec calls these 'findings', but it has no stated source for them.",
+        "fix": "State the discovery path explicitly per class: Commitment and TermDeviation are expected to be authored by the bearing function or by an AnalyticAgent (contract-analytics or clause-extraction). Transfer is expected to be authored by the receiver. Document that EP10's diagnostics are only as complete as the bearer's reporting, and add a completeness indicator (e.g. a Deliberation of kind audit that attests coverage of a contract population)."
+      },
+      {
+        "severity": "medium",
+        "where": "Perspective, instance BoundaryObject, LegalEntity (volume)",
+        "what": "With about 2,000 suppliers × 5 functions, plus customers and contractors, you get tens of thousands of Perspectives, each needing a localPurpose, localCriterion and identityBasis. That is an MDM programme, which is exactly what failed at the last three ontology implementations I watched. Nothing in the spec says these are machine-generated, so a reader will assume curation.",
+        "fix": "Allow a Perspective's localPurpose and localCriterion to be inherited from an ideal-type Perspective (a 'perspectiveTemplate' link), so instance Perspectives carry only heldBy, perspectiveOn, representedBy, identityBasis and the authoring AnalyticAgent. Say explicitly that instance-level identity is bulk-generated by matching agents, and that humans curate only ideal types and disputes."
+      },
+      {
+        "severity": "medium",
+        "where": "MetricBinding (bindsMetric → MetricDefinition, bindingPeriod 0..1)",
+        "what": "Real scorecards change the definition mid-year: 'savings' becomes 'savings net of cost avoidance' in Q3. Binding to the Definition and letting layer 3 resolve the live version hides precisely the redefinition gaming the spec's own EP5 is meant to expose. It is also blind to the fact that real bonus plans have a shared enterprise component (EBITDA or FCF pool) bound to every C-suite seat. The walkthrough omits that, even though it is the one lever that already partly aligns them.",
+        "fix": "Add an optional bindsVersion (the version in force when the scorecard was signed), or require a new MetricBinding when the live version changes during a bindingPeriod. Include the shared enterprise metric bindings in the walkthrough, so the model shows what CEOs already use."
+      },
+      {
+        "severity": "low",
+        "where": "DecisionRight basis 'attested' (Aghion & Tirole real authority)",
+        "what": "Nobody will write 'the CFO actually decides supplier selection, not the CPO' into a named, permanent record. The field is right in theory and will stay empty in practice.",
+        "fix": "Keep it, but expect it to be authored by AnalyticAgents that infer it from approval-workflow logs (who actually approves), with the evidence as EvidenceItem. Say this in the definition, so nobody plans on interviews to fill it."
+      }
+    ],
+    "keepUnchanged": [
+      "EffectClaim as an n-ary node between neutral Variables, anchored on a shared Decision, with no Variable-to-Variable triple. The 'saving and tickets are both effects of one decision, not saving→tickets' framing is exactly right, and any executive will recognise it.",
+      "Appraisal as the only verdict channel, with the causal engine as one more attributed appraiser and no aggregation. This is what makes the model politically survivable: nobody is declared guilty by the ontology.",
+      "The split of DecisionRight, Answerability and MetricBinding into separate classes. Fusing authority and exposure in RACI is where real externalities come from, and every COO knows it.",
+      "Commitment.isContractual plus capturedIn (price-file, email, verbal). These are the most operationally realistic fields in the spec.",
+      "TermDeviation with direction 'absent' and benchmarkContract. 'We gave up the indemnity we used to have' as a query is exactly what a GC needs (subject to the privilege fix).",
+      "MetricDefinition/MetricVersion with non-unique names, populationPerspective, baselineDescription and recognitionEvent. The OTIF and savings reconciliations match how these metrics actually diverge in real companies.",
+      "BusinessFunction as distinct from hr:OrgUnit, with a stable functionKey. Org charts really are re-cut every 12 to 18 months.",
+      "Deliberation's solicited-versus-volunteered signal and Decision.consultedFunction/consultationComplete as the variety check. These are cheap to capture and politically neutral.",
+      "The ordinal magnitudeBand plus the verbatim magnitudeStatement, rather than a number. This stops layer 5 from summing hearsay.",
+      "Transfer.transferBasis excluding 'claimed'. Alleged transfers are EffectClaims, and that separation is correct."
+    ],
+    "missing": [
+      "A confidentiality, legal-privilege and retention classification on AttributedRecord. Without it Legal will not participate.",
+      "Attribution (recordedBy/recordedAt/onBehalfOf) on Decision, Commitment, Transfer and Handoff.",
+      "A correspondence or de-duplication mechanism for Variables, plus stewardship of Variables.",
+      "Quality and FP&A business functions. PPV as the Finance counterpart to procurement savings.",
+      "A representation for emergent practice or drift, not only dated acts with a single decider.",
+      "Delegated authorship (chief of staff or analyst acting for an executive seat), so drafts do not rot.",
+      "A per-class statement of who is expected to author each record (bearer, exporter or AnalyticAgent), and a coverage or completeness attestation, so an empty diagnostic is not read as 'no problem'.",
+      "Automated Decision ingestion from source systems (S2P award, HRIS change, ERP config change), with Variable templates per decisionKind.",
+      "A reply-window or admission gate before a claim can drive an ExposureGap.",
+      "The P&L end of the anchor scenario: warranty provision, customer credits and churn claims by Finance and Revenue."
+    ],
+    "smuggledLayerViolations": [
+      "Anchor walkthrough O-tco hasConstituent {ticket rate, OTIF, indemnity flag}: this states as definitional decomposition what is really a causal mapping (tickets → cost of poor quality, OTIF → expediting cost). That is layer-2 content hidden inside the layer-5 propagation DAG.",
+      "ExposureGap and its published derivation rule, plus convergesAt (lowest common superior), are propagation or diagnostic computation carried out and stored inside the ontology. This is defensible as derived topology, but it is layer-5 logic, and with no admission gate it acts as a de facto judgement.",
+      "DimensionBinding.rollupRule declares the aggregation algebra. This is acceptable as a declaration, but it sits at the edge of layer 3/5, and the spec should say that layer 5 may override it with justification."
+    ]
+  }
+]
