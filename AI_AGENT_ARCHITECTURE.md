@@ -8,7 +8,8 @@ how that work was organized, what the agents got right and wrong, and the part t
 out to matter most: the verification discipline that separated plausible output from
 working software.
 
-Every claim below can be checked against the artifacts listed [at the end](#the-artifacts).
+Most claims below can be checked against the git history and the artifacts listed
+[at the end](#the-artifacts).
 
 ---
 
@@ -34,14 +35,14 @@ Every claim below can be checked against the artifacts listed [at the end](#the-
 
 ## Timeline
 
-Reconstructed from the git history and the planning artifacts.
+Reconstructed from the git history.
 
 | Stage | When | Commits | What happened |
 |---|---|---|---|
 | 1. Orchestrated build | before the history begins | — | A swarm of role-specialized agents built the platform. Its output is the first commit. |
-| 2. Hardening and handover | 2026-09-08 | `f103423` `1354573` `08b95c4` | Self-contained authentication, security hardening, and a written handover for the next agent session. |
-| 3. Feature sessions | 2026-09-09 – 10 | `c2f0d0e` `9e92388` `5b3117e` `6ed2a5b` `12214fa` | Field Guide, twelve insight rules, native semantic engine, explainable SHACL. |
-| 4. Independent evaluation | 2026-09-10 – 21 | `ccadfeb` → `606c44c` | A fresh session audited the build without trusting its documentation, then fixed and containerized it. |
+| 2. Hardening and handover | 2026-09-08 | `b739308` `0ef9bd8` `d360fc9` | Self-contained authentication, security hardening, and a written handover for the next agent session. |
+| 3. Feature sessions | 2026-09-09 – 10 | `c8cdc00` `498717f` `0041d35` `1e627ec` `91a04cc` | Field Guide, twelve insight rules, native semantic engine, explainable SHACL. |
+| 4. Independent evaluation | 2026-09-10 onward | `e33bd7e` onward | A fresh session audited the build without trusting its documentation, then fixed and containerized it. Later rounds were re-verified the same way. |
 
 ---
 
@@ -51,10 +52,9 @@ The original build was planned by an orchestrating agent and carried out by a sw
 role-specialized agents. Three things about how it was organized are worth studying.
 
 **Decisions were locked before fan-out.** Where the engineer expressed no preference, the
-orchestrator chose, and wrote down that it had chosen: *"user: no preference → orchestrator
-chooses, documented in-app."* Those choices became architecture decision records on the
-in-app **Decisions** page (ADR-001 to ADR-006), so a reviewer can audit every call the
-agents made on their own authority.
+orchestrator chose, and recorded that it had chosen. Each such choice became an
+architecture decision record on the in-app **Decisions** page (ADR-001 to ADR-006), so a
+reviewer can audit every call the agents made on their own authority.
 
 **Work was split by role, not by page.** A backend agent owned schema, seed data and the
 deliberately planted anomalies the insight engine exists to find. A design agent produced
@@ -67,28 +67,28 @@ agent touches — the module registry, the navigation, the route table — were 
 the main agent alone. That is the detail that keeps parallel agents from overwriting each
 other.
 
-Read the original plan as a plan, not a record. It specified Supabase and Postgres; the code runs
-on MySQL and Drizzle, and ADR-002 explains why. The gap between the two is itself useful
-evidence of how decisions moved during execution.
+The plan and the result diverged, and the record shows it. The plan specified Supabase and
+Postgres; the code runs on MySQL and Drizzle, and ADR-002 explains why. The gap between the
+two is itself useful evidence of how decisions moved during execution.
 
 ---
 
 ## Stage 2 — The handover as a protocol
 
-Between sessions, the outgoing agent wrote a handover document for the
-incoming one. Its structure is the part worth copying:
+Between sessions, the outgoing agent wrote a handover document for the incoming one. Its
+structure is the part worth copying:
 
 - a system overview and directory map, so the incoming agent starts oriented;
 - what changed and why, as file-level tables rather than prose;
-- ranked outstanding work, with the database migration marked **CRITICAL**;
-- constraints that are easy to break and hard to notice — *"the audit chain is SHA-256
-  hash-linked; do not break insertion order"*;
+- ranked outstanding work, with the database migration marked **critical**;
+- constraints that are easy to break and hard to notice — the audit chain is SHA-256
+  hash-linked, so insertion order must never change;
 - the exact commands to verify the build.
 
-It is also a lesson in why handovers need verifying like code. Section 4.2 says password
-verification is a no-op. Section 9.2 of the same document says constant-time scrypt
-verification was implemented. The code agreed with 9.2. A later agent that trusted 4.2
-would have "fixed" something that worked.
+It was also a lesson in why handovers need verifying like code. One section said password
+verification was a no-op; another said constant-time scrypt verification was in place.
+The code agreed with the second. A later agent that trusted the first would have "fixed"
+something that worked.
 
 ---
 
@@ -252,6 +252,7 @@ with a deterministic template fallback, so no finding ever depends on model avai
 |---|---|---|
 | Git history | Every change since the first import | Commit bodies explain *why*, not just what |
 | In-app **Decisions** page | ADR-001 to ADR-006 and C4 diagrams | The architectural choices agents made and their reasoning |
+| [`docs/semantic-layer/`](docs/semantic-layer/) | The cross-functional ontology draft and its critiques | What the multi-agent design workflow produced, and what it left open |
 | [`README.md`](README.md) → Known limitations | What is still wrong, stated plainly | What the verification passes have not yet closed |
 
 ---

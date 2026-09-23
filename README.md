@@ -26,6 +26,7 @@ the generation — it is the verification discipline that separated plausible ou
 from working software, and the defects that passed every automated gate.
 
 - **[How Ontos Was Built (AI_AGENT_ARCHITECTURE.md)](AI_AGENT_ARCHITECTURE.md)** — How the work was organized, what the agents got right and wrong, and the checking that made the difference.
+- **[Semantic layer draft (docs/semantic-layer/)](docs/semantic-layer/)** — The cross-functional ontology designed by a multi-agent workflow, with its open critiques.
 
 ---
 
