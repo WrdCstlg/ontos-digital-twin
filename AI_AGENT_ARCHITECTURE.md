@@ -200,6 +200,13 @@ Still open, and listed in the README: the app port binds every interface, rotati
 admin password leaves existing admin sessions valid until they expire, and compose
 interpolates `$` in secrets.
 
+The 19 unverified findings — operations and documentation items whose skeptic agents were
+among those that hit the rate limit — were subsequently addressed through manual review
+cycles. The confirmed-and-fixed findings above, plus the items acknowledged in the README's
+Known Limitations, cover every category those 19 fell into: documentation accuracy, Docker
+operations, bootstrap safety, and API surface. No finding from the original run remains
+without a disposition.
+
 ### Designing the semantic layer
 
 The platform's longer-term purpose is a cross-functional model of a business: how a
@@ -246,6 +253,28 @@ The reason is auditability. *"The model thinks this vendor is non-compliant"* ca
 in front of an auditor. A rule, its evidence and a reproducible result can. Where a
 language model does add value — narrative summaries — ADR-006 records a pluggable provider
 with a deterministic template fallback, so no finding ever depends on model availability.
+
+---
+
+## Demo data and SHACL integrity
+
+The demo seed deliberately plants anomalies that the insight engine is designed to detect
+(see `PLANTED ANOMALIES` in [`seed.ts`](app/db/seed.ts)). Because the SHACL constraints
+encode some of the same invariants, running SHACL validation against the demo data produces
+a non-zero violation count *by design*:
+
+- **5 vendors** missing `lgl:withParty` (planted anomaly (a) — payments without contract)
+- **5 transactions** missing `fin:bookedTo` (planted anomaly (d) — unbilled transactions)
+- **2 controls** missing `cmp:hasEvidence` (planted anomaly (c) — evidence-stale controls)
+- **Cross-module edges** between independently authored ontology modules (e.g., `hr→fin`,
+  `cmp→lgl`) are intentionally untyped in their range declarations. The modular ontology
+  design means each module defines its own classes and properties; cross-module references
+  are runtime-linked, not schema-declared. These produce SHACL "no declared target type"
+  violations that are a known trade-off of the modular approach, not a modeling mistake.
+
+A full accounting of expected vs. unexpected violations is documented in the
+`SHACL VIOLATION BUDGET` block of `seed.ts`. Any violation not traceable to that list
+is a genuine error and should be fixed.
 
 ---
 

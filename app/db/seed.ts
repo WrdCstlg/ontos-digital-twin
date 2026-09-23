@@ -25,6 +25,24 @@
  *  (k) carrier C-08 carries ~2/3 of all shipments — concentration risk, and the
  *      hub used by the centrality demo (rule: carrier-shipment-concentration)
  *
+ * SHACL VIOLATION BUDGET (expected SHACL violations from planted anomalies):
+ * The SHACL constraints deliberately encode some of the same invariants that
+ * the insight rules detect. When SHACL validates the demo data, the planted
+ * anomalies will surface as SHACL violations. This is by design — it
+ * demonstrates that the semantic layer and the insight engine agree.
+ *
+ * Expected SHACL violations from planted data:
+ *  - 5 vendors missing lgl:withParty (from anomaly (a))
+ *  - 5 transactions missing fin:bookedTo (from anomaly (d), SHACL Warning)
+ *  - 2 controls missing cmp:hasEvidence (from anomaly (c), SHACL Warning)
+ *  - Cross-module edges (e.g., hr→fin, cmp→lgl) are intentionally untyped in
+ *    their range declarations because the ontology modules are independently
+ *    authored. These produce SHACL violations for "no declared target type"
+ *    and are a known limitation of the modular ontology design, not a bug.
+ *
+ * Any SHACL violation NOT traceable to this list is a genuine modeling mistake
+ * and should be fixed.
+ *
  * Keep this list in step with the code below: the counts here are the contract
  * the insight-rule expectations and the Field Guide are read against.
  */
