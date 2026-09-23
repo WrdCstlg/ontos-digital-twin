@@ -27,7 +27,11 @@ x-app-env: &app-env
   IOT_BROKER_TYPE: ${IOT_BROKER_TYPE:-}
   IOT_BROKER_TOPIC: ${IOT_BROKER_TOPIC:-}
   IOT_WEBHOOK_API_KEY: ${IOT_WEBHOOK_API_KEY:-}
+  IOT_WORKSPACE_ID: ${IOT_WORKSPACE_ID:-}
 
+# No `image:` name on the services built from this: compose names each image
+# after the project, so two stacks started with different -p names never
+# overwrite each other's image.
 x-app-build: &app-build
   context: ./app
 
@@ -64,6 +68,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      # SHACL shapes arrive as files the app writes here; the engine only reads.
+      - shacl-exchange:/exchange:ro
     # No healthcheck, deliberately. The image is distroless — no shell, no
     # curl — and its `status` subcommand reports ok even when no server is
     # running, so it cannot tell live from dead. The app treats the engine as
@@ -71,7 +78,6 @@ services:
 
   init:
     build: *app-build
-    image: ontos-app:local
     command: ["node", "dist/db/bootstrap.js"]
     environment: *app-env
     depends_on:
@@ -81,11 +87,14 @@ services:
 
   app:
     build: *app-build
-    image: ontos-app:local
     restart: unless-stopped
     ports:
       - "${ONTOS_PORT:-3000}:3000"
-    environment: *app-env
+    environment:
+      <<: *app-env
+      SHACL_EXCHANGE_DIR: /exchange
+    volumes:
+      - shacl-exchange:/exchange
     depends_on:
       init:
         condition: service_completed_successfully
@@ -94,3 +103,12 @@ services:
 
 volumes:
   db-data:
+  # A small in-memory directory shared by app and engine. The engine takes SHACL
+  # shapes only as a file path, so the two containers need one place both can
+  # see. uid/gid 1000 is the `node` user the app image runs as, so the app can
+  # write; mode 0755 lets the engine's unprivileged user read.
+  shacl-exchange:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=1000,gid=1000,mode=0755,size=16m"

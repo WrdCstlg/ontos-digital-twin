@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   ontologyModules,
@@ -278,11 +279,11 @@ class SemanticEngineClient {
   /**
    * Runs the W3C SHACL validator against the currently loaded graph.
    *
-   * The engine's batch API accepts a file path in `args`. In Docker, the app and
-   * engine run in separate containers with isolated filesystems, so a temp file
-   * written here is invisible to the engine. We first try sending the shapes
-   * content through a direct SHACL validation endpoint; if that fails we fall
-   * back to the temp file approach (which works when both share a host).
+   * The engine accepts shapes only as a file path, which it reads from its own
+   * filesystem. Run as separate containers, the app and engine therefore need
+   * a directory they both see: compose mounts one volume at /exchange in each
+   * and sets SHACL_EXCHANGE_DIR. When both run on one host, the OS temp
+   * directory already is that shared place.
    */
   public async validateShacl(shapesTurtle: string): Promise<ShaclValidationResult> {
     await this.ensureEngineRunning();
@@ -306,43 +307,22 @@ class SemanticEngineClient {
       error?: string;
     }>;
 
-    // Try a direct /api/shacl endpoint that accepts inline Turtle (Docker-safe)
-    let batch: BatchResp | null = null;
-    try {
-      const directRes = await fetch(`${this.baseUrl}/api/shacl`, {
-        method: "POST",
-        headers: { ...this.getHeaders(), "Content-Type": "text/turtle" },
-        body: shapesTurtle,
-        signal: AbortSignal.timeout(15000),
-      });
-      if (directRes.ok) {
-        const directResult = await directRes.json();
-        // Wrap in batch format for uniform handling
-        batch = [{ command: "shacl", result: directResult }];
-      }
-    } catch {
-      // Direct endpoint not available — fall through to batch+tmpfile
-    }
+    const exchangeDir = process.env.SHACL_EXCHANGE_DIR || os.tmpdir();
+    const shapesFile = path.join(exchangeDir, `ontos-shacl-${randomUUID()}.ttl`);
+    fs.writeFileSync(shapesFile, shapesTurtle, "utf-8");
 
-    // Fallback: write a temp file and use the batch API (works when sharing a filesystem)
-    let tmpFile: string | undefined;
-    if (!batch) {
-      tmpFile = path.join(os.tmpdir(), `ontos-shacl-${Date.now()}-${Math.random().toString(36).slice(2)}.ttl`);
-      fs.writeFileSync(tmpFile, shapesTurtle, "utf-8");
+    try {
       const res = await fetch(`${this.baseUrl}/api/batch`, {
         method: "POST",
         headers: this.getHeaders(),
-        body: JSON.stringify([{ command: "shacl", args: [tmpFile] }]),
+        body: JSON.stringify([{ command: "shacl", args: [shapesFile] }]),
         signal: AbortSignal.timeout(30000),
       });
-
       if (!res.ok) {
         throw new Error(`SHACL validation request failed: HTTP ${res.status}`);
       }
-      batch = (await res.json()) as BatchResp;
-    }
 
-    try {
+      const batch = (await res.json()) as BatchResp;
       const shaclRes = batch[0]?.result;
 
       if (!shaclRes || shaclRes.error) {
@@ -366,12 +346,10 @@ class SemanticEngineClient {
         raw: shaclRes,
       };
     } finally {
-      if (tmpFile && fs.existsSync(tmpFile)) {
-        try {
-          fs.unlinkSync(tmpFile);
-        } catch {
-          // ignore cleanup error
-        }
+      try {
+        fs.unlinkSync(shapesFile);
+      } catch {
+        // already gone
       }
     }
   }
