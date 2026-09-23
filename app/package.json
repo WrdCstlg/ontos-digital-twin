@@ -31,6 +31,7 @@
     "build:db": "esbuild db/bootstrap.ts db/seed.ts db/seed-twins.ts --platform=node --bundle --format=esm --outdir=dist/db --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\"",
     "db:bootstrap": "node dist/db/bootstrap.js",
     "check": "tsc -b",
+    "typecheck": "tsc -b",
     "format": "prettier --write .",
     "test": "vitest run",
     "test:e2e": "playwright test",

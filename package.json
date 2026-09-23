@@ -9,6 +9,7 @@
     "build": "npm --prefix app run build",
     "start": "npm --prefix app start",
     "check": "npm --prefix app run check",
+    "typecheck": "npm --prefix app run check",
     "lint": "npm --prefix app run lint",
     "test": "npm --prefix app test",
     "docker:up": "docker compose up --build",
