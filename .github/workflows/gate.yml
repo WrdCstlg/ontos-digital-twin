@@ -1,0 +1,71 @@
+name: Gate
+
+# Ontos under the PRO-THESIS gate (gate/README.md). The tool is pinned: a
+# different version may change verdicts. Exit codes are the product: 0 pass,
+# 1 an oracle proved a violation, 2 nothing proven, 4 the locked test moved.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  THESIS_VERSION: v0.1.0-phase0
+
+jobs:
+  gate:
+    name: PRO-THESIS gate (smoke, stranded sync job)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: gate/go.mod
+          cache-dependency-path: gate/go.sum
+
+      - name: Install thesis (pinned)
+        run: |
+          go install "github.com/WrdCstlg/pro-thesis/cmd/thesis@${THESIS_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          "$(go env GOPATH)/bin/thesis" version
+
+      # Before any image is built or world runs: a moved oracle definition or
+      # covered config key is exit 4, "someone changed the test".
+      - name: Verify the oracle lock
+        working-directory: gate
+        run: thesis oracles verify
+
+      - name: Build the images under test
+        run: |
+          tag="${GITHUB_SHA::7}"
+          echo "ONTOS_GATE_TAG=$tag" >> "$GITHUB_ENV"
+          pwsh -NoProfile -File gate/scripts/build-images.ps1 -Tag "$tag"
+
+      - name: Build the driver and oracle
+        run: pwsh -NoProfile -File gate/scripts/build-tools.ps1
+
+      - name: Smoke (3 worlds, no faults)
+        working-directory: gate
+        run: thesis run --profile smoke
+
+      # Pre-registered in gate/.prothesis/PREREGISTRATION.md, recorded in
+      # gate/observations/2026-09-24-OBS-GATE-001.md. Passes since a27b351.
+      - name: Stranded sync job (app restarted mid-import)
+        working-directory: gate
+        run: thesis run --profile stuckjob --fault 'proc.restart(app)@3000..9000'
+
+      - name: Show verdicts and app logs on failure
+        if: failure()
+        working-directory: gate
+        run: |
+          for v in .prothesis/runs/*/verdict.json; do echo "== $v"; cat "$v"; done
+          for l in .prothesis/runs/*/world-*/logs/app.log; do echo "== $l"; tail -n 80 "$l"; done

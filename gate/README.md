@@ -29,6 +29,10 @@ $env:ONTOS_GATE_TAG = "<sha>"
 thesis run --profile smoke             # three worlds, no faults
 ```
 
+CI runs the same steps on every push and pull request
+([`.github/workflows/gate.yml`](../.github/workflows/gate.yml)): verify the lock,
+build the images for the commit, then `smoke` and the stranded-sync-job world.
+
 `build-images.ps1` builds the app image and then a MySQL image that already
 holds the demo workspace, migrated, seeded and with the gate admin provisioned,
 by running that app image's own bootstrap against a scratch database. Each world
