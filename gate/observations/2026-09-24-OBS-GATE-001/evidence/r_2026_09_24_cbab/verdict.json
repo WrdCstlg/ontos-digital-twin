@@ -1,0 +1,26 @@
+{
+  "schema": "prothesis.verdict/v1",
+  "run_id": "r_2026_09_24_cbab",
+  "profile": "stuckjob",
+  "commit": "a27b351",
+  "verdict": "PASS",
+  "budget": {
+    "wall_s": 300,
+    "used_s": 45,
+    "worlds_planned": 1,
+    "worlds_run": 1
+  },
+  "violations": [],
+  "coverage": {
+    "new_templates": 0,
+    "cum_templates": 0,
+    "new_states": 0,
+    "cum_states": 0
+  },
+  "coverage_delta_vs_baseline": null,
+  "oracle_lock": {
+    "status": "ok",
+    "manifest_sha": "sha256:e1b362c3071c7d21e6f0b79f4dd7c1caed45ae3b5221c3f333fe403bc111c428"
+  },
+  "artifacts": ".prothesis/runs/r_2026_09_24_cbab/"
+}

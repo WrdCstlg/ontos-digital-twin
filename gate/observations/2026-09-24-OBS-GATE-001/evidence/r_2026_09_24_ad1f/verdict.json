@@ -1,0 +1,139 @@
+{
+  "schema": "prothesis.verdict/v1",
+  "run_id": "r_2026_09_24_ad1f",
+  "profile": "stuckjob",
+  "commit": "a27b351",
+  "verdict": "FAIL",
+  "budget": {
+    "wall_s": 300,
+    "used_s": 74,
+    "worlds_planned": 1,
+    "worlds_run": 1
+  },
+  "violations": [
+    {
+      "id": "v1",
+      "oracle": "sync_jobs.settle",
+      "class": "liveness",
+      "severity": "high",
+      "phase": "ASSERT",
+      "first_seen_ms": 45789,
+      "explanation": "1 sync job(s) still claim to be running 30s after the system went quiet (job 70). sync_jobs holds 95 row(s): failed 2, running 1, succeeded 92. The driver recorded 107 sync operations (ok 86, fail 4, info 17, never completed 0); 17 sync operation(s) ended indeterminate, which is where an import was cut off. Nothing will ever finish these jobs: the job list will show them in progress indefinitely.",
+      "witness": {
+        "first_seen_ms": 45789,
+        "indeterminate_sync_op_ids": [
+          2,
+          53,
+          57,
+          60,
+          63,
+          67,
+          69,
+          70,
+          71,
+          72,
+          73,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83
+        ],
+        "key": "sync_jobs",
+        "oracle_argv": [
+          "./bin/oracle-sync-jobs",
+          "--node",
+          "db",
+          "--settle",
+          "30s"
+        ],
+        "oracle_definition": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\oracles\\sync_jobs.settle.yaml",
+        "phase": "ASSERT",
+        "settle_ms": 30000,
+        "stderr_path": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\runs\\r_2026_09_24_ad1f\\world-0001\\oracles\\sync_jobs.settle.stderr.log",
+        "stuck_jobs": [
+          {
+            "job_id": 70,
+            "mapping_id": 1,
+            "started_ms": 5104
+          }
+        ]
+      },
+      "minimal_repro": null,
+      "shrink": {
+        "attempted": false,
+        "faults_before": 0,
+        "faults_after": 0,
+        "ops_before": 0,
+        "ops_after": 0,
+        "surviving_faults": []
+      },
+      "causal_timeline": [
+        {
+          "t_ms": -25925,
+          "event": "phase",
+          "detail": "BOOT begins (window -25925..-1 ms)"
+        },
+        {
+          "t_ms": -1,
+          "event": "phase",
+          "detail": "SEED begins (window -1..0 ms)"
+        },
+        {
+          "t_ms": 0,
+          "event": "phase",
+          "detail": "DRIVE begins (window 0..9002 ms)"
+        },
+        {
+          "t_ms": 1,
+          "event": "phase",
+          "detail": "PERTURB begins (window 1..9002 ms)"
+        },
+        {
+          "t_ms": 3000,
+          "event": "fault",
+          "detail": "inject proc.restart(app)@3000..9000 -> app"
+        },
+        {
+          "t_ms": 9000,
+          "event": "fault",
+          "detail": "withdraw proc.restart(app)@3000..9000 -> app"
+        },
+        {
+          "t_ms": 9002,
+          "event": "phase",
+          "detail": "HEAL begins (window 9002..12165 ms)"
+        },
+        {
+          "t_ms": 12165,
+          "event": "phase",
+          "detail": "QUIESCE begins (window 12165..14568 ms)"
+        },
+        {
+          "t_ms": 14568,
+          "event": "phase",
+          "detail": "ASSERT begins (window 14568..14568 ms)"
+        },
+        {
+          "t_ms": 45789,
+          "event": "oracle",
+          "detail": "sync_jobs.settle (liveness) reported a violation in ASSERT: 1 sync job(s) still claim to be running 30s after the system went quiet (job 70). sync_jobs holds 95 row(s): failed 2, running 1, succeeded 92. The driver recorded 107 sync operati…"
+        }
+      ],
+      "suspect": null
+    }
+  ],
+  "coverage": {
+    "new_templates": 0,
+    "cum_templates": 0,
+    "new_states": 0,
+    "cum_states": 0
+  },
+  "coverage_delta_vs_baseline": null,
+  "oracle_lock": {
+    "status": "ok",
+    "manifest_sha": "sha256:e1b362c3071c7d21e6f0b79f4dd7c1caed45ae3b5221c3f333fe403bc111c428"
+  },
+  "artifacts": ".prothesis/runs/r_2026_09_24_ad1f/"
+}

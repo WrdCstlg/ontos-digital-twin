@@ -45,6 +45,7 @@ same state with no init service.
 | `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still claim to be running |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |
+| `observations/` | What the worlds showed, against their pre-registration, with each run's `verdict.json` and world files |
 | `db/Dockerfile`, `scripts/` | The seeded database image and the build scripts |
 
 ## Rules

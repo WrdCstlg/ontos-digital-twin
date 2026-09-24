@@ -1,0 +1,217 @@
+{
+  "schema": "prothesis.verdict/v1",
+  "run_id": "r_2026_09_24_c75a",
+  "profile": "stuckjob",
+  "commit": "3f2d0e0",
+  "verdict": "FAIL",
+  "budget": {
+    "wall_s": 300,
+    "used_s": 133,
+    "worlds_planned": 1,
+    "worlds_run": 1
+  },
+  "violations": [
+    {
+      "id": "v1",
+      "oracle": "sync_jobs.settle",
+      "class": "liveness",
+      "severity": "high",
+      "phase": "ASSERT",
+      "first_seen_ms": 69936,
+      "explanation": "3 sync job(s) still claim to be running 30s after the system went quiet (job 7, 8, 9). sync_jobs holds 14 row(s): failed 1, running 3, succeeded 10. The driver recorded 106 sync operations (ok 3, fail 18, info 85, never completed 0); 85 sync operation(s) ended indeterminate, which is where an import was cut off. Nothing will ever finish these jobs: the job list will show them in progress indefinitely.",
+      "witness": {
+        "first_seen_ms": 69936,
+        "indeterminate_sync_op_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103
+        ],
+        "key": "sync_jobs",
+        "oracle_argv": [
+          "./bin/oracle-sync-jobs",
+          "--node",
+          "db",
+          "--settle",
+          "30s"
+        ],
+        "oracle_definition": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\oracles\\sync_jobs.settle.yaml",
+        "phase": "ASSERT",
+        "settle_ms": 30000,
+        "stderr_path": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\runs\\r_2026_09_24_c75a\\world-0001\\oracles\\sync_jobs.settle.stderr.log",
+        "stuck_jobs": [
+          {
+            "job_id": 7,
+            "mapping_id": 1,
+            "started_ms": 3130
+          },
+          {
+            "job_id": 8,
+            "mapping_id": 1,
+            "started_ms": 3130
+          },
+          {
+            "job_id": 9,
+            "mapping_id": 1,
+            "started_ms": 4130
+          }
+        ]
+      },
+      "minimal_repro": null,
+      "shrink": {
+        "attempted": false,
+        "faults_before": 0,
+        "faults_after": 0,
+        "ops_before": 0,
+        "ops_after": 0,
+        "surviving_faults": []
+      },
+      "causal_timeline": [
+        {
+          "t_ms": -56406,
+          "event": "phase",
+          "detail": "BOOT begins (window -56406..-15 ms)"
+        },
+        {
+          "t_ms": -15,
+          "event": "phase",
+          "detail": "SEED begins (window -15..0 ms)"
+        },
+        {
+          "t_ms": 0,
+          "event": "phase",
+          "detail": "DRIVE begins (window 0..9002 ms)"
+        },
+        {
+          "t_ms": 9,
+          "event": "phase",
+          "detail": "PERTURB begins (window 9..9002 ms)"
+        },
+        {
+          "t_ms": 3004,
+          "event": "fault",
+          "detail": "inject proc.restart(app)@3000..9000 -> app"
+        },
+        {
+          "t_ms": 9001,
+          "event": "fault",
+          "detail": "withdraw proc.restart(app)@3000..9000 -> app"
+        },
+        {
+          "t_ms": 9002,
+          "event": "phase",
+          "detail": "HEAL begins (window 9002..31439 ms)"
+        },
+        {
+          "t_ms": 31439,
+          "event": "phase",
+          "detail": "QUIESCE begins (window 31439..35727 ms)"
+        },
+        {
+          "t_ms": 35727,
+          "event": "phase",
+          "detail": "ASSERT begins (window 35727..35728 ms)"
+        },
+        {
+          "t_ms": 69936,
+          "event": "oracle",
+          "detail": "sync_jobs.settle (liveness) reported a violation in ASSERT: 3 sync job(s) still claim to be running 30s after the system went quiet (job 7, 8, 9). sync_jobs holds 14 row(s): failed 1, running 3, succeeded 10. The driver recorded 106 sync op…"
+        }
+      ],
+      "suspect": null
+    }
+  ],
+  "coverage": {
+    "new_templates": 0,
+    "cum_templates": 0,
+    "new_states": 0,
+    "cum_states": 0
+  },
+  "coverage_delta_vs_baseline": null,
+  "oracle_lock": {
+    "status": "ok",
+    "manifest_sha": "sha256:e1b362c3071c7d21e6f0b79f4dd7c1caed45ae3b5221c3f333fe403bc111c428"
+  },
+  "artifacts": ".prothesis/runs/r_2026_09_24_c75a/"
+}
