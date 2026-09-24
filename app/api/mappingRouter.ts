@@ -392,9 +392,11 @@ export const mappingRouter = createRouter({
               }
 
               const dataTtl = knowledgeGraphToTurtle(candidateNodes, [], prefixMap);
-              await semanticEngine.clearStore();
-              await semanticEngine.loadTurtle(dataTtl);
-              const valRes = await semanticEngine.validateShacl(shapesTtl);
+              const valRes = await semanticEngine.exclusive(async () => {
+                await semanticEngine.clearStore();
+                await semanticEngine.loadTurtle(dataTtl);
+                return semanticEngine.validateShacl(shapesTtl);
+              });
               shaclReport = explainShaclReport(valRes);
             }
           } catch (shaclErr) {

@@ -26,7 +26,7 @@ and the Docker stack. They are documented here so nobody mistakes them for a lea
 | A fixed fallback JWT signing secret is used when `APP_SECRET` is unset | `app/api/lib/env.ts` | Startup fails unless `APP_SECRET` is set |
 | An account with no stored password hash accepts the password `ontos2026!` or `password123` on first login, then stores a real hash | `app/api/auth/service.ts` | Such accounts are rejected outright |
 | One-click persona login (Admin, Ontologist, Editor, Viewer) with no password | `app/api/auth-router.ts` | Refused unless `ALLOW_DEMO_LOGIN=true` |
-| Persona accounts are created with a hash of the password `ontos2026!` | `app/api/auth/service.ts` | Only reachable when persona login is enabled |
+| A system admin with no membership in a workspace is admitted to it as admin, and one with no memberships at all lands in the demo workspace | `app/api/services/workspaceGuard.ts` | Refused: admins need a real membership like everyone else |
 | Localhost origins pass CORS and CSRF checks | `app/api/boot.ts` | Only origins listed in `ALLOWED_ORIGINS` pass |
 
 **`ALLOW_DEMO_LOGIN=true` is a deliberate hole.** It lets anyone who can reach the server
@@ -40,7 +40,10 @@ startup whenever it is on. Use it for local demos only, never on a reachable net
 - Passwords: `node:crypto` scrypt, 128-bit salts, constant-time comparison.
 - Every tRPC procedure is behind a role-checked procedure builder; the only unauthenticated
   routes are login, persona login (gated as above), `ping` and `/health`.
-- `/api/sparql` requires a session, is rate-limited, and accepts only read-only query forms.
+- `/api/sparql` requires a session, is rate-limited, and accepts only read-only query forms;
+  the tRPC `graph.sparqlQuery` applies the same read-only check.
+- Persona accounts never hold a password; every start clears any hash an earlier build
+  left on one.
 - User records pass through a field allowlist before serialization; password hashes never
   reach a client.
 - Security headers, explicit-origin CORS, CSRF origin checks, a 2 MB body limit, and
@@ -56,12 +59,15 @@ show an impact beyond what is described here.
 - **Rate limits are per process and in memory.** They reset on restart and are not shared
   between replicas, so they slow down a single attacker against a single instance but are
   not a distributed defence.
-- **The semantic engine is shared across workspaces.** Every operation clears and reloads
-  one in-memory triple store, so there is no tenant isolation inside the engine, and
-  concurrent operations can interfere with one another.
+- **The semantic engine is shared across workspaces.** It holds one in-memory graph, and
+  every operation clears it and loads what it needs, so the engine itself has no tenant
+  isolation. The app serialises those operations under a per-process lock and loads the
+  caller's workspace before any query, so one workspace's request never reads another's
+  graph. The lock does not span processes: app replicas must not share an engine.
 - **The engine's HTTP API is unauthenticated by default.** In the compose stack it is not
   published to the host, but any container on the compose network can reach it. Set
   `OPEN_ONTOLOGIES_TOKEN` on both sides to require a bearer token.
-- **SHACL validation fails open.** When the engine is unreachable, validation reports
-  conformance with an explanatory message instead of failing.
+- **SHACL checks do not block imports.** Validation reports `conforms: null` when it could
+  not run (engine offline, or no constraints configured) and never reports a pass it did
+  not observe, but a CSV import commits either way; violations are recorded, not enforced.
 - **`/health` is unauthenticated** and reports the engine's internal URL and version.

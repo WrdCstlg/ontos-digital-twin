@@ -583,17 +583,19 @@ export const ontologyRouter = createRouter({
       const isEngineAlive = await semanticEngine.ensureEngineRunning();
       if (isEngineAlive) {
         try {
-          await semanticEngine.clearStore();
-          const prefixMap = buildPrefixMap([mod]);
-          const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
-          await semanticEngine.loadTurtle(modTtl);
+          const res = await semanticEngine.exclusive(async () => {
+            await semanticEngine.clearStore();
+            const prefixMap = buildPrefixMap([mod]);
+            const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
+            await semanticEngine.loadTurtle(modTtl);
 
-          if (nodes.length > 0) {
-            const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap);
-            await semanticEngine.loadTurtle(instTtl);
-          }
+            if (nodes.length > 0) {
+              const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap);
+              await semanticEngine.loadTurtle(instTtl);
+            }
 
-          const res = await semanticEngine.runReasoning(input.profile);
+            return semanticEngine.runReasoning(input.profile);
+          });
           return {
             moduleKey: mod.key,
             version: mod.version,
@@ -754,15 +756,16 @@ export const ontologyRouter = createRouter({
         };
       }
 
-      await semanticEngine.clearStore();
-      const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
-      await semanticEngine.loadTurtle(modTtl);
-      if (nodes.length > 0) {
-        const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap);
-        await semanticEngine.loadTurtle(instTtl);
-      }
-
-      const report = await semanticEngine.validateShacl(shapesTtl);
+      const report = await semanticEngine.exclusive(async () => {
+        await semanticEngine.clearStore();
+        const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
+        await semanticEngine.loadTurtle(modTtl);
+        if (nodes.length > 0) {
+          const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap);
+          await semanticEngine.loadTurtle(instTtl);
+        }
+        return semanticEngine.validateShacl(shapesTtl);
+      });
       const explained = explainShaclReport(report);
       return {
         ...explained,

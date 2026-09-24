@@ -78,6 +78,11 @@ class SemanticEngineClient {
   private baseUrl: string;
   private token?: string;
   private binaryPath?: string;
+  // The engine holds one dataset for the whole process. `queue` serialises the
+  // compound operations on it (see exclusive); `loadedWorkspaceId` records whose
+  // complete graph the store holds, or null once it holds anything else.
+  private queue: Promise<unknown> = Promise.resolve();
+  private loadedWorkspaceId: number | null = null;
 
   constructor() {
     this.baseUrl =
@@ -89,6 +94,30 @@ class SemanticEngineClient {
 
   public getUrl(): string {
     return this.baseUrl;
+  }
+
+  /**
+   * Runs `task` with the engine to itself. Because the store holds one dataset,
+   * a clear → load → query/validate/reason sequence must not interleave with
+   * another request's clear, so every such sequence runs through here.
+   *
+   * Not re-entrant: a task must not call exclusive() again. It serialises within
+   * this process only; several app processes sharing one engine still interfere.
+   */
+  public exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Makes the store hold this workspace's complete graph, syncing unless it
+   * already does. Call inside exclusive(). Skipping the sync can serve data as
+   * old as the last sync, but never another workspace's.
+   */
+  public async ensureWorkspaceLoaded(workspaceId: number): Promise<void> {
+    if (this.loadedWorkspaceId === workspaceId) return;
+    await this.syncWorkspace(workspaceId);
   }
 
   /**
@@ -202,6 +231,7 @@ class SemanticEngineClient {
    * Loads raw Turtle data directly into the engine's Oxigraph graph store.
    */
   public async loadTurtle(turtle: string, baseIri?: string): Promise<{ ok: boolean; triplesLoaded: number }> {
+    this.loadedWorkspaceId = null;
     await this.ensureEngineRunning();
     const res = await fetch(`${this.baseUrl}/api/load-turtle`, {
       method: "POST",
@@ -218,9 +248,11 @@ class SemanticEngineClient {
   }
 
   /**
-   * Clears the in-memory Oxigraph triple store.
+   * Clears the in-memory Oxigraph triple store. Throws if the engine refuses:
+   * loading on top of a store that still holds another graph would mix them.
    */
   public async clearStore(): Promise<boolean> {
+    this.loadedWorkspaceId = null;
     await this.ensureEngineRunning();
     const res = await fetch(`${this.baseUrl}/api/batch`, {
       method: "POST",
@@ -228,7 +260,10 @@ class SemanticEngineClient {
       body: JSON.stringify([{ command: "clear", args: [] }]),
       signal: AbortSignal.timeout(5000),
     });
-    return res.ok;
+    if (!res.ok) {
+      throw new Error(`Failed to clear the engine store: HTTP ${res.status}`);
+    }
+    return true;
   }
 
   /**
@@ -261,6 +296,7 @@ class SemanticEngineClient {
    * Executes a SPARQL 1.1 UPDATE query.
    */
   public async updateSparql(sparqlUpdate: string): Promise<{ ok: boolean; affected: number }> {
+    this.loadedWorkspaceId = null;
     await this.ensureEngineRunning();
     const res = await fetch(`${this.baseUrl}/api/update`, {
       method: "POST",
@@ -359,6 +395,8 @@ class SemanticEngineClient {
    */
   public async runReasoning(profile: ReasoningProfile = "owl-rl"): Promise<ReasoningResult> {
     const started = Date.now();
+    // Reasoning materialises inferred triples into the store.
+    this.loadedWorkspaceId = null;
     await this.ensureEngineRunning();
 
     const health = await this.checkHealth();
@@ -461,6 +499,8 @@ class SemanticEngineClient {
    * 2. Serializes active modules to Turtle
    * 3. Serializes active KG nodes and edges to Turtle
    * 4. Loads both into the engine's Oxigraph store
+   *
+   * Call inside exclusive(), together with whatever reads the synced store.
    */
   public async syncWorkspace(workspaceId: number): Promise<{
     classesLoaded: number;
@@ -476,6 +516,7 @@ class SemanticEngineClient {
 
     if (modules.length === 0) {
       await this.clearStore();
+      this.loadedWorkspaceId = workspaceId;
       return { classesLoaded: 0, propertiesLoaded: 0, instancesLoaded: 0, triplesLoaded: 0 };
     }
 
@@ -522,6 +563,7 @@ class SemanticEngineClient {
       totalTriples += res.triplesLoaded;
     }
 
+    this.loadedWorkspaceId = workspaceId;
     return {
       classesLoaded: classes.filter((c) => moduleIds.includes(c.moduleId)).length,
       propertiesLoaded: properties.filter((p) => moduleIds.includes(p.moduleId)).length,

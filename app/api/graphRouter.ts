@@ -12,6 +12,7 @@ import {
 } from "@db/schema";
 import { createRouter, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { isReadOnlySparql } from "./lib/sparqlGuard";
 import { semanticEngine } from "./services/semanticEngine";
 
 async function resolveWorkspace(userWorkspace: Workspace, workspaceKey?: string) {
@@ -281,11 +282,20 @@ export const graphRouter = createRouter({
     .input(
       z.object({
         query: z.string().min(1).max(50000),
-        autoSync: z.boolean().default(false),
+        // As on /api/sparql: re-sync by default so answers are current. false
+        // skips the re-sync only when the store already holds this workspace.
+        autoSync: z.boolean().default(true),
       }),
     )
     .query(async ({ ctx, input }) => {
       const ws = ctx.workspace;
+      if (!isReadOnlySparql(input.query)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only read-only SPARQL queries are accepted (SELECT, ASK, CONSTRUCT, DESCRIBE).",
+        });
+      }
+
       const isAlive = await semanticEngine.ensureEngineRunning();
       if (!isAlive) {
         throw new TRPCError({
@@ -295,23 +305,27 @@ export const graphRouter = createRouter({
         });
       }
 
-      if (input.autoSync) {
-        await semanticEngine.syncWorkspace(ws.id);
-      }
+      return semanticEngine.exclusive(async () => {
+        if (input.autoSync) {
+          await semanticEngine.syncWorkspace(ws.id);
+        } else {
+          await semanticEngine.ensureWorkspaceLoaded(ws.id);
+        }
 
-      try {
-        const res = await semanticEngine.querySparql(input.query);
-        return {
-          variables: res.variables,
-          results: res.results,
-          count: res.results.length,
-        };
-      } catch (err) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `SPARQL execution failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      }
+        try {
+          const res = await semanticEngine.querySparql(input.query);
+          return {
+            variables: res.variables,
+            results: res.results,
+            count: res.results.length,
+          };
+        } catch (err) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `SPARQL execution failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      });
     }),
 
   syncStore: workspaceQuery.query(async ({ ctx }) => {
@@ -323,6 +337,6 @@ export const graphRouter = createRouter({
         message: "Semantic engine is currently offline.",
       });
     }
-    return semanticEngine.syncWorkspace(ws.id);
+    return semanticEngine.exclusive(() => semanticEngine.syncWorkspace(ws.id));
   }),
 });

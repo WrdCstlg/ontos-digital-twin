@@ -205,35 +205,44 @@ app.post("/api/sparql", async (c) => {
     );
   }
 
-  // Sync the workspace's graph into the engine before querying.
-  // Default: always sync so callers get current data (the engine is a shared
-  // singleton that any prior operation may have overwritten).
-  // Pass x-auto-sync: false to skip, e.g. for repeated queries in one batch.
-  if (c.req.header("x-auto-sync") !== "false") {
-    await semanticEngine.syncWorkspace(workspace.id);
+  // The engine holds one graph at a time, so the sync and the query run together
+  // under its lock. By default the workspace is re-synced first so answers are
+  // current. x-auto-sync: false skips the re-sync only when the store already
+  // holds this workspace (e.g. repeated queries in one batch) — never another's.
+  const resync = c.req.header("x-auto-sync") !== "false";
+  const outcome = await semanticEngine.exclusive(async () => {
+    if (resync) {
+      await semanticEngine.syncWorkspace(workspace.id);
+    } else {
+      await semanticEngine.ensureWorkspaceLoaded(workspace.id);
+    }
+    try {
+      return { res: await semanticEngine.querySparql(queryText) };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  if ("error" in outcome) {
+    return c.json({ error: outcome.error }, 400);
   }
 
-  try {
-    const res = await semanticEngine.querySparql(queryText);
-    return c.json({
-      head: { vars: res.variables },
-      results: {
-        bindings: res.results.map((r) => {
-          const row: Record<string, { type: string; value: string }> = {};
-          for (const [k, v] of Object.entries(r)) {
-            const clean = v.replace(/^<|>$/g, "");
-            row[k] = {
-              type: v.startsWith("<") && v.endsWith(">") ? "uri" : "literal",
-              value: clean,
-            };
-          }
-          return row;
-        }),
-      },
-    });
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
-  }
+  return c.json({
+    head: { vars: outcome.res.variables },
+    results: {
+      bindings: outcome.res.results.map((r) => {
+        const row: Record<string, { type: string; value: string }> = {};
+        for (const [k, v] of Object.entries(r)) {
+          const clean = v.replace(/^<|>$/g, "");
+          row[k] = {
+            type: v.startsWith("<") && v.endsWith(">") ? "uri" : "literal",
+            value: clean,
+          };
+        }
+        return row;
+      }),
+    },
+  });
 });
 
 /** Constant-time comparison, so response timing reveals nothing about the key. */
@@ -273,7 +282,13 @@ app.post("/api/iot/telemetry", async (c) => {
     const result = await ingestTelemetry(points, { workspaceId, source: "http_webhook" });
     return c.json(result, result.success ? 200 : 207);
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : "Malformed JSON payload" }, 400);
+    if (err instanceof SyntaxError) {
+      return c.json({ error: "Malformed JSON payload" }, 400);
+    }
+    // Anything else failed on our side (database, engine). Its message can name
+    // internals, so it goes to the log, not to the device.
+    console.error("[iot] webhook ingestion failed:", err);
+    return c.json({ error: "Telemetry ingestion failed" }, 500);
   }
 });
 

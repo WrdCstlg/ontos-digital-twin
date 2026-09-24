@@ -403,8 +403,10 @@ characters, and accepts only the four SPARQL query forms — `SELECT`, `ASK`, `C
 and `DESCRIBE`. Update forms are rejected with a 400.
 
 Before executing, the endpoint syncs the caller's workspace into the engine so queries
-always answer from current data. Pass `x-auto-sync: false` to skip the sync when you
-know the store is already loaded (e.g. multiple queries in one batch).
+always answer from current data. Pass `x-auto-sync: false` to skip that re-sync when the
+engine already holds your workspace (e.g. multiple queries in one batch). If it holds
+anything else, the endpoint syncs anyway: a skipped sync can return data as old as the
+last sync, but never another workspace's.
 
 ---
 
@@ -488,7 +490,12 @@ These are tracked, known behaviours rather than surprises:
   before trusting the result.
 - **Pre-commit SHACL checks are advisory.** Violations are recorded in the audit entry and
   surfaced as a warning, but they do not block a sync.
-- **The triple store is a shared, single-tenant singleton.** The Oxigraph engine holds one dataset at a time. Every operation — reasoning, SHACL validation, CSV import, SPARQL query — clears the store and loads what it needs. The `/api/sparql` endpoint syncs before each query by default, but other operations (reasoning, SHACL) still clear and reload the store, so concurrent runs will interfere with each other. The engine is not partitioned per workspace; only one workspace should exist at a time.
+- **The triple store holds one graph at a time, so engine work takes turns.** The
+  Oxigraph engine is not partitioned per workspace: reasoning, SHACL validation, CSV
+  import and SPARQL each clear the store and load what they need. The app runs those
+  sequences one at a time under a lock, so they no longer interfere, but a slow
+  reasoning run delays the next query. The lock lives in the app process, so several
+  app replicas must not share one engine.
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that
   has no hash yet will accept a known fixed bootstrap password and be upgraded to a real

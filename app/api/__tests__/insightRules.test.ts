@@ -441,4 +441,232 @@ describe("R12: carrier-shipment-concentration", () => {
     const results = runRules([c1, c2, c3, s1, s2, s3], [e1, e2, e3]);
     expect(findByRule(results, "carrier-shipment-concentration")).toHaveLength(0);
   });
+
+  // BUG insightsRouter.ts:436 uses `share >= 0.5` but the rule/title claim "over half": a 50/50 split fires for both carriers.
+  it.skip("does not fire when two carriers split shipments exactly 50/50", () => {
+    const c1 = makeNode({ classIri: "log:Carrier", label: "North" });
+    const c2 = makeNode({ classIri: "log:Carrier", label: "South" });
+    const s1 = makeNode({ classIri: "log:Shipment", label: "SH-N" });
+    const s2 = makeNode({ classIri: "log:Shipment", label: "SH-S" });
+    const results = runRules(
+      [c1, c2, s1, s2],
+      [makeEdge(s1, c1, "log:shippedBy"), makeEdge(s2, c2, "log:shippedBy")],
+    );
+    expect(findByRule(results, "carrier-shipment-concentration")).toHaveLength(0);
+  });
+});
+
+/* ── R11 boundary ─────────────────────────────────────────── */
+describe("R11: vendor-spend-concentration boundary", () => {
+  // BUG insightsRouter.ts:399 uses `share >= 0.2` but the rule/title claim "over 20%": five equal vendors all fire.
+  it.skip("does not fire when five vendors each hold exactly 20% of spend", () => {
+    const vendors = [1, 2, 3, 4, 5].map((i) => makeNode({ classIri: "fin:Vendor", label: `EV${i}` }));
+    const txs = vendors.map((_, i) =>
+      makeNode({ classIri: "fin:Transaction", label: `TX-Q${i}`, propsJson: { amount: 10000 } }),
+    );
+    const edges = txs.map((tx, i) => makeEdge(tx, vendors[i], "fin:paidTo"));
+    const results = runRules([...vendors, ...txs], edges);
+    expect(findByRule(results, "vendor-spend-concentration")).toHaveLength(0);
+  });
+});
+
+/* ── Evidence traceability for rules that emit edge evidence ── */
+describe("evidence edgeIds", () => {
+  it("R1 cites the payment edges and transactions, not the inactive contract's party edge", () => {
+    const vendor = makeNode({ classIri: "fin:Vendor", label: "Lapsed Corp" });
+    const tx = makeNode({ classIri: "fin:Transaction", label: "TX-L1" });
+    const expired = makeNode({
+      classIri: "lgl:Contract",
+      label: "C-EXPIRED",
+      propsJson: { status: "expired" },
+    });
+    const paidTo = makeEdge(tx, vendor, "fin:paidTo");
+    const withParty = makeEdge(expired, vendor, "lgl:withParty");
+
+    const [hit] = findByRule(
+      runRules([vendor, tx, expired], [paidTo, withParty]),
+      "vendor-payment-without-contract",
+    );
+    expect(hit).toBeDefined();
+    expect(hit.evidence.nodeIds).toEqual([vendor.id, tx.id]);
+    expect(hit.evidence.edgeIds).toEqual([paidTo.id]);
+    expect(hit.evidence.missingEdges).toEqual([
+      { fromIri: vendor.iri, toIri: "lgl:Contract", predicate: "lgl:partyTo" },
+    ]);
+  });
+
+  it("R3 cites the stale hasEvidence edge of a control whose evidence is older than 90 days", () => {
+    const ctrl = makeNode({ classIri: "cmp:Control", label: "SOC2-CC3" });
+    const oldEv = makeNode({
+      classIri: "cmp:Evidence",
+      label: "Old screenshot",
+      propsJson: { collectedAt: new Date(Date.now() - 120 * 24 * 3600 * 1000).toISOString() },
+    });
+    const hasEv = makeEdge(ctrl, oldEv, "cmp:hasEvidence");
+
+    const hits = findByRule(runRules([ctrl, oldEv], [hasEv]), "control-without-evidence-90d");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].evidence.nodeIds).toEqual([ctrl.id]);
+    expect(hits[0].evidence.edgeIds).toEqual([hasEv.id]);
+    expect(hits[0].evidence.missingEdges).toEqual([
+      { fromIri: ctrl.iri, toIri: "cmp:Evidence", predicate: "cmp:hasEvidence" },
+    ]);
+  });
+
+  it("R3 cites only the stale control's edges when a fresh control sits alongside it", () => {
+    const stale = makeNode({ classIri: "cmp:Control", label: "Stale-Ctrl" });
+    const fresh = makeNode({ classIri: "cmp:Control", label: "Fresh-Ctrl" });
+    const oldEv = makeNode({
+      classIri: "cmp:Evidence",
+      label: "Old",
+      propsJson: { collectedAt: new Date(Date.now() - 200 * 24 * 3600 * 1000).toISOString() },
+    });
+    const newEv = makeNode({
+      classIri: "cmp:Evidence",
+      label: "New",
+      propsJson: { collectedAt: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString() },
+    });
+    const staleEdge = makeEdge(stale, oldEv, "cmp:hasEvidence");
+    const freshEdge = makeEdge(fresh, newEv, "cmp:hasEvidence");
+
+    const hits = findByRule(
+      runRules([stale, fresh, oldEv, newEv], [staleEdge, freshEdge]),
+      "control-without-evidence-90d",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].evidence.nodeIds).toEqual([stale.id]);
+    expect(hits[0].evidence.edgeIds).toEqual([staleEdge.id]);
+  });
+
+  it("R3 does not fire when any one of a control's evidence items is fresh", () => {
+    const ctrl = makeNode({ classIri: "cmp:Control", label: "Mixed-Ctrl" });
+    const oldEv = makeNode({
+      classIri: "cmp:Evidence",
+      label: "Old",
+      propsJson: { collectedAt: new Date(Date.now() - 400 * 24 * 3600 * 1000).toISOString() },
+    });
+    const newEv = makeNode({
+      classIri: "cmp:Evidence",
+      label: "New",
+      propsJson: { collectedAt: new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString() },
+    });
+    const results = runRules(
+      [ctrl, oldEv, newEv],
+      [makeEdge(ctrl, oldEv, "cmp:hasEvidence"), makeEdge(ctrl, newEv, "cmp:hasEvidence")],
+    );
+    expect(findByRule(results, "control-without-evidence-90d")).toHaveLength(0);
+  });
+
+  it("R5 cites only the open finding's path when a resolved finding shares the graph", () => {
+    const contractA = makeNode({ classIri: "lgl:Contract", label: "MSA-A" });
+    const contractB = makeNode({ classIri: "lgl:Contract", label: "MSA-B" });
+    const policyA = makeNode({ classIri: "cmp:Policy", label: "POL-A" });
+    const policyB = makeNode({ classIri: "cmp:Policy", label: "POL-B" });
+    const openF = makeNode({ classIri: "cmp:AuditFinding", label: "AF-OPEN", propsJson: { status: "open" } });
+    const closedF = makeNode({ classIri: "cmp:AuditFinding", label: "AF-DONE", propsJson: { status: "resolved" } });
+    const govA = makeEdge(policyA, contractA, "cmp:governs");
+    const govB = makeEdge(policyB, contractB, "cmp:governs");
+    const agA = makeEdge(openF, policyA, "cmp:againstPolicy");
+    const agB = makeEdge(closedF, policyB, "cmp:againstPolicy");
+
+    const hits = findByRule(
+      runRules([contractA, contractB, policyA, policyB, openF, closedF], [govA, govB, agA, agB]),
+      "contract-governed-by-policy-with-open-finding",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].evidence.nodeIds).toEqual([contractA.id, policyA.id, openF.id]);
+    expect(hits[0].evidence.edgeIds).toEqual([agA.id, govA.id]);
+  });
+});
+
+/* ── Clean graph: no rule may fire ─────────────────────────── */
+describe("clean graph", () => {
+  it("a healthy multi-module graph produces zero findings across all rules", () => {
+    const DAY = 24 * 3600 * 1000;
+    const nodes: KgNode[] = [];
+    const edges: KgEdge[] = [];
+    const node = (o: Parameters<typeof makeNode>[0]) => {
+      const n = makeNode(o);
+      nodes.push(n);
+      return n;
+    };
+    const edge = (from: KgNode, to: KgNode, p: string) => {
+      const e = makeEdge(from, to, p);
+      edges.push(e);
+      return e;
+    };
+
+    // HR: CEO + reporting line, rooted org tree
+    const ceo = node({ classIri: "hr:Person", label: "Dana CEO", moduleKey: "hr", propsJson: { isCeo: true } });
+    const emp = node({ classIri: "hr:Employee", label: "Eli Eng", moduleKey: "hr" });
+    const contractor = node({ classIri: "hr:Contractor", label: "Cam Temp", moduleKey: "hr" });
+    edge(emp, ceo, "hr:reportsTo");
+    edge(contractor, emp, "hr:reportsTo");
+    const rootUnit = node({ classIri: "hr:OrgUnit", label: "Acme", moduleKey: "hr", propsJson: { isRoot: true } });
+    const engUnit = node({ classIri: "hr:OrgUnit", label: "Engineering", moduleKey: "hr" });
+    edge(engUnit, rootUnit, "hr:parentUnit");
+
+    // Compliance: controls with fresh evidence, a high risk that is mitigated,
+    // a policy whose only audit finding is resolved
+    const ctrl = node({ classIri: "cmp:Control", label: "MFA", moduleKey: "cmp" });
+    const ev = node({
+      classIri: "cmp:Evidence",
+      label: "MFA report",
+      moduleKey: "cmp",
+      propsJson: { collectedAt: new Date(Date.now() - 10 * DAY).toISOString() },
+    });
+    edge(ctrl, ev, "cmp:hasEvidence");
+    const risk = node({ classIri: "cmp:Risk", label: "Account takeover", moduleKey: "cmp", propsJson: { likelihood: 4, impact: 4 } });
+    edge(ctrl, risk, "cmp:mitigates");
+    // below the likelihood × impact ≥ 16 bar, so no mitigation is required
+    node({ classIri: "cmp:Risk", label: "Printer outage", moduleKey: "cmp", propsJson: { likelihood: 3, impact: 5 } });
+    const policy = node({ classIri: "cmp:Policy", label: "POL-Procurement", moduleKey: "cmp" });
+    const resolved = node({ classIri: "cmp:AuditFinding", label: "AF-1", moduleKey: "cmp", propsJson: { status: "resolved" } });
+    edge(resolved, policy, "cmp:againstPolicy");
+
+    // Legal: a long-running active MSA, and a soon-expiring contract with a renewal matter
+    const msa = node({
+      classIri: "lgl:Contract",
+      label: "MSA",
+      moduleKey: "lgl",
+      propsJson: { status: "active", endDate: new Date(Date.now() + 365 * DAY).toISOString() },
+    });
+    edge(policy, msa, "cmp:governs");
+    const sla = node({
+      classIri: "lgl:Contract",
+      label: "SLA",
+      moduleKey: "lgl",
+      propsJson: { status: "active", endDate: new Date(Date.now() + 10 * DAY).toISOString() },
+    });
+    const renewal = node({ classIri: "lgl:Matter", label: "SLA renewal", moduleKey: "lgl" });
+    edge(sla, renewal, "lgl:relatesToMatter");
+
+    // Finance: six vendors under contract, spend evenly spread (~16.7% each),
+    // every transaction booked to a cost center that is within budget
+    const cc = node({ classIri: "fin:CostCenter", label: "CC-Ops", moduleKey: "fin" });
+    const budget = node({ classIri: "fin:Budget", label: "Ops FY2025", moduleKey: "fin", propsJson: { amount: 1_000_000 } });
+    edge(budget, cc, "fin:budgetFor");
+    for (let i = 0; i < 6; i++) {
+      const v = node({ classIri: "fin:Vendor", label: `Vendor-${i}`, moduleKey: "fin" });
+      edge(msa, v, "lgl:withParty");
+      const tx = node({ classIri: "fin:Transaction", label: `TX-C${i}`, moduleKey: "fin", propsJson: { amount: 25_000 } });
+      edge(tx, v, "fin:paidTo");
+      edge(tx, cc, "fin:bookedTo");
+    }
+
+    // Logistics: three carriers, one shipment each
+    for (let i = 0; i < 3; i++) {
+      const carrier = node({ classIri: "log:Carrier", label: `Carrier-${i}`, moduleKey: "log" });
+      const shipment = node({ classIri: "log:Shipment", label: `SHP-${i}`, moduleKey: "log" });
+      edge(shipment, carrier, "log:shippedBy");
+    }
+
+    // Twins: cold-chain zone and perishable shipment inside 2-6°C; an ambient
+    // storage zone at 18°C is not cold-chain and must not trip R7
+    node({ classIri: "dtwin:ZoneTwin", label: "Cold zone", moduleKey: "twin", propsJson: { zoneType: "cold-chain", temperature: 4.2 } });
+    node({ classIri: "dtwin:ZoneTwin", label: "Storage zone", moduleKey: "twin", propsJson: { zoneType: "storage", temperature: 18 } });
+    node({ classIri: "dtwin:ShipmentTwin", label: "Reefer shipment", moduleKey: "twin", propsJson: { temperature: 5.5 } });
+
+    expect(runRules(nodes, edges)).toEqual([]);
+  });
 });

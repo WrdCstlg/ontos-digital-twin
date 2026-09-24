@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
+import * as jose from "jose";
 import { hashPassword, verifyPassword } from "../lib/password";
-import { SlidingWindowRateLimiter } from "../lib/rateLimit";
+import { SlidingWindowRateLimiter, authRateLimiter } from "../lib/rateLimit";
 import { signSessionToken, verifySessionToken } from "../auth/session";
 import { getSessionCookieOptions } from "../lib/cookies";
 import { translate } from "../services/nlq";
@@ -8,6 +9,30 @@ import { isReadOnlySparql } from "../lib/sparqlGuard";
 import { demoPersonaEmails, isDemoPersona, loginWithCredentials, toPublicUser } from "../auth/service";
 import { env } from "../lib/env";
 import type { User } from "@db/schema";
+
+// Stand-in database for loginWithCredentials. The real findUserByEmail runs
+// against it: every `select().from().where().limit()` resolves to `userRows`,
+// and `update().set().where()` (lastSignInAt stamp) resolves to nothing.
+const dbState = vi.hoisted(() => ({
+  userRows: [] as unknown[],
+  selects: 0,
+}));
+
+vi.mock("../queries/connection", () => ({
+  getDb: () => ({
+    select: () => {
+      dbState.selects += 1;
+      return {
+        from: () => ({
+          where: () => ({ limit: () => Promise.resolve(dbState.userRows) }),
+        }),
+      };
+    },
+    update: () => ({
+      set: () => ({ where: () => Promise.resolve() }),
+    }),
+  }),
+}));
 
 describe("Security Posture Verification", () => {
   describe("SPARQL endpoint read-only gate", () => {
@@ -120,8 +145,103 @@ describe("Security Posture Verification", () => {
     });
   });
 
+  describe("Login lockout (loginWithCredentials + authRateLimiter)", () => {
+    // authRateLimiter: 10 attempts per 15 minutes per normalised email.
+    const EMAIL = "lockout.target@example.com";
+    const OTHER_EMAIL = "bystander@example.com";
+    const PASSWORD = "Correct-Horse-Battery-2026!";
+    const WRONG = "not-the-password";
+    let account: User;
+
+    beforeAll(async () => {
+      account = {
+        id: 77,
+        email: EMAIL,
+        name: "Lockout Target",
+        avatar: null,
+        passwordHash: await hashPassword(PASSWORD),
+        role: "editor",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastSignInAt: new Date(),
+      };
+    });
+
+    beforeEach(() => {
+      dbState.userRows = [account];
+      dbState.selects = 0;
+      authRateLimiter.reset(EMAIL);
+      authRateLimiter.reset(OTHER_EMAIL);
+    });
+
+    afterEach(() => {
+      dbState.userRows = [];
+      authRateLimiter.reset(EMAIL);
+      authRateLimiter.reset(OTHER_EMAIL);
+    });
+
+    async function failOnce(email: string) {
+      await expect(loginWithCredentials(email, WRONG)).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+    }
+
+    it("control: the correct password signs in and yields a verifiable session token", async () => {
+      const { user, token } = await loginWithCredentials(EMAIL, PASSWORD);
+      expect(user.id).toBe(account.id);
+      const claims = await verifySessionToken(token);
+      expect(claims).toMatchObject({ userId: account.id, email: EMAIL, role: "editor" });
+    });
+
+    it("refuses the 11th attempt with TOO_MANY_REQUESTS even when the password is correct", async () => {
+      for (let i = 0; i < 10; i++) await failOnce(EMAIL);
+
+      const lookupsBefore = dbState.selects;
+      await expect(loginWithCredentials(EMAIL, PASSWORD)).rejects.toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+      });
+      // Refused before the user lookup: no credential work while locked out.
+      expect(dbState.selects).toBe(lookupsBefore);
+    });
+
+    it("keys the budget on the normalised email, so case and whitespace variants share one budget", async () => {
+      const variants = [
+        EMAIL.toUpperCase(),
+        `  ${EMAIL}  `,
+        "Lockout.Target@Example.COM",
+        `\t${EMAIL}\n`,
+        " LOCKOUT.target@example.com",
+      ];
+      // No single spelling reaches 10 attempts on its own (2 each).
+      for (let i = 0; i < 10; i++) await failOnce(variants[i % variants.length]);
+
+      await expect(loginWithCredentials(EMAIL, PASSWORD)).rejects.toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+      });
+      await expect(loginWithCredentials(`  ${EMAIL.toUpperCase()} `, PASSWORD)).rejects.toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+      });
+
+      // A different account keeps its own budget.
+      dbState.userRows = [];
+      await failOnce(OTHER_EMAIL);
+    });
+
+    it("resets the budget on a successful login", async () => {
+      for (let i = 0; i < 9; i++) await failOnce(EMAIL);
+
+      // 10th attempt in the window: succeeds and clears the budget.
+      const first = await loginWithCredentials(EMAIL, PASSWORD);
+      expect(first.user.id).toBe(account.id);
+
+      // Without the reset this would be the 11th attempt in the window and be refused.
+      const second = await loginWithCredentials(EMAIL, PASSWORD);
+      expect((await verifySessionToken(second.token))?.userId).toBe(account.id);
+    });
+  });
+
   describe("Component 3: Password Security (crypto.scrypt)", () => {
-    it("hashes and verifies correct passwords in constant time", async () => {
+    it("hashes to a 16-byte-salt:64-byte-key hex pair and verifies only the matching password", async () => {
       const password = "SuperSecretPassword2026!";
       const hash = await hashPassword(password);
 
@@ -183,9 +303,115 @@ describe("Security Posture Verification", () => {
       expect(claims?.role).toBe("ontologist");
     });
 
-    it("returns null for malformed or tampered tokens", async () => {
+    it("returns null for empty and structurally malformed tokens", async () => {
       expect(await verifySessionToken("")).toBeNull();
       expect(await verifySessionToken("header.payload.signature")).toBeNull();
+    });
+
+    describe("tamper resistance", () => {
+      const claims = { userId: 42, email: "security@acme-ontology.com", role: "viewer" };
+      const ISSUER = "ontos-platform";
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      const realSecret = () => new TextEncoder().encode(env.appSecret);
+      const split = (token: string) => token.split(".") as [string, string, string];
+      const encodeSegment = (obj: unknown) =>
+        Buffer.from(JSON.stringify(obj)).toString("base64url");
+
+      it("control: an untouched token verifies", async () => {
+        const token = await signSessionToken(claims);
+        expect(await verifySessionToken(token)).toEqual(claims);
+      });
+
+      it("rejects a token whose signature was altered or stripped", async () => {
+        const [header, payload, signature] = split(await signSessionToken(claims));
+        // Change the first signature character: it carries 6 real bits, unlike
+        // the last one, whose low bits are base64url padding.
+        const altered = (signature[0] === "A" ? "B" : "A") + signature.slice(1);
+
+        expect(await verifySessionToken(`${header}.${payload}.${altered}`)).toBeNull();
+        expect(await verifySessionToken(`${header}.${payload}.`)).toBeNull();
+      });
+
+      it("rejects a token whose payload was swapped for escalated claims under the original signature", async () => {
+        const [header, payload, signature] = split(await signSessionToken(claims));
+        const original = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+        const escalated = encodeSegment({ ...original, userId: 1, role: "admin" });
+
+        expect(await verifySessionToken(`${header}.${escalated}.${signature}`)).toBeNull();
+      });
+
+      it("rejects a token signed with a different secret", async () => {
+        const forged = await new jose.SignJWT(claims)
+          .setProtectedHeader({ alg: "HS256" })
+          .setIssuedAt()
+          .setExpirationTime("7d")
+          .setIssuer(ISSUER)
+          .sign(new TextEncoder().encode("attacker-chosen-secret-of-reasonable-length"));
+
+        expect(await verifySessionToken(forged)).toBeNull();
+      });
+
+      it("rejects an unsigned alg:none token and a token signed with another HMAC algorithm", async () => {
+        const unsigned = new jose.UnsecuredJWT(claims)
+          .setIssuedAt()
+          .setExpirationTime("7d")
+          .setIssuer(ISSUER)
+          .encode();
+        const hs512 = await new jose.SignJWT(claims)
+          .setProtectedHeader({ alg: "HS512" })
+          .setIssuedAt()
+          .setExpirationTime("7d")
+          .setIssuer(ISSUER)
+          .sign(realSecret());
+
+        expect(await verifySessionToken(unsigned)).toBeNull();
+        expect(await verifySessionToken(hs512)).toBeNull();
+      });
+
+      it("rejects a correctly signed token from another issuer, or with no issuer", async () => {
+        const foreign = await new jose.SignJWT(claims)
+          .setProtectedHeader({ alg: "HS256" })
+          .setIssuedAt()
+          .setExpirationTime("7d")
+          .setIssuer("some-other-service")
+          .sign(realSecret());
+        const noIssuer = await new jose.SignJWT(claims)
+          .setProtectedHeader({ alg: "HS256" })
+          .setIssuedAt()
+          .setExpirationTime("7d")
+          .sign(realSecret());
+
+        expect(await verifySessionToken(foreign)).toBeNull();
+        expect(await verifySessionToken(noIssuer)).toBeNull();
+      });
+
+      it("rejects a correctly signed token that lacks the identity claims", async () => {
+        const noUserId = await new jose.SignJWT({ email: claims.email, role: claims.role })
+          .setProtectedHeader({ alg: "HS256" })
+          .setIssuedAt()
+          .setExpirationTime("7d")
+          .setIssuer(ISSUER)
+          .sign(realSecret());
+
+        expect(await verifySessionToken(noUserId)).toBeNull();
+      });
+
+      it("honours the 7-day lifetime: valid after 6 days, rejected once 7 have passed", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const issuedAt = new Date("2026-03-01T09:00:00Z").getTime();
+          vi.setSystemTime(issuedAt);
+          const token = await signSessionToken(claims);
+
+          vi.setSystemTime(issuedAt + 6 * DAY_MS);
+          expect(await verifySessionToken(token)).toEqual(claims);
+
+          vi.setSystemTime(issuedAt + 7 * DAY_MS + 1000);
+          expect(await verifySessionToken(token)).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
   });
 
@@ -236,29 +462,6 @@ describe("Security Posture Verification", () => {
         expect(res.recognized).toBe(false);
         expect(res.refusal).toBeDefined();
       }
-    });
-  });
-
-  describe("Component 7: Production Hardening & Anti-Bypass", () => {
-    it("rejects unauthorized external origins in CORS resolution", () => {
-      const allowed = ["https://app.acme-ontology.com", "https://admin.acme-ontology.com"];
-      const resolveOrigin = (origin: string, isProd: boolean) => {
-        if (!origin) return "";
-        if (!isProd && (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:"))) {
-          return origin;
-        }
-        if (allowed.includes(origin)) return origin;
-        return "";
-      };
-
-      // Allowed in production
-      expect(resolveOrigin("https://app.acme-ontology.com", true)).toBe("https://app.acme-ontology.com");
-      // Malicious origin rejected in production
-      expect(resolveOrigin("https://attacker.evil.com", true)).toBe("");
-      // Localhost allowed in development
-      expect(resolveOrigin("http://localhost:5173", false)).toBe("http://localhost:5173");
-      // Arbitrary external rejected in development
-      expect(resolveOrigin("https://attacker.evil.com", false)).toBe("");
     });
   });
 });

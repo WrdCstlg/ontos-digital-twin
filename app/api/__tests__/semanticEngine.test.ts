@@ -321,5 +321,28 @@ describe("Semantic Engine & RDF Bridge Integration", () => {
       expect(failReport.violations[0].constraint).toBe("pattern");
       expect(failReport.violations[0].focusNode).toContain("Person/2");
     });
+
+    it("keeps concurrent clear → load → query sequences from seeing each other's data", async () => {
+      // Each run loads its own graph and counts what it can see. Without the
+      // lock, one run's clear lands between the other's load and query.
+      const run = (tag: string, size: number) =>
+        semanticEngine.exclusive(async () => {
+          await semanticEngine.clearStore();
+          const triples = Array.from(
+            { length: size },
+            (_, i) => `<https://ontos.dev/test/${tag}/${i}> a <https://ontos.dev/test/${tag}> .`,
+          ).join("\n");
+          await semanticEngine.loadTurtle(triples);
+          // Yield so the other run gets every chance to interleave.
+          await new Promise((r) => setTimeout(r, 20));
+          const res = await semanticEngine.querySparql(
+            "SELECT (COUNT(*) AS ?n) WHERE { ?s a ?type }",
+          );
+          return Number(String(res.results[0]?.n ?? "0").replace(/^"|"(\^\^.*)?$/g, ""));
+        });
+
+      const counts = await Promise.all([run("alpha", 3), run("beta", 5), run("alpha", 3), run("beta", 5)]);
+      expect(counts).toEqual([3, 5, 3, 5]);
+    });
   });
 });
