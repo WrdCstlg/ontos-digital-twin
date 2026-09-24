@@ -346,6 +346,20 @@ if (env.isProduction) {
   const { serveStaticFiles } = await import("./lib/vite");
   serveStaticFiles(app);
 
+  // Before the first request: a sync job still `running` was abandoned by an
+  // earlier process. Production only, because a dev reload re-runs this module
+  // inside a process whose imports may really be in flight.
+  try {
+    const { failAbandonedSyncJobs } = await import("./services/syncJobs");
+    const abandoned = await failAbandonedSyncJobs();
+    if (abandoned > 0) {
+      console.warn(`[boot] marked ${abandoned} abandoned sync job(s) as failed`);
+    }
+  } catch (err) {
+    // Serving matters more than tidying the job list; the next start retries.
+    console.error("[boot] could not reconcile abandoned sync jobs:", err);
+  }
+
   const port = parseInt(process.env.PORT || "3000");
   serverHandle = serve({ fetch: app.fetch, port }, () => {
     console.log(`Server running on http://localhost:${port}/`);

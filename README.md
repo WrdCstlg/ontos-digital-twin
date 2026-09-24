@@ -498,6 +498,10 @@ These are tracked, known behaviours rather than surprises:
   before trusting the result.
 - **Pre-commit SHACL checks are advisory.** Violations are recorded in the audit entry and
   surfaced as a warning, but they do not block a sync.
+- **The app assumes it is the only app process on its database.** On start it marks
+  any sync job still `running` as failed, because an import runs inside its request
+  and cannot outlive the process that served it. A second app process sharing the
+  database would, on starting, fail the first one's imports in progress.
 - **The triple store holds one graph at a time, so engine work takes turns.** The
   Oxigraph engine is not partitioned per workspace: reasoning, SHACL validation, CSV
   import and SPARQL each clear the store and load what they need. The app runs those
