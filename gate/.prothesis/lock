@@ -1,0 +1,152 @@
+{
+  "schema": "prothesis.lock/v1",
+  "manifest_sha": "sha256:e1b362c3071c7d21e6f0b79f4dd7c1caed45ae3b5221c3f333fe403bc111c428",
+  "reason": "Initial baseline for the Ontos gate: sync_jobs.settle oracle, builtin oracles, proc.restart-only fault policy, smoke and stuckjob profiles.",
+  "locked_at": "2026-09-24T04:51:52Z",
+  "tool_version": "0.1.0-phase0",
+  "builtin_options_fingerprint": "sha256:ca5cba3edb828e29bd4b1357c9ff2d86ae2e3eb6a6bd009a2430b076304064bf",
+  "executables": [
+    {
+      "oracle": "sync_jobs.settle",
+      "cmd": "./bin/oracle-sync-jobs --node db --settle 30s",
+      "resolved": "bin/oracle-sync-jobs.exe",
+      "sha256": "sha256:367b59ccd3749c73cf02cb71e1a31e99b747440a8143a6f222adb0afe1a09a5e",
+      "size": 5114368
+    }
+  ],
+  "covers": [
+    "harness.health",
+    "harness.role_probe",
+    "oracles.builtin",
+    "oracles.dir",
+    "perturber.allow",
+    "perturber.budget",
+    "perturber.deny",
+    "profiles",
+    "search"
+  ],
+  "limitations": [
+    "The DIGEST does not cover the EXECUTABLE an oracle names. Files under oracles.dir are covered byte for byte; the binary, interpreter, shared library, container image or PATH entry an oracle resolves at run time is NOT hashed into manifest_sha, so swapping a checker does not produce ORACLE_DRIFT and never will: hashing it into the digest would make an ordinary rebuild exit 4 and turn re-locking into a reflex. Since D-060 the `executables` block above records each resolved program's SHA-256 OUTSIDE the digest, and `verify` and every run report a moved or missing one as a WARNING that also lands in the verdict. That removes the SILENCE OQ-057 measured; it does not make a swap impossible, and nothing short of signing would. Only the program is fingerprinted — not its arguments, its interpreter, or anything it loads.",
+    "File modes are not covered. The executable bit does not survive a Windows checkout, so hashing it would fire a spurious ORACLE_DRIFT on a cross-platform clone.",
+    "Built-in oracle thresholds are compiled in and reachable from no config key. builtin_options_fingerprint records them for review but is OUTSIDE the digest: including it would turn any release that adjusts a default into exit 4 on every downstream project at once. `thesis oracles verify` reports a moved fingerprint as a warning, never as drift.",
+    "driver.profiles (clients / ops / mix) is not covered. Shrinking a workload there is a gate weakening this lock does not catch. Logged as OQ-026.",
+    "The digest covers the USER-SUPPLIED prothesis.yaml with defaults NOT applied. A key you did not write contributes nothing, so upgrading thesis cannot move this digest by changing a compiled-in default."
+  ],
+  "manifest": {
+    "schema": "prothesis.lock_manifest/v1",
+    "oracles": [
+      {
+        "path": "README.md",
+        "sha256": "sha256:d2e89299128f66585618ec6a850a7dc79651381c0998997185f0001ea3b43efb",
+        "size": 4419
+      },
+      {
+        "path": "sync_jobs.settle.yaml",
+        "sha256": "sha256:1e53454307f8c9d928a71ad29a5a76d2eb3b086edf4c5f301f258b58c1253478",
+        "size": 162
+      }
+    ],
+    "config": [
+      {
+        "path": "harness.health[0].node",
+        "kind": "scalar",
+        "value": "app"
+      },
+      {
+        "path": "harness.health[0].probe",
+        "kind": "scalar",
+        "value": "http://{host}:{port}/health"
+      },
+      {
+        "path": "harness.health[0].timeout",
+        "kind": "scalar",
+        "value": "90s"
+      },
+      {
+        "path": "harness.health[1].node",
+        "kind": "scalar",
+        "value": "engine"
+      },
+      {
+        "path": "harness.health[1].probe",
+        "kind": "scalar",
+        "value": "http://{host}:{port}/health"
+      },
+      {
+        "path": "harness.health[1].timeout",
+        "kind": "scalar",
+        "value": "60s"
+      },
+      {
+        "path": "oracles.builtin",
+        "kind": "scalar",
+        "value": "availability_after_heal"
+      },
+      {
+        "path": "oracles.builtin",
+        "kind": "scalar",
+        "value": "no_crash"
+      },
+      {
+        "path": "oracles.builtin",
+        "kind": "scalar",
+        "value": "no_panic_log"
+      },
+      {
+        "path": "oracles.builtin",
+        "kind": "scalar",
+        "value": "no_stuck_op"
+      },
+      {
+        "path": "oracles.dir",
+        "kind": "scalar",
+        "value": ".prothesis/oracles"
+      },
+      {
+        "path": "perturber.allow",
+        "kind": "scalar",
+        "value": "proc.restart"
+      },
+      {
+        "path": "perturber.budget.max_concurrent_faults",
+        "kind": "scalar",
+        "value": "1"
+      },
+      {
+        "path": "perturber.budget.max_faults_per_world",
+        "kind": "scalar",
+        "value": "2"
+      },
+      {
+        "path": "profiles.smoke.budget",
+        "kind": "scalar",
+        "value": "10m"
+      },
+      {
+        "path": "profiles.smoke.driver_profile",
+        "kind": "scalar",
+        "value": "imports"
+      },
+      {
+        "path": "profiles.smoke.worlds",
+        "kind": "scalar",
+        "value": "3"
+      },
+      {
+        "path": "profiles.stuckjob.budget",
+        "kind": "scalar",
+        "value": "5m"
+      },
+      {
+        "path": "profiles.stuckjob.driver_profile",
+        "kind": "scalar",
+        "value": "imports"
+      },
+      {
+        "path": "profiles.stuckjob.worlds",
+        "kind": "scalar",
+        "value": "1"
+      }
+    ]
+  }
+}

@@ -1,0 +1,89 @@
+# Ontos under the PRO-THESIS gate. Images only, so a world tests exactly the
+# images built for the commit under test (scripts/build-images.ps1), selected by
+# ONTOS_GATE_TAG.
+#
+# Where this differs from ../compose.yaml, and why:
+#   - No init service. ontos-gate-db:<tag> starts already migrated and seeded,
+#     so every world begins from the same state and `compose up --wait` never
+#     waits on a one-shot container.
+#   - restart: "no" everywhere. The harness decides when a node comes back; an
+#     automatic restart would hide a crash from no_crash.
+#   - Every node publishes a port on 127.0.0.1, because node binding and health
+#     probes run on the host. Each port is parameterised so `thesis search` can
+#     give every parallel world its own.
+#   - Faster healthchecks, so BOOT is not paced by the production intervals.
+#
+# The credentials here exist only inside these throwaway containers.
+
+name: ontos-gate
+
+services:
+  db:
+    image: ontos-gate-db:${ONTOS_GATE_TAG:?set ONTOS_GATE_TAG to the image tag under test}
+    restart: "no"
+    environment:
+      MYSQL_DATABASE: ontos
+      MYSQL_USER: ontos
+      MYSQL_PASSWORD: gate-db-password
+      MYSQL_ROOT_PASSWORD: gate-db-password
+    ports:
+      - "127.0.0.1:${ONTOS_GATE_DB_PORT:-13306}:3306"
+    healthcheck:
+      # TCP, not the socket: first-boot initialisation (here, loading the seed
+      # dump) runs a temporary server with networking off.
+      test: ["CMD", "mysqladmin", "ping", "--host=127.0.0.1", "--silent"]
+      interval: 2s
+      timeout: 5s
+      retries: 90
+      start_period: 120s
+
+  engine:
+    image: ghcr.io/fabio-rovai/open-ontologies:1.3.0@sha256:db7a7e0f03ae7c3df4649c81d438a0952033abe4b524d3cd84d59dd617e4207a
+    restart: "no"
+    command: ["serve-http", "--host", "0.0.0.0", "--port", "8085"]
+    user: "65534:65534"
+    environment:
+      HOME: /tmp
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - shacl-exchange:/exchange:ro
+    ports:
+      - "127.0.0.1:${ONTOS_GATE_ENGINE_PORT:-18085}:8085"
+
+  app:
+    image: ontos-app:${ONTOS_GATE_TAG:?set ONTOS_GATE_TAG to the image tag under test}
+    restart: "no"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://ontos:gate-db-password@db:3306/ontos
+      APP_SECRET: gate-only-app-secret-not-a-real-secret-0001
+      ADMIN_EMAIL: admin@acme-ontology.com
+      ALLOW_DEMO_LOGIN: "false"
+      OPEN_ONTOLOGIES_URL: http://engine:8085
+      SHACL_EXCHANGE_DIR: /exchange
+    volumes:
+      - shacl-exchange:/exchange
+    ports:
+      - "127.0.0.1:${ONTOS_PORT:-13000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    depends_on:
+      db:
+        condition: service_healthy
+      engine:
+        condition: service_started
+
+volumes:
+  # Same shared in-memory directory as ../compose.yaml: the engine takes SHACL
+  # shapes only as a file path. uid/gid 1000 is the app image's `node` user.
+  shacl-exchange:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=1000,gid=1000,mode=0755,size=16m"

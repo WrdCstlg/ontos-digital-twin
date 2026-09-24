@@ -1,0 +1,18 @@
+# Line endings are load-bearing here, not cosmetic.
+#
+# .thesis worlds and .prothesis/lock are content-addressed over their exact
+# bytes. Without this file, a Windows checkout with core.autocrlf=true rewrites
+# every LF and every world_hash in the regression corpus breaks at once.
+#
+# Do NOT use the "binary" attribute: it implies -diff, which would hide lock
+# and regression-corpus changes behind "Binary files differ" and defeat the
+# human review the anti-gaming rules depend on.
+
+*.thesis        text eol=lf
+*.jsonl         text eol=lf
+.prothesis/lock text eol=lf
+*.sh            text eol=lf
+
+# Every file under the oracles directory is hashed into the lock by content, so
+# a CRLF checkout would move the digest and make every run exit 4.
+.prothesis/oracles/** text eol=lf

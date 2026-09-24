@@ -1,0 +1,61 @@
+version: prothesis/v1
+name: ontos
+
+# Ontos under the PRO-THESIS gate, pinned to thesis v0.1.0-phase0.
+# See README.md for how to build the images and tools and run a world.
+
+harness:
+  backend: compose
+  file: compose.gate.yaml
+  nodes:
+    - { id: app, service: app, port: 3000, port_env: ONTOS_PORT }
+    - { id: engine, service: engine, port: 8085, port_env: ONTOS_GATE_ENGINE_PORT }
+    # MySQL has no HTTP endpoint, so it has no health entry below. It is still a
+    # node, so that no_crash covers it, its log is kept, faults can target it,
+    # and the sync_jobs.settle oracle can find it by the harness's node label.
+    - { id: db, service: db, port: 3306, port_env: ONTOS_GATE_DB_PORT }
+  health:
+    - node: app
+      probe: "http://{host}:{port}/health"
+      timeout: 90s
+    - node: engine
+      probe: "http://{host}:{port}/health"
+      timeout: 60s
+
+driver:
+  # A serial `thesis run` gives the driver no topology, so the app URL is the
+  # compose file's default published port, written out here rather than
+  # assumed by the driver. The credentials belong to the throwaway admin baked
+  # into ontos-gate-db by scripts/build-images.ps1.
+  cmd: "./bin/ontosload --history {history_path} --plan {plan_path} --seed {seed} --profile {profile} --app http://127.0.0.1:13000 --email admin@acme-ontology.com --password ontos-gate-admin-password"
+  profiles:
+    # `sync` is mapping.runSync on a CSV mapping: one full import. Two clients
+    # keep an import in flight at almost every instant of DRIVE. `ops` is a
+    # ceiling; the drain at QUIESCE ends DRIVE long before it is reached.
+    imports: { clients: 2, ops: 400, mix: { sync: 1 } }
+
+perturber:
+  budget: { max_concurrent_faults: 1, max_faults_per_world: 2 }
+  # proc.restart is the only way to bring a node back inside a world: HEAL
+  # never restarts a node that proc.kill stopped.
+  allow: [proc.restart]
+
+oracles:
+  dir: .prothesis/oracles
+  # Left out, as the etcd target does: no_unbounded_queue needs a /status
+  # endpoint, and resource_return_to_baseline needs a shell in every container
+  # (the engine image has none).
+  builtin: [no_crash, no_panic_log, no_stuck_op, availability_after_heal]
+
+profiles:
+  # Measured on the build host (run r_2026_09_24_c05c): one no-fault world takes
+  # 34 s, of which BOOT is 25 s (MySQL loading the seed). A run that outlives
+  # its budget exits 3 even when every world passed, hence the margin.
+  smoke: { budget: 10m, worlds: 3, driver_profile: imports }
+  # Run with the fault on the command line; see .prothesis/PREREGISTRATION.md.
+  stuckjob: { budget: 5m, worlds: 1, driver_profile: imports }
+
+artifacts:
+  dir: .prothesis/runs
+  retain_passing: 3
+  retain_failing: all
