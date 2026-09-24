@@ -144,6 +144,45 @@ describe("xpSHACL Explainable SHACL Validation Framework", () => {
       expect(explained.signatureSummary.length).toBe(0);
     });
 
+    it("does NOT pass when engine reports conforms:false with an empty violations array", () => {
+      // Fail-closed: an engine reply of conforms:false must never be reported
+      // as a pass, even if the violations list came back empty.
+      const suspiciousResult: ShaclValidationResult = {
+        conforms: false,
+        focusNodes: 3,
+        violationCount: 1,
+        violations: [],
+      };
+
+      const explained = explainShaclReport(suspiciousResult);
+      expect(explained.conforms).toBe(false);
+      expect(explained.violationCount).toBe(1);
+      expect(explained.explainedViolations.length).toBe(0);
+      expect(explained.signatureSummary.length).toBe(0);
+    });
+
+    it("preserves the engine violationCount even when it exceeds the violations array length", () => {
+      const partialResult: ShaclValidationResult = {
+        conforms: false,
+        focusNodes: 5,
+        violationCount: 7,
+        violations: [
+          {
+            focusNode: "https://ontos.dev/ontology/hr/Person/9",
+            path: "hr:email",
+            constraint: "pattern",
+            severity: "Violation",
+            message: "Pattern mismatch",
+          },
+        ],
+      };
+
+      const explained = explainShaclReport(partialResult);
+      expect(explained.conforms).toBe(false);
+      expect(explained.violationCount).toBe(7);
+      expect(explained.explainedViolations.length).toBe(1);
+    });
+
     it("transforms violating SHACL results into enriched diagnostic reports", () => {
       const failingResult: ShaclValidationResult = {
         conforms: false,

@@ -478,7 +478,7 @@ export const twinRouter = createRouter({
         return { deletedCount: 0, cutoff: cutoff.toISOString() };
       }
 
-      await db
+      const [deleteResult] = await db
         .delete(twinStateLog)
         .where(
           and(
@@ -486,15 +486,20 @@ export const twinRouter = createRouter({
             lt(twinStateLog.recordedAt, cutoff),
           ),
         );
+      const deletedCount = deleteResult.affectedRows ?? 0;
 
       await writeAudit({
         workspaceId: ws.id,
         actor: actorLabelFor(ctx.user),
-        action: `Pruned twin state history older than ${input.olderThanDays} days`,
+        action: `Pruned twin state history older than ${input.olderThanDays} days (${deletedCount} rows deleted)`,
         entityType: "twin_state_log",
-        payload: { olderThanDays: input.olderThanDays, cutoff: cutoff.toISOString() },
+        payload: {
+          olderThanDays: input.olderThanDays,
+          cutoff: cutoff.toISOString(),
+          deletedCount,
+        },
       });
 
-      return { cutoff: cutoff.toISOString() };
+      return { deletedCount, cutoff: cutoff.toISOString() };
     }),
 });

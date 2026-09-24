@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { workspaces, workspaceMembers } from "@db/schema";
 import type { User, Workspace, WorkspaceMember } from "@db/schema";
 import { getDb } from "../queries/connection";
+import { env } from "../lib/env";
 import { DEMO_WORKSPACE_SLUG } from "./audit";
 
 /**
@@ -14,10 +15,12 @@ import { DEMO_WORKSPACE_SLUG } from "./audit";
  * 2. 'x-workspace-id' request header
  * 3. 'x-workspace-slug' request header
  * 4. User's primary/first workspace membership from workspace_members table
- * 5. Fallback to default demo workspace (for admin or during onboarding)
+ * 5. Fallback to default demo workspace (non-production only: for admin or during onboarding)
  *
  * Enforces strict geometric multi-tenancy:
  * If a target workspace is requested, non-member users are rejected with FORBIDDEN.
+ * In production this includes system admins — the fabricated admin-membership
+ * fallbacks exist only outside production so local demos and onboarding work.
  */
 export async function resolveUserWorkspace(
   user: User,
@@ -83,8 +86,10 @@ export async function resolveUserWorkspace(
       return { workspace: ws, membership };
     }
 
-    // System admin privilege: can access any workspace as admin
-    if (user.role === "admin") {
+    // System admin privilege (non-production only): can access any workspace as
+    // admin. In production an admin without a real membership is denied like
+    // any other user — fail closed.
+    if (user.role === "admin" && !env.isProduction) {
       const adminMembership: WorkspaceMember = {
         id: 0,
         workspaceId: ws.id,
@@ -122,9 +127,10 @@ export async function resolveUserWorkspace(
   }
 
   // 4. If user has no memberships:
-  // System admins can bootstrap — they need access to create workspaces and enroll users.
-  // All other users are strictly rejected: no membership = no access.
-  if (user.role === "admin") {
+  // System admins can bootstrap outside production — they need access to create
+  // workspaces and enroll users. In production there is no fallback: an admin
+  // without a real membership is rejected like everyone else (fail closed).
+  if (user.role === "admin" && !env.isProduction) {
     const [fallbackWs] = await db
       .select()
       .from(workspaces)
@@ -152,7 +158,7 @@ export async function resolveUserWorkspace(
     return { workspace: ws, membership: adminMembership };
   }
 
-  // Non-admin with no memberships: strict rejection
+  // No usable membership (non-admins always; admins in production): strict rejection
   throw new TRPCError({
     code: "FORBIDDEN",
     message: "User is not a member of any workspace. Contact an administrator to be enrolled.",

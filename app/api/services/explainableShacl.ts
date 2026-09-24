@@ -333,7 +333,7 @@ export function generateExplanationAndRemediation(
 export function explainShaclReport(
   rawReport: ShaclValidationResult,
 ): ExplainedShaclReport {
-  if (rawReport.conforms || rawReport.violations.length === 0) {
+  if (rawReport.conforms && rawReport.violations.length === 0) {
     return {
       conforms: true,
       focusNodes: rawReport.focusNodes,

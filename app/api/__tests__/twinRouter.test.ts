@@ -1,12 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { appRouter } from "../router";
 import { TWIN_MODELS, dtmiFor } from "../services/twinModels";
+import { writeAudit } from "../services/audit";
 import {
   createMockContext,
   mockViewerUser,
   mockViewerMembership,
   mockWorkspace,
 } from "./testHarness";
+
+vi.mock("../queries/connection", () => ({
+  getDb: vi.fn(() => ({
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]),
+      })),
+    })),
+    delete: vi.fn(() => ({
+      where: vi.fn().mockResolvedValue([{ affectedRows: 3 }]),
+    })),
+  })),
+}));
+
+vi.mock("../services/audit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/audit")>();
+  return { ...actual, writeAudit: vi.fn().mockResolvedValue(undefined) };
+});
 
 describe("Twin Router & DTDL v3 Export Tests", () => {
   it("exports all registered twin models as DTDL v3 interfaces when no IRI is specified", async () => {
@@ -96,6 +115,26 @@ describe("Twin Router & DTDL v3 Export Tests", () => {
     );
     expect(batteryTelemetry).toBeDefined();
     expect(batteryTelemetry?.unit).toBe("percent");
+  });
+
+  it("returns the deletion count from pruneStateHistory and records it in the audit entry", async () => {
+    const caller = appRouter.createCaller(
+      createMockContext({
+        user: mockViewerUser,
+        membership: { ...mockViewerMembership, role: "admin" },
+        workspace: mockWorkspace,
+      }),
+    );
+
+    const result = await caller.twin.pruneStateHistory({ olderThanDays: 30 });
+
+    expect(result.deletedCount).toBe(3);
+    expect(typeof result.cutoff).toBe("string");
+
+    expect(vi.mocked(writeAudit)).toHaveBeenCalledOnce();
+    const auditEntry = vi.mocked(writeAudit).mock.calls[0][0];
+    expect(auditEntry.payload).toMatchObject({ olderThanDays: 30, deletedCount: 3 });
+    expect(auditEntry.action).toContain("3 rows deleted");
   });
 
   it("rejects unauthenticated caller from exporting DTDL models", async () => {
