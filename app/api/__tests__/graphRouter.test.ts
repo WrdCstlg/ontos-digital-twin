@@ -369,11 +369,8 @@ describe("graph.getNode", () => {
     expect(o.conjuncts).toContainEqual({ sql: "`kg_edges`.`fromNodeId` = ?", params: [20] });
     const i = expectWorkspaceScoped(2, "kg_edges", WS.id);
     expect(i.conjuncts).toContainEqual({ sql: "`kg_edges`.`toNodeId` = ?", params: [20] });
-    // Neighbour lookup is by id only (no workspace predicate, unlike getSubgraph);
-    // it is bounded to endpoints of the workspace-scoped edge rows above.
-    const nb = query(3);
-    expect(nb.table).toBe("kg_nodes");
-    expect(nb.conjuncts).toEqual([{ sql: "`kg_nodes`.`id` in (?, ?)", params: [21, 22] }]);
+    const nb = expectWorkspaceScoped(3, "kg_nodes", WS.id);
+    expect(nb.conjuncts).toContainEqual({ sql: "`kg_nodes`.`id` in (?, ?)", params: [21, 22] });
     expectWorkspaceScoped(6, "ontology_modules", WS.id);
   });
 

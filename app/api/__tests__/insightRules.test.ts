@@ -442,8 +442,7 @@ describe("R12: carrier-shipment-concentration", () => {
     expect(findByRule(results, "carrier-shipment-concentration")).toHaveLength(0);
   });
 
-  // BUG insightsRouter.ts:436 uses `share >= 0.5` but the rule/title claim "over half": a 50/50 split fires for both carriers.
-  it.skip("does not fire when two carriers split shipments exactly 50/50", () => {
+  it("does not fire when two carriers split shipments exactly 50/50", () => {
     const c1 = makeNode({ classIri: "log:Carrier", label: "North" });
     const c2 = makeNode({ classIri: "log:Carrier", label: "South" });
     const s1 = makeNode({ classIri: "log:Shipment", label: "SH-N" });
@@ -458,8 +457,7 @@ describe("R12: carrier-shipment-concentration", () => {
 
 /* ── R11 boundary ─────────────────────────────────────────── */
 describe("R11: vendor-spend-concentration boundary", () => {
-  // BUG insightsRouter.ts:399 uses `share >= 0.2` but the rule/title claim "over 20%": five equal vendors all fire.
-  it.skip("does not fire when five vendors each hold exactly 20% of spend", () => {
+  it("does not fire when five vendors each hold exactly 20% of spend", () => {
     const vendors = [1, 2, 3, 4, 5].map((i) => makeNode({ classIri: "fin:Vendor", label: `EV${i}` }));
     const txs = vendors.map((_, i) =>
       makeNode({ classIri: "fin:Transaction", label: `TX-Q${i}`, propsJson: { amount: 10000 } }),

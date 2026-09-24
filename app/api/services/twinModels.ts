@@ -119,6 +119,20 @@ export const DTDL_UNITS: Record<string, string> = {
   lng: "degree",
 };
 
+/** DTDL v3 extension that defines semantic types and their units. */
+export const DTDL_QUANTITATIVE_TYPES_CONTEXT = "dtmi:dtdl:extension:quantitativeTypes;1";
+
+/**
+ * QuantitativeTypes semantic type per telemetry key. DTDL v3 allows `unit` only
+ * on an element co-typed with one of these. Plain percentages (utilization,
+ * batteryLevel) have no semantic type, so they are exported without a unit.
+ */
+export const DTDL_SEMANTIC_TYPES: Record<string, string> = {
+  temperature: "Temperature",
+  humidity: "RelativeHumidity",
+  etaMinutes: "TimeSpan",
+};
+
 /* ── DTDL interface registry ─────────────────────────────────── */
 export type TwinRelationshipDef = {
   name: string; // contains | locatedIn | connectedTo | monitors | twinOf | hasModel
@@ -157,8 +171,9 @@ export const TWIN_MODELS: TwinModelDef[] = [
     properties: ["status", "lastTickAt"],
     telemetry: [],
     relationships: [
-      rel("twinOf", null, 1, 1, "Mirrored knowledge-graph entity."),
-      rel("hasModel", "TwinModel", 1, 1, "DTDL interface this twin instantiates."),
+      // DTDL v3 fixes minMultiplicity at 0; "exactly one" cannot be expressed.
+      rel("twinOf", null, 0, 1, "Mirrored knowledge-graph entity."),
+      rel("hasModel", "TwinModel", 0, 1, "DTDL interface this twin instantiates."),
     ],
     components: [],
   },
@@ -195,8 +210,10 @@ export const TWIN_MODELS: TwinModelDef[] = [
     relationships: [
       rel("contains", "ZoneTwin", 0, null, "Zones within the warehouse."),
     ],
+    // Zones are many twins, reached through `contains`. A component is one
+    // embedded part, and DTDL v3 forbids ZoneTwin (which has its own
+    // component) from serving as one.
     components: [
-      { name: "zones", schemaModel: "ZoneTwin", description: "Warehouse zones (receiving / storage / cold-chain / dispatch)." },
       { name: "equipment", schemaModel: "EquipmentTwin", description: "Equipment deployed across the warehouse." },
     ],
   },

@@ -396,7 +396,7 @@ export function runRules(nodes: KgNode[], edges: KgEdge[]): RuleFinding[] {
     if (total > 0) {
       for (const [vId, amount] of spendByVendor) {
         const share = amount / total;
-        if (share >= 0.2) {
+        if (share > 0.2) {
           const v = nodes.find((n) => n.id === vId);
           if (v) concentrated.push({ v, amount, share });
         }
@@ -433,7 +433,7 @@ export function runRules(nodes: KgNode[], edges: KgEdge[]): RuleFinding[] {
     if (shipments.length > 0) {
       for (const [cId, cnt] of byCarrier) {
         const share = cnt / shipments.length;
-        if (share >= 0.5) {
+        if (share > 0.5) {
           const c = nodes.find((n) => n.id === cId);
           if (c) concentrated.push({ c, count: cnt, share });
         }

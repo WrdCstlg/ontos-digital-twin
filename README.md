@@ -440,14 +440,22 @@ cd app
 npm test
 ```
 
-The suite covers password hashing, rate-limiter windows, token verification, cookie
-options, the SPARQL read-only gate, the client-safe user projection, NLQ sanitization, RDF
-serialization, explainable SHACL, and the client-side graph analytics. The
-`semanticEngine.test.ts` cases are **live integration tests**: they start the engine
-daemon themselves from the local binary, so they need the binary in place (see
-[Semantic engine](#semantic-engine)) but not a daemon already running.
+The suite covers password hashing, login lockout, session-token tampering and expiry,
+cookie options, the SPARQL read-only gate, the client-safe user projection, NLQ
+sanitization, RDF serialization, explainable SHACL, all twelve insight rules, IoT
+ingestion, DTDL v3 export, workspace isolation, the semantic-engine lock, and the
+client-side graph analytics. The `semanticEngine.test.ts` cases are **live integration
+tests**: they start the engine daemon themselves from the local binary, so they need the
+binary in place (see [Semantic engine](#semantic-engine)) but not a daemon already running.
 
-Router-level and React component tests do not exist yet.
+Router tests call tRPC procedures with a mock context and a mocked database, and
+`bootRoutes.test.ts` does the same for the plain HTTP routes. They check permissions,
+workspace scoping and responses, but no test runs SQL against a real MySQL; the CI
+Docker job covers that by booting the full stack and smoke-testing login and the seeded
+graph. A few React components have render tests; pages do not.
+
+CI has no `app/.env`. To run the suite as CI does, point dotenv at a missing file:
+`DOTENV_CONFIG_PATH=does-not-exist.env npm test`.
 
 ---
 

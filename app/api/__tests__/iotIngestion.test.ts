@@ -558,20 +558,22 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       expect(loggedRows()[0].recordedAt).toEqual(NOW);
     });
 
-    // BUG iotIngestion.ts:187-231 — no ordering check: a late reading (older than the twin's lastTickAt) overwrites live state and rewinds lastTickAt.
-    it.skip("does not let a reading older than the twin's lastTickAt overwrite its current state", async () => {
+    it("records a reading older than the twin's lastTickAt in history without rewinding its live state", async () => {
       const live = { ...coldZone, propsJson: { ...coldZone.propsJson, temperature: 4.0, lastTickAt: "2026-09-21T20:00:00.000Z" } };
       mockLimit.mockResolvedValueOnce([live]);
 
-      await ingestTelemetry(
+      const result = await ingestTelemetry(
         [{ twinIri: live.iri, timestamp: "2026-09-20T08:00:00.000Z", telemetry: { temperature: 9.5 } }],
         { workspaceId: 1 },
       );
 
-      for (const [write] of mockSet.mock.calls as [PropsWrite][]) {
-        expect(write.propsJson.temperature).toBe(4.0);
-        expect(write.propsJson.lastTickAt).toBe("2026-09-21T20:00:00.000Z");
-      }
+      // Live state untouched: no propsJson write, no twin reported as updated.
+      expect(mockSet).not.toHaveBeenCalled();
+      expect(result.updatedTwins).toEqual([]);
+      // History keeps the reading at its own time.
+      expect(loggedRows().map((r) => [r.key, r.valueNum, new Date(r.recordedAt as Date).toISOString()])).toEqual([
+        ["temperature", 9.5, "2026-09-20T08:00:00.000Z"],
+      ]);
     });
   });
 
@@ -588,23 +590,21 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       ]);
     });
 
-    // BUG iotIngestion.ts:199-210 — non-finite numbers (webhook/MQTT JSON `1e400` parses to Infinity) reach propsJson and the twin_state_log insert.
-    it.skip("does not persist non-finite numeric telemetry", async () => {
+    it("rejects non-finite numeric telemetry and keeps the finite readings beside it", async () => {
+      // JSON `1e400` parses to Infinity.
       const points = JSON.parse(
         `[{"twinIri":"${coldZone.iri}","telemetry":{"temperature":1e400,"humidity":55}}]`,
       ) as RawTelemetryPoint[];
       mockLimit.mockResolvedValueOnce([coldZone]);
 
-      await ingestTelemetry(points, { workspaceId: 1 });
+      const result = await ingestTelemetry(points, { workspaceId: 1 });
 
-      for (const row of loggedRows()) {
-        if (row.valueNum !== null) expect(Number.isFinite(row.valueNum), row.key).toBe(true);
-      }
-      for (const [write] of mockSet.mock.calls as [PropsWrite][]) {
-        for (const [k, v] of Object.entries(write.propsJson)) {
-          if (typeof v === "number") expect(Number.isFinite(v), k).toBe(true);
-        }
-      }
+      expect(result.success).toBe(false);
+      expect(result.errors).toEqual([`Rejected non-finite value for 'temperature' on ${coldZone.iri}`]);
+      expect(loggedRows().map((r) => [r.key, r.valueNum])).toEqual([["humidity", 55]]);
+      const written = lastPropsWrite();
+      expect(written.humidity).toBe(55);
+      expect(written.temperature).toBe(coldZone.propsJson.temperature);
     });
   });
 

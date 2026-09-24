@@ -193,12 +193,24 @@ export async function ingestTelemetry(
     const nextProps: TwinState = { ...currentProps };
     const changedKeys: string[] = [];
 
+    // A reading older than the twin's last tick still belongs in its history,
+    // but must not roll live state (or lastTickAt) back.
+    const lastTick = Date.parse(String(currentProps.lastTickAt ?? ""));
+    const isLate = !isNaN(lastTick) && validRecordedAt.getTime() < lastTick;
+
     for (const [k, v] of Object.entries(point.telemetry)) {
       if (v === undefined || v === null) continue;
 
       if (typeof v === "number") {
-        nextProps[k] = v;
-        changedKeys.push(k);
+        // JSON like 1e400 parses to Infinity, which no column can hold.
+        if (!Number.isFinite(v)) {
+          errors.push(`Rejected non-finite value for '${k}' on ${twin.iri}`);
+          continue;
+        }
+        if (!isLate) {
+          nextProps[k] = v;
+          changedKeys.push(k);
+        }
         if (LOGGED_NUMERIC_KEYS.has(k)) {
           logRows.push({
             nodeId: twin.id,
@@ -211,8 +223,10 @@ export async function ingestTelemetry(
         }
       } else if (typeof v === "string" || typeof v === "boolean") {
         const strVal = String(v);
-        nextProps[k] = strVal;
-        changedKeys.push(k);
+        if (!isLate) {
+          nextProps[k] = strVal;
+          changedKeys.push(k);
+        }
         if (k === "status" || k === "zoneType") {
           logRows.push({
             nodeId: twin.id,

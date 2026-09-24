@@ -6,6 +6,8 @@ import { createRouter, workspaceQuery, workspaceMutation, workspaceAdminMutation
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
 import {
+  DTDL_QUANTITATIVE_TYPES_CONTEXT,
+  DTDL_SEMANTIC_TYPES,
   DTDL_UNITS,
   LOGGED_NUMERIC_KEYS,
   SIMULATED_TWIN_CLASSES,
@@ -414,14 +416,16 @@ export const twinRouter = createRouter({
         for (const p of m.properties) {
           contents.push({ "@type": "Property", name: p, schema: PROP_SCHEMAS[p] ?? "string" });
         }
+        // A unit needs a QuantitativeTypes semantic co-type; without one, none.
         for (const t of m.telemetry) {
-          contents.push({
-            "@type": "Telemetry",
-            name: t,
-            schema: "double",
-            unit: DTDL_UNITS[t] ?? "unitless",
-          });
+          const semanticType = DTDL_SEMANTIC_TYPES[t];
+          contents.push(
+            semanticType
+              ? { "@type": ["Telemetry", semanticType], name: t, schema: "double", unit: DTDL_UNITS[t] }
+              : { "@type": "Telemetry", name: t, schema: "double" },
+          );
         }
+        const usesQuantitativeTypes = m.telemetry.some((t) => DTDL_SEMANTIC_TYPES[t]);
         for (const r of m.relationships) {
           contents.push({
             "@type": "Relationship",
@@ -442,7 +446,9 @@ export const twinRouter = createRouter({
           });
         }
         return {
-          "@context": "dtmi:dtdl:context;3",
+          "@context": usesQuantitativeTypes
+            ? ["dtmi:dtdl:context;3", DTDL_QUANTITATIVE_TYPES_CONTEXT]
+            : "dtmi:dtdl:context;3",
           "@id": dtmi,
           "@type": "Interface",
           displayName: m.displayName,

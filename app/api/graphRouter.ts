@@ -227,7 +227,10 @@ export const graphRouter = createRouter({
         ]),
       ];
       const neighbors = neighborIds.length
-        ? await db.select().from(kgNodes).where(inArray(kgNodes.id, neighborIds))
+        ? await db
+            .select()
+            .from(kgNodes)
+            .where(and(eq(kgNodes.workspaceId, ws.id), inArray(kgNodes.id, neighborIds)))
         : [];
       const nodeById = new Map(neighbors.map((n) => [n.id, n]));
 

@@ -88,70 +88,55 @@ describe("Twin Router & DTDL v3 Export Tests", () => {
 
     // Validate DTDL v3 Interface structure on each exported model
     for (const iface of parsed) {
-      expect(iface["@context"]).toBe("dtmi:dtdl:context;3");
+      expect([iface["@context"]].flat()[0]).toBe("dtmi:dtdl:context;3");
       expect(iface["@type"]).toBe("Interface");
       expect(iface["@id"]).toMatch(/^dtmi:acme:[a-z]+:[A-Za-z0-9]+;1$/);
       expect(typeof iface.displayName).toBe("string");
       expect(Array.isArray(iface.contents)).toBe(true);
 
       for (const item of iface.contents) {
-        expect(["Property", "Telemetry", "Relationship", "Component"]).toContain(item["@type"]);
+        // A co-typed element lists its primary type first, e.g. ["Telemetry", "Temperature"].
+        const [primary] = [item["@type"]].flat();
+        expect(["Property", "Telemetry", "Relationship", "Component"]).toContain(primary);
         expect(typeof item.name).toBe("string");
 
-        if (item["@type"] === "Telemetry") {
+        if (primary === "Telemetry") {
           expect(item.schema).toBe("double");
-          expect(typeof item.unit).toBe("string");
         }
-        if (item["@type"] === "Relationship") {
+        if (primary === "Relationship") {
           expect(item["@id"]).toBeDefined();
         }
       }
     }
   });
 
-  it("verifies telemetry unit mappings conform to DTDL standard units", async () => {
-    const caller = appRouter.createCaller(
-      createMockContext({
-        user: mockViewerUser,
-        membership: mockViewerMembership,
-        workspace: mockWorkspace,
-      }),
-    );
-
-    interface DtdlTelemetryItem {
-      "@type": string;
-      name: string;
-      schema?: string;
-      unit?: string;
-    }
-
-    interface DtdlInterface {
-      "@id": string;
-      "@type": string;
-      "@context": string;
-      displayName: string;
-      contents: DtdlTelemetryItem[];
-    }
-
-    const result = await caller.twin.exportDtdl();
-    const interfaces = JSON.parse(result.content) as DtdlInterface[];
+  it("co-types telemetry with QuantitativeTypes semantic types, and gives a unit only with one", async () => {
+    const interfaces = await exportAllInterfaces();
+    const telemetry = (model: string, name: string) =>
+      interfaces
+        .find((i) => i["@id"] === dtmiFor(model))
+        ?.contents.find((c) => typesOf(c).includes("Telemetry") && c.name === name);
 
     const shipment = interfaces.find((i) => i["@id"] === dtmiFor("ShipmentTwin"));
-    expect(shipment).toBeDefined();
+    expect(shipment?.["@context"]).toEqual(["dtmi:dtdl:context;3", "dtmi:dtdl:extension:quantitativeTypes;1"]);
 
-    const tempTelemetry = shipment?.contents.find(
-      (c) => c["@type"] === "Telemetry" && c.name === "temperature",
-    );
-    expect(tempTelemetry).toBeDefined();
-    expect(tempTelemetry?.unit).toBe("degreeCelsius");
+    expect(telemetry("ShipmentTwin", "temperature")).toMatchObject({
+      "@type": ["Telemetry", "Temperature"],
+      unit: "degreeCelsius",
+    });
+    expect(telemetry("ShipmentTwin", "etaMinutes")).toMatchObject({
+      "@type": ["Telemetry", "TimeSpan"],
+      unit: "minute",
+    });
+    expect(telemetry("FacilityTwin", "humidity")).toMatchObject({
+      "@type": ["Telemetry", "RelativeHumidity"],
+      unit: "percent",
+    });
 
-    const equipment = interfaces.find((i) => i["@id"] === dtmiFor("EquipmentTwin"));
-    expect(equipment).toBeDefined();
-    const batteryTelemetry = equipment?.contents.find(
-      (c) => c["@type"] === "Telemetry" && c.name === "batteryLevel",
-    );
-    expect(batteryTelemetry).toBeDefined();
-    expect(batteryTelemetry?.unit).toBe("percent");
+    // No semantic type covers a plain percentage, so no unit is allowed.
+    const battery = telemetry("EquipmentTwin", "batteryLevel");
+    expect(battery?.["@type"]).toBe("Telemetry");
+    expect(battery?.unit).toBeUndefined();
   });
 
   it("returns the deletion count from pruneStateHistory and records it in the audit entry", async () => {
@@ -242,8 +227,7 @@ describe("Twin Router & DTDL v3 Export Tests", () => {
     }
   });
 
-  // BUG twinModels.ts:199 — WarehouseTwin component 'zones' uses ZoneTwin, which itself declares Component 'equipment' (twinModels.ts:215); DTDL v3 forbids nested Components.
-  it.skip("no Component schema itself contains a Component (DTDL v3 forbids nesting)", async () => {
+  it("no Component schema itself contains a Component (DTDL v3 forbids nesting)", async () => {
     const interfaces = await exportAllInterfaces();
     const byId = new Map(interfaces.map((i) => [i["@id"], i]));
     for (const iface of interfaces) {
@@ -254,8 +238,7 @@ describe("Twin Router & DTDL v3 Export Tests", () => {
     }
   });
 
-  // BUG twinModels.ts:160-161 / twinRouter.ts:431 — DigitalTwin.twinOf and hasModel export minMultiplicity 1; DTDL v3 requires 0.
-  it.skip("every Relationship minMultiplicity is 0 and maxMultiplicity >= 1 (DTDL v3 limits)", async () => {
+  it("every Relationship minMultiplicity is 0 and maxMultiplicity >= 1 (DTDL v3 limits)", async () => {
     const interfaces = await exportAllInterfaces();
     for (const iface of interfaces) {
       for (const rel of iface.contents.filter((c) => typesOf(c).includes("Relationship"))) {
@@ -265,8 +248,7 @@ describe("Twin Router & DTDL v3 Export Tests", () => {
     }
   });
 
-  // BUG twinRouter.ts:418-423,445 — Telemetry carries `unit` with no semantic co-type and no QuantitativeTypes extension in @context; core DTDL v3 has no `unit`.
-  it.skip("Telemetry with a unit declares a semantic type and the QuantitativeTypes extension", async () => {
+  it("Telemetry with a unit declares a semantic type and the QuantitativeTypes extension", async () => {
     const interfaces = await exportAllInterfaces();
     for (const iface of interfaces) {
       for (const t of iface.contents.filter((c) => typesOf(c).includes("Telemetry") && c.unit !== undefined)) {
