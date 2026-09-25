@@ -142,6 +142,26 @@ describe("JobWorker", () => {
     expect(calls.complete).toEqual([]);
   });
 
+  it("logs when it takes over a job whose lease another worker let lapse", async () => {
+    const reclaimed = makeJob({ id: 15, attempts: 2, lastError: "lease held by w-old expired; reclaimed by w-test" });
+    const { q, calls } = fakeQueue([{ kind: "claimed", job: reclaimed }]);
+    const lines: string[] = [];
+    const w = new JobWorker({
+      id: "w-test",
+      handlers: { "test.kind": { run: async () => ({}) } },
+      queue: q,
+      pollMs: 5,
+      log: (line) => lines.push(line),
+    });
+    workers.push(w);
+    w.start();
+
+    await until(() => calls.complete.length === 1);
+    expect(lines).toContain(
+      "job 15 (test.kind) attempt 2 of 3: lease held by w-old expired; reclaimed by w-test",
+    );
+  });
+
   it("fails a job of a kind it has no handler for, permanently", async () => {
     const { q, calls } = fakeQueue([{ kind: "claimed", job: makeJob({ id: 12, kind: "unknown.kind" }) }]);
     startWorker({}, q);

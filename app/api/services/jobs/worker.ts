@@ -201,6 +201,14 @@ export class JobWorker {
         );
         continue;
       }
+      if (claim.job.attempts > 1) {
+        // A reclaimed or retried job is the queue's recovery at work; say so, so
+        // the logs show it happening.
+        this.log(
+          `job ${claim.job.id} (${claim.job.kind}) attempt ${claim.job.attempts} of ${claim.job.maxAttempts}: ` +
+            `${claim.job.lastError ?? "retry"}`,
+        );
+      }
       await this.runJob(claim.job);
     }
   }
