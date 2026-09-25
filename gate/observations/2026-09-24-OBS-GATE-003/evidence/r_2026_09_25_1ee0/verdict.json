@@ -1,0 +1,129 @@
+{
+  "schema": "prothesis.verdict/v1",
+  "run_id": "r_2026_09_25_1ee0",
+  "profile": "workers",
+  "commit": "ba3629a",
+  "verdict": "FAIL",
+  "budget": {
+    "wall_s": 300,
+    "used_s": 48,
+    "worlds_planned": 1,
+    "worlds_run": 1
+  },
+  "violations": [
+    {
+      "id": "v1",
+      "oracle": "jobs.lease_lapse",
+      "class": "safety",
+      "severity": "high",
+      "phase": "ASSERT",
+      "first_seen_ms": 0,
+      "explanation": "1 of 3 job(s) (job 1) recovered only because a lease lapsed on a worker that had recorded it was asked to stop (worker-a (cd151de37437-1-7b680492, stopping)). Such a worker finishes its job or hands it back; a lapsed lease means it died holding the job, which then waited out the lease and ran again from the start.",
+      "witness": {
+        "key": "jobs",
+        "lapsed_leases": [
+          {
+            "attempts": 2,
+            "job_id": 1,
+            "lease_owner": "cd151de37437-1-7b680492",
+            "node": "worker-a",
+            "owner_status": "stopping",
+            "status": "succeeded"
+          }
+        ],
+        "oracle_argv": [
+          "./bin/oracle-job-leases",
+          "--node",
+          "db",
+          "--settle",
+          "60s",
+          "--asked-to-stop",
+          "stopping,stopped"
+        ],
+        "oracle_definition": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\oracles\\jobs.lease_lapse.yaml",
+        "phase": "ASSERT",
+        "stderr_path": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\runs\\r_2026_09_25_1ee0\\world-0001\\oracles\\jobs.lease_lapse.stderr.log"
+      },
+      "minimal_repro": null,
+      "shrink": {
+        "attempted": false,
+        "faults_before": 0,
+        "faults_after": 0,
+        "ops_before": 0,
+        "ops_after": 0,
+        "surviving_faults": []
+      },
+      "causal_timeline": [
+        {
+          "t_ms": -23180,
+          "event": "phase",
+          "detail": "BOOT begins (window -23180..-1 ms)"
+        },
+        {
+          "t_ms": -1,
+          "event": "phase",
+          "detail": "SEED begins (window -1..0 ms)"
+        },
+        {
+          "t_ms": 0,
+          "event": "phase",
+          "detail": "DRIVE begins (window 0..10000 ms)"
+        },
+        {
+          "t_ms": 1,
+          "event": "phase",
+          "detail": "PERTURB begins (window 1..10000 ms)"
+        },
+        {
+          "t_ms": 4000,
+          "event": "fault",
+          "detail": "inject proc.restart(worker-a)@4000..10000 -> worker-a"
+        },
+        {
+          "t_ms": 10000,
+          "event": "phase",
+          "detail": "HEAL begins (window 10000..16841 ms)"
+        },
+        {
+          "t_ms": 10000,
+          "event": "fault",
+          "detail": "withdraw proc.restart(worker-a)@4000..10000 -> worker-a"
+        },
+        {
+          "t_ms": 16668,
+          "event": "log",
+          "node": "worker-b",
+          "detail": "[worker e9e5daf0aa4c-1-ffb7a59b] job 1 (mapping.sync) attempt 2 of 3: lease held by cd151de37437-1-7b680492 expired; reclaimed by e9e5daf0aa4c-1-ffb7a59b"
+        },
+        {
+          "t_ms": 16841,
+          "event": "phase",
+          "detail": "QUIESCE begins (window 16841..18945 ms)"
+        },
+        {
+          "t_ms": 18945,
+          "event": "phase",
+          "detail": "ASSERT begins (window 18945..18945 ms)"
+        },
+        {
+          "t_ms": 18945,
+          "event": "oracle",
+          "detail": "jobs.lease_lapse (safety) reported a violation in ASSERT: 1 of 3 job(s) (job 1) recovered only because a lease lapsed on a worker that had recorded it was asked to stop (worker-a (cd151de37437-1-7b680492, stopping)). Such a worker finishes …"
+        }
+      ],
+      "suspect": null
+    }
+  ],
+  "coverage": {
+    "new_templates": 0,
+    "cum_templates": 0,
+    "new_states": 0,
+    "cum_states": 0
+  },
+  "coverage_delta_vs_baseline": null,
+  "oracle_lock": {
+    "status": "ok",
+    "manifest_sha": "sha256:44f5b4f4e6e15ac7a7b88ee49c16bf1e34b87b189d7f7d0314db46c097f6f708"
+  },
+  "artifacts": ".prothesis/runs/r_2026_09_25_1ee0/"
+}
