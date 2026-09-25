@@ -58,6 +58,7 @@ receiver.
 | `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, submits the gate-annotate action with `actions.submit`, writes the history, honours the stdin drain |
 | `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still be queued or running |
 | `cmd/oracle-actions` | Two oracles on action types. `actions.durable`: every acknowledged action is still applied, every submission has one audit entry, every edit traces to an applied submission, and each person's latest gate note is in place. `actions.delivered`: every side effect of an applied action is delivered |
+| `cmd/oracle-session` | The `session.honoured` oracle: the driver's session is valid all world, so no operation may be refused as signed out (HTTP 401) |
 | `cmd/oracle-job-leases` | The `jobs.lease_lapse` oracle: a worker that recorded it was asked to stop never leaves its job to the lease; it finishes the job or hands it back. Lapses on workers that went silent (frozen, killed) are excused |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |

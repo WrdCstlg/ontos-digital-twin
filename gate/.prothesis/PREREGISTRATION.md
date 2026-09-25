@@ -416,3 +416,55 @@ still recorded as running, so `jobs.lease_lapse` excuses it.
 | `sync_jobs.settle` violated in the database world | An import that lost its database was not retried to an end. A finding. |
 | `actions.delivered` inconclusive | The world applied no action, so it did not test them. Not counted; the record says why. |
 | Exit 4 | The lock was not taken after this commit. |
+
+# Pre-registration 7: a signed-in client is never told it is signed out
+
+Written on 2026-09-25, before any world ran with this oracle, and committed with
+it ahead of the lock and of the fix.
+
+## What this is about
+
+OBS-GATE-004, finding 1: while the database was away, the app answered eight of
+the driver's requests with 401, though its session was valid. `createContext`
+treats any error while authenticating, the database unreachable included, as
+no session. The web app takes 401 as "sign in required": actions show sign-in
+prompts, and a page loaded during the outage goes to the login page (a page
+already open keeps its signed-in state, since a failed re-check keeps the last
+answer; OBS-GATE-004 put this more broadly than that). `/api/sparql` does the
+same.
+
+## The oracle
+
+`session.honoured` (`cmd/oracle-session`, safety): the driver signs in once and
+its session outlives any world, so no operation may be refused as signed out.
+It reads only the history, where ontosload records a refusal as `fail` with
+`HTTP <status>`. Run before the lock over the recorded histories of the last 22
+runs: 29 of 30 worlds ok, and the database world `r_2026_09_25_b67d` violated,
+with its eight 401s.
+
+## The fix it will test
+
+A separate commit after this one. `auth/service.ts` gains `sessionUser`, which
+answers "no session" only for the refusals that mean one (no token, an invalid
+or expired token, an unknown user) and lets any other error through.
+`createContext` records that the session could not be checked, and the
+signed-in procedures then answer 503 SERVICE_UNAVAILABLE rather than 401;
+`/api/sparql` answers 503 too. A request with no session cookie is unaffected:
+it never reaches the database. The images change, so the worlds with the fix run
+on images built from the fix's commit.
+
+## The worlds and their predictions
+
+| World | Without the fix | With the fix | Fix reverted |
+|---|---|---|---|
+| Database restarted, `thesis run --profile actions --fault "proc.restart(db)@5000..12000"` | **FAIL, exit 1**: `session.honoured` violated by the 401s during the outage; every other oracle ok | PASS: the same requests end `info` (HTTP 503) | FAIL, as without |
+| Actions, app restarted, smoke, app restart, worker restart and freeze | PASS, `session.honoured` ok | PASS | not run |
+
+## What would make it come out differently
+
+| Outcome | What it would mean |
+|---|---|
+| The database world passes without the fix | The outage fell where no request was in flight; the world missed. Not counted. |
+| It fails with the fix | Another path still answers 401 when it cannot check the session. A finding in the fix. |
+| Another oracle fails with the fix | 503 during the outage changed something else, for example a client that stops on it. A finding. |
+| Exit 4 | The lock was not taken after this commit. |

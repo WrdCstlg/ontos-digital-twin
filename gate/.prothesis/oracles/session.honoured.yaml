@@ -1,0 +1,6 @@
+version: prothesis.oracle_def/v1
+name: session.honoured
+class: safety
+valid_phases: [ASSERT]
+cmd: "./bin/oracle-session"
+timeout: 60s
