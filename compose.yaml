@@ -110,6 +110,10 @@ services:
     build: *app-build
     command: ["node", "dist/worker.js"]
     restart: unless-stopped
+    # On SIGTERM the worker finishes its job within 5 s or hands it back to the
+    # queue, then closes its pool. Docker's own default can be as short as 1 s,
+    # which kills it mid-job and leaves the job to its lease.
+    stop_grace_period: 15s
     environment:
       <<: *app-env
       OPEN_ONTOLOGIES_URL: http://engine-worker:8085
