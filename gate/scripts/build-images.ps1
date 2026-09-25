@@ -7,15 +7,18 @@
     ontos-gate-db:<tag>  MySQL holding the demo workspace, migrated, seeded and
                          with the gate admin provisioned, produced by running
                          that same app image's bootstrap against a scratch
-                         database and dumping the result, plus three copies of
-                         the CSV mapping as gate fixtures
+                         database and dumping the result, plus gate fixtures:
+                         three copies of the CSV mapping, and two bulk CSV
+                         mappings ("gate-bulk N") whose imports take seconds
 
 .NOTES
   The credentials below exist only inside throwaway containers on a private
   network. They are not secrets, and the gate's driver uses the admin one.
 #>
 param(
-  [string]$Tag = (git rev-parse --short=7 HEAD)
+  [string]$Tag = (git rev-parse --short=7 HEAD),
+  # Rows in each bulk fixture import; see "gate fixtures: two bulk CSV mappings".
+  [int]$BulkRows = 1000
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,6 +88,46 @@ try {
     "FROM mappings m CROSS JOIN (SELECT 2 AS n UNION ALL SELECT 3 UNION ALL SELECT 4) k " +
     "WHERE m.id = (SELECT MIN(x.id) FROM (SELECT mm.id FROM mappings mm JOIN connectors c ON c.id = mm.connectorId WHERE c.type = 'csv') x);"
   Invoke-Checked "gate fixtures" { docker exec -e "MYSQL_PWD=$dbPassword" $db mysql -uroot ontos -e $fixtureSql }
+
+  Write-Host "==> gate fixtures: two bulk CSV mappings of $BulkRows rows"
+  # Imports long enough that a worker is almost always holding one, so a fault
+  # on a worker lands on a held lease. Each mapping writes its own subjects,
+  # so two workers importing at once never upsert the same rows.
+  $bulkSql = @'
+SET SESSION cte_max_recursion_depth = 100000;
+SET SESSION group_concat_max_len = 67108864;
+SET @rows = __ROWS__;
+SET @csv = (
+  WITH RECURSIVE seq (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < @rows)
+  SELECT GROUP_CONCAT(
+    CONCAT_WS(',', CONCAT('GATE-', LPAD(n, 5, '0')), CONCAT('Gate Person ', n), CONCAT('gate.person.', n, '@acme.com'),
+      '', '', DATE_FORMAT(DATE_SUB('2025-06-30', INTERVAL MOD(n, 2000) DAY), '%Y-%m-%d'), 'B2', 'active')
+    ORDER BY n SEPARATOR '\n')
+  FROM seq);
+INSERT INTO connectors (workspaceId, name, type, configJson, status)
+SELECT c.workspaceId, 'gate-bulk HRIS export', 'csv',
+  JSON_OBJECT('filename', 'gate-bulk.csv', 'rows', @rows,
+    'csvText', CONCAT('emp_id,full_name,email,manager_id,dept_code,hire_date,band,status', CHAR(10), @csv)),
+  'connected'
+FROM connectors c WHERE c.id = (SELECT MIN(x.id) FROM (SELECT id FROM connectors WHERE type = 'csv') x);
+SET @bulk = LAST_INSERT_ID();
+INSERT INTO mappings (connectorId, moduleId, name, sourceTable, classIri, columnMapJson, status)
+SELECT @bulk, m.moduleId, CONCAT('gate-bulk ', k.n), 'gate-bulk.csv', m.classIri,
+  JSON_SET(m.columnMapJson, '$.subject', CONCAT('hr:Person/gate-bulk-', k.n, '-{emp_id}')), m.status
+FROM mappings m CROSS JOIN (SELECT 1 AS n UNION ALL SELECT 2) k
+WHERE m.id = (SELECT MIN(x.id) FROM (SELECT mm.id FROM mappings mm JOIN connectors c ON c.id = mm.connectorId WHERE c.type = 'csv') x);
+'@ -replace '__ROWS__', $BulkRows
+  $bulkFile = Join-Path ([System.IO.Path]::GetTempPath()) "ontos-gate-bulk-$Tag.sql"
+  Set-Content -Path $bulkFile -Value $bulkSql -Encoding utf8NoBOM
+  try {
+    Invoke-Checked "copy bulk fixture" { docker cp $bulkFile "${db}:/tmp/bulk.sql" }
+    Invoke-Checked "bulk fixtures" {
+      docker exec -e "MYSQL_PWD=$dbPassword" $db sh -c "mysql -uroot ontos < /tmp/bulk.sql"
+    }
+  }
+  finally {
+    Remove-Item $bulkFile -ErrorAction SilentlyContinue
+  }
 
   Write-Host "==> dump"
   # Written inside the container and copied out, so no shell re-encodes it.

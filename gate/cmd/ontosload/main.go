@@ -61,6 +61,11 @@ import (
 const (
 	planSchema = "prothesis.driver_plan/v1"
 	opSync     = "sync"
+	// opSyncBulk is a sync of a gate-fixture mapping over a large CSV (names
+	// starting bulkPrefix), for worlds that need imports lasting seconds. It is
+	// recorded in the history as `sync`: same operation, different workload.
+	opSyncBulk = "sync_bulk"
+	bulkPrefix = "gate-bulk"
 
 	// requestTimeout bounds every operation. It stays below the harness's 10 s
 	// drain deadline, so an operation in flight at QUIESCE always completes (as
@@ -132,18 +137,26 @@ func run() int {
 		log.printf("refusing: sign-in failed: %v", err)
 		return exitRefuse
 	}
-	mappings, err := c.runnableCSVMappings(ctx)
+	mappings, bulk, err := c.runnableCSVMappings(ctx)
 	if err != nil {
 		log.printf("refusing: cannot list mappings: %v", err)
 		return exitRefuse
 	}
-	log.printf("runnable CSV mappings: %v", mappings)
+	pools := map[string][]int64{}
+	for _, id := range mappings {
+		if bulk[id] {
+			pools[opSyncBulk] = append(pools[opSyncBulk], id)
+		} else {
+			pools[opSync] = append(pools[opSync], id)
+		}
+	}
+	log.printf("runnable CSV mappings: sync %v, sync_bulk %v", pools[opSync], pools[opSyncBulk])
 
 	var counts outcomeCounts
 	if len(pl.Operations) > 0 {
 		err = runOperations(ctx, pl, mappings, c, hist, stop, &counts, log)
 	} else {
-		err = runProfile(ctx, pl, p.seed, mappings, c, hist, stop, &counts, log)
+		err = runProfile(ctx, pl, p.seed, pools, c, hist, stop, &counts, log)
 	}
 	if err != nil {
 		log.printf("refusing: %v", err)
@@ -283,7 +296,7 @@ func loadPlan(p params) (*plan, error) {
 	return &pl, nil
 }
 
-func supportedOp(op string) bool { return op == opSync }
+func supportedOp(op string) bool { return op == opSync || op == opSyncBulk }
 
 func mappingFromKey(key *string) (int64, error) {
 	if key == nil || !strings.HasPrefix(*key, "mapping/") {
@@ -327,10 +340,12 @@ func samePath(a, b string) bool {
 
 // runProfile generates operations from the mix. `ops` is the total across all
 // clients; the stop signal usually ends DRIVE long before it is used up.
-func runProfile(ctx context.Context, pl *plan, seed uint64, mappings []int64, c *client,
+func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]int64, c *client,
 	h *history, stop *stopSignal, counts *outcomeCounts, log *logger) error {
-	if len(mappings) == 0 {
-		return errors.New("the plan needs sync, but Ontos has no runnable CSV mapping")
+	for _, m := range pl.Mix {
+		if m.WeightPPM > 0 && len(pools[m.Op]) == 0 {
+			return fmt.Errorf("the plan needs %s, but Ontos has no runnable CSV mapping for it", m.Op)
+		}
 	}
 	var remaining atomic.Int64
 	remaining.Store(int64(pl.Ops))
@@ -342,8 +357,9 @@ func runProfile(ctx context.Context, pl *plan, seed uint64, mappings []int64, c 
 			rng := rand.New(rand.NewSource(int64(seed) + proc))
 			for !stop.fired() && h.err() == nil && remaining.Add(-1) >= 0 {
 				op := pickOp(pl.Mix, rng)
-				mapping := mappings[rng.Intn(len(mappings))]
-				if doOp(ctx, c, h, counts, stop, proc, 0, op, mapping) != schema.HistoryOK {
+				pool := pools[op]
+				mapping := pool[rng.Intn(len(pool))]
+				if doOp(ctx, c, h, counts, stop, proc, 0, opSync, mapping) != schema.HistoryOK {
 					select {
 					case <-time.After(backoff):
 					case <-stop.done:
@@ -672,33 +688,34 @@ func (c *client) signIn(ctx context.Context, email, password string, log *logger
 }
 
 // runnableCSVMappings lists the mappings mapping.runSync can execute: those
-// whose connector is CSV with inline data. Sorted by id, so a seeded choice
-// among them is reproducible.
-func (c *client) runnableCSVMappings(ctx context.Context) ([]int64, error) {
+// whose connector is CSV with inline data, sorted by id so a seeded choice
+// among them is reproducible, and which of them are bulk gate fixtures.
+func (c *client) runnableCSVMappings(ctx context.Context) ([]int64, map[int64]bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/trpc/mapping.listMappings", nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Cookie", c.cookie)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, trpcMessage(payload))
+		return nil, nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, trpcMessage(payload))
 	}
 	var list struct {
 		Result struct {
 			Data struct {
 				JSON []struct {
-					ID        int64 `json:"id"`
+					ID        int64  `json:"id"`
+					Name      string `json:"name"`
 					Connector *struct {
 						Type       string                 `json:"type"`
 						ConfigJSON map[string]interface{} `json:"configJson"`
@@ -708,19 +725,23 @@ func (c *client) runnableCSVMappings(ctx context.Context) ([]int64, error) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(payload, &list); err != nil {
-		return nil, fmt.Errorf("decode mapping list: %w", err)
+		return nil, nil, fmt.Errorf("decode mapping list: %w", err)
 	}
 	var ids []int64
+	bulk := map[int64]bool{}
 	for _, m := range list.Result.Data.JSON {
 		if m.Connector == nil || m.Connector.Type != "csv" {
 			continue
 		}
 		if text, ok := m.Connector.ConfigJSON["csvText"].(string); ok && text != "" {
 			ids = append(ids, m.ID)
+			if strings.HasPrefix(m.Name, bulkPrefix) {
+				bulk[m.ID] = true
+			}
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids, nil
+	return ids, bulk, nil
 }
 
 // ---------------------------------------------------------------------------

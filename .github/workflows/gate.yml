@@ -68,9 +68,11 @@ jobs:
         working-directory: gate
         run: thesis run --profile workers --fault 'proc.restart(worker-a)@3000..9000'
 
+      # Pre-registration 3: frozen long enough for worker-b to reach the lapsed
+      # lease after finishing the bulk import it holds.
       - name: Worker frozen past its lease
         working-directory: gate
-        run: thesis run --profile workers --fault 'proc.pause(worker-a)@3000..23000'
+        run: thesis run --profile workers --fault 'proc.pause(worker-a)@3000..38000'
 
       - name: Show verdicts and app logs on failure
         if: failure()

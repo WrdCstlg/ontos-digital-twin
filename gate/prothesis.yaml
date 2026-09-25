@@ -48,11 +48,14 @@ driver:
   cmd: "./bin/ontosload --history {history_path} --plan {plan_path} --seed {seed} --profile {profile} --app http://127.0.0.1:13000 --email admin@acme-ontology.com --password ontos-gate-admin-password"
   profiles:
     # `sync` queues an import of a CSV mapping and follows its job to the end.
+    # `sync_bulk` is the same operation on the bulk gate fixtures ("gate-bulk N",
+    # 1000 rows, a few seconds an import), recorded in the history as `sync`.
     # `ops` is a ceiling; the drain at QUIESCE ends DRIVE long before it.
     imports: { clients: 2, ops: 400, mix: { sync: 1 } }
-    # Six clients over the four CSV mappings keep both workers busy at every
-    # instant, so a fault on one worker always lands on a job it holds.
-    backlog: { clients: 6, ops: 1000, mix: { sync: 1 } }
+    # Six clients over the two bulk mappings: imports of a mapping are
+    # deduplicated, so there are at most two jobs, one per worker, and each
+    # worker is holding one nearly all the time. See Pre-registration 3.
+    backlog: { clients: 6, ops: 1000, mix: { sync_bulk: 1 } }
 
 perturber:
   budget: { max_concurrent_faults: 1, max_faults_per_world: 2 }

@@ -31,15 +31,20 @@ thesis run --profile smoke             # three worlds, no faults
 
 CI runs the same steps on every push and pull request
 ([`.github/workflows/gate.yml`](../.github/workflows/gate.yml)): verify the lock,
-build the images for the commit, then `smoke` and the stranded-sync-job world.
+build the images for the commit, then `smoke` and the pre-registered fault
+worlds: the app restarted mid-import, and a worker restarted or frozen under a
+backlog.
 
 `build-images.ps1` builds the app image and then a MySQL image that already
 holds the demo workspace, migrated, seeded and with the gate admin provisioned,
 by running that app image's own bootstrap against a scratch database. Each world
 tears down with its volumes, so this is what makes every world start from the
-same state with no init service. It also adds three copies of the CSV mapping as
-gate fixtures: imports of one mapping are deduplicated, so more mappings are what
-let both workers be busy at once.
+same state with no init service. It also adds gate fixtures. Three copies of the
+CSV mapping, because imports of one mapping are deduplicated, so more mappings
+are what let both workers be busy at once. Two bulk mappings, `gate-bulk 1` and
+`gate-bulk 2`, over a generated 1000-row CSV (`-BulkRows`), each writing its own
+subjects: their imports take seconds rather than milliseconds, so a fault on a
+worker lands on a job it holds.
 
 ## What is here
 
