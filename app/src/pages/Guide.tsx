@@ -7,7 +7,9 @@ import {
   Compass,
   DatabaseZap,
   LayoutDashboard,
+  MapIcon,
   ScanHeart,
+  ServerCog,
   ShieldCheck,
   Sparkles,
   Waypoints,
@@ -116,7 +118,14 @@ const SCREENS = [
     color: '#34D399',
     title: 'Mapping & Sync',
     path: '/app/mapping',
-    body: 'Where the graph’s data actually comes from. Real connectors — a CSV export, a Postgres contracts DB, a REST ERP feed — each field-mapped into an ontology class, synced on a schedule or live via CDC, every run diffed against the last snapshot.',
+    body: 'Where the graph’s data actually comes from. Real connectors — a CSV export, a Postgres contracts DB, a REST ERP feed — each field-mapped into an ontology class, synced on a schedule or live via CDC, every run diffed against the last snapshot. “Run sync” queues the import; a background worker runs it and the run’s row updates when it finishes.',
+  },
+  {
+    icon: ServerCog,
+    color: '#38BDF8',
+    title: 'Operations',
+    path: '/app/operations',
+    body: 'The job queue behind every import. How many jobs are queued, running, done or failed, how long the oldest has waited, and whether a worker is alive to run them — with each job’s attempts, lease and last error. A job gets up to three attempts, with a backoff between them; admins can retry a failed job or cancel one that hasn’t started.',
   },
   {
     icon: ScanHeart,
@@ -131,6 +140,13 @@ const SCREENS = [
     title: 'Admin',
     path: '/app/admin',
     body: 'Tenancy, roles, connected LLM providers, and the append-only audit log — the tab you open when someone asks “who changed this contract’s status, and when,” and you need an answer that isn’t a guess.',
+  },
+  {
+    icon: MapIcon,
+    color: '#A5B4FC',
+    title: 'Landscape',
+    path: '/app/landscape',
+    body: 'Where Ontos stands next to Palantir Foundry’s Ontology, area by area and with an honest status for each, plus the architecture as it runs today and the increments that change it next. The page to open when someone asks “how does this compare?”.',
   },
 ];
 

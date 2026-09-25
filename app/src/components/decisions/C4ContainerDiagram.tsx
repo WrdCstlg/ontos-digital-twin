@@ -23,7 +23,7 @@ interface Box {
 const BOXES: Box[] = [
   { id: 'spa', x: 80, y: 90, w: 300, h: 110, title: 'React SPA', sub: ['react 19 · vite · tailwind', 'cytoscape canvases · framer motion'], color: '#818CF8' },
   { id: 'api', x: 560, y: 90, w: 320, h: 110, title: 'Hono + tRPC gateway', sub: ['typed routers: ontology · graph · mapping', 'insights · nlq · admin · dashboard'], color: '#38BDF8' },
-  { id: 'sync', x: 80, y: 320, w: 300, h: 110, title: 'Mapping & sync engine', sub: ['r2rml-style column maps', 'materialize + provenance + snapshots'], color: '#38BDF8' },
+  { id: 'sync', x: 80, y: 320, w: 300, h: 110, title: 'Mapping & sync worker', sub: ['r2rml-style column maps', 'queued jobs · leased · snapshots'], color: '#38BDF8' },
   { id: 'reasoner', x: 480, y: 320, w: 280, h: 110, title: 'Reasoner (simulated)', sub: ['deterministic subclass closure', 'shape checks · disclosed in UI'], color: '#38BDF8' },
   { id: 'insights', x: 860, y: 320, w: 280, h: 110, title: 'Insight rules engine', sub: ['deterministic anomaly rules', 'evidence-graph packaging'], color: '#38BDF8' },
   { id: 'nlq', x: 480, y: 530, w: 280, h: 110, title: 'NL→Query simulator', sub: ['ontology-grounded · ast validation', 'read-only guard · refusals'], color: '#38BDF8' },
@@ -71,7 +71,7 @@ function edgePoints(fromId: string, toId: string): [number, number, number, numb
 const RESPONSIBILITIES: [string, string, string, string][] = [
   ['React SPA', 'All UI surfaces; graph canvases; tRPC client', 'React 19 · Vite · Tailwind · Cytoscape', 'static CDN replicas'],
   ['Hono + tRPC gateway', 'Typed API boundary; auth/session; audit writes', 'Hono · tRPC v11 · superjson', 'stateless — horizontal replicas'],
-  ['Mapping & sync engine', 'R2RML-style maps → materialized KG + snapshots', 'Drizzle transactions · chunked inserts', 'partition by source connector'],
+  ['Mapping & sync worker', 'Runs queued imports: R2RML-style maps → materialized KG + snapshots', 'MySQL job queue (SKIP LOCKED leases, retries) · worker process', 'add worker processes — one lease per job'],
   ['Reasoner (simulated)', 'Subclass closure + shape checks on publish/sync', 'deterministic TS module', 'pure functions — scale with API'],
   ['Insight rules engine', 'Anomaly rules over the KG; evidence packaging', 'in-memory rule pass over kg tables', 'rule-partitioned workers'],
   ['NL→Query simulator', 'Ontology-grounded translation + read-only guard', 'deterministic grammar + AST validation', 'stateless'],

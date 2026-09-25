@@ -37,7 +37,7 @@ const PANELS = [
 /** ARCH · Scale & ops — three mini-panels with copyable command snippets. */
 export function ScaleOps() {
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
       {PANELS.map((p, i) => (
         <motion.section
           key={p.title}

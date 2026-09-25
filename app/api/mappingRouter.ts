@@ -1,16 +1,7 @@
 import { z } from "zod";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import {
-  connectors,
-  graphSnapshots,
-  kgEdges,
-  kgNodes,
-  mappings,
-  ontologyClasses,
-  ontologyModules,
-  syncJobs,
-} from "@db/schema";
+import { connectors, jobs, mappings, ontologyModules, syncJobs } from "@db/schema";
 import {
   createRouter,
   workspaceQuery,
@@ -19,77 +10,17 @@ import {
 } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
-import { semanticEngine } from "./services/semanticEngine";
 import {
-  buildPrefixMap,
-  knowledgeGraphToTurtle,
-  shaclJsonToTurtle,
-} from "./services/rdfBridge";
-import { explainShaclReport, type ExplainedShaclReport } from "./services/explainableShacl";
+  checkRunnableMapping,
+  enqueueMappingSync,
+  parseCsv,
+  renderTemplate,
+  type ColumnMap,
+  type MappingSyncResult,
+} from "./services/mappingSync";
 
-/* ── CSV helpers ─────────────────────────────────────────────── */
-
-export function parseCsv(csvText: string, maxRows = Infinity): {
-  headers: string[];
-  rows: Record<string, string>[];
-} {
-  const lines = csvText.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim() !== "");
-  if (lines.length === 0) return { headers: [], rows: [] };
-  const parseLine = (line: string): string[] => {
-    const out: string[] = [];
-    let cur = "";
-    let inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (inQ) {
-        if (ch === '"') {
-          if (line[i + 1] === '"') {
-            cur += '"';
-            i++;
-          } else inQ = false;
-        } else cur += ch;
-      } else if (ch === '"') inQ = true;
-      else if (ch === ",") {
-        out.push(cur);
-        cur = "";
-      } else cur += ch;
-    }
-    out.push(cur);
-    return out;
-  };
-  const headers = parseLine(lines[0]).map((h) => h.trim());
-  const rows: Record<string, string>[] = [];
-  for (let i = 1; i < lines.length && rows.length < maxRows; i++) {
-    const cells = parseLine(lines[i]);
-    const row: Record<string, string> = {};
-    headers.forEach((h, j) => (row[h] = (cells[j] ?? "").trim()));
-    rows.push(row);
-  }
-  return { headers, rows };
-}
-
-export type ColumnMap = {
-  subject: string; // e.g. "hr:Person/{emp_id}"
-  label?: string; // column used as node label
-  fields?: Record<string, string>; // column -> datatype property IRI (stored in propsJson)
-  links?: { column: string; predicate: string; target: string }[]; // target template with {value}
-};
-
-function renderTemplate(tpl: string, row: Record<string, string>) {
-  return tpl.replace(/\{([^}]+)\}/g, (_, k) => row[k] ?? "");
-}
-
-async function nextSnapshotLabel(workspaceId: number) {
-  const db = getDb();
-  const [last] = await db
-    .select()
-    .from(graphSnapshots)
-    .where(eq(graphSnapshots.workspaceId, workspaceId))
-    .orderBy(desc(graphSnapshots.id))
-    .limit(1);
-  const n = last ? Number(String(last.label).replace(/^v/, "")) + 1 : 1;
-  return `v${Number.isFinite(n) ? n : 1}`;
-}
+// The CSV helpers live with the import in services/mappingSync.ts.
+export { parseCsv, type ColumnMap };
 
 /* ── router ──────────────────────────────────────────────────── */
 
@@ -315,218 +246,44 @@ export const mappingRouter = createRouter({
       return { filename: input.filename, headers, sampleRows: rows, instances };
     }),
 
+  /**
+   * Queues an import of the mapping and returns at once; a worker runs it.
+   * Follow it with listSyncJobs or operations.getJob.
+   */
   runSync: workspaceOntologistMutation
     .input(z.object({ mappingId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;
-      const db = getDb();
-      const [record] = await db
-        .select({ mapping: mappings, connector: connectors })
-        .from(mappings)
-        .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
-        .where(and(eq(mappings.id, input.mappingId), eq(connectors.workspaceId, ws.id)))
-        .limit(1);
-      if (!record) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${input.mappingId} not found` });
-      const m = record.mapping;
-      const conn = record.connector;
-      const cfg = (conn.configJson ?? {}) as Record<string, unknown>;
-      if (conn.type !== "csv" || typeof cfg.csvText !== "string")
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "runSync currently materializes CSV connectors with inline data (demo simulator)",
-        });
-      const columnMap = m.columnMapJson as ColumnMap | null;
-      if (!columnMap?.subject)
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Mapping has no column map" });
-
-      const [{ id: jobId }] = await db
-        .insert(syncJobs)
-        .values({ mappingId: m.id, status: "running", startedAt: new Date() })
-        .$returningId();
-
-      try {
-        const { rows } = parseCsv(cfg.csvText);
-        const moduleKey = (await db.select().from(ontologyModules).where(eq(ontologyModules.id, m.moduleId)).limit(1))[0]?.key ?? "custom";
-
-        // Pre-validate mapped data against W3C SHACL shapes if defined on class
-        const [targetClass] = await db
-          .select()
-          .from(ontologyClasses)
-          .where(
-            and(
-              eq(ontologyClasses.moduleId, m.moduleId),
-              eq(ontologyClasses.iri, m.classIri),
-            ),
-          )
-          .limit(1);
-
-        let shaclReport: ExplainedShaclReport | null = null;
-
-        if (targetClass?.shaclJson && (await semanticEngine.ensureEngineRunning())) {
-          try {
-            const prefixMap = buildPrefixMap();
-            const shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);
-            if (shapesTtl.trim()) {
-              const candidateNodes: (typeof kgNodes.$inferSelect)[] = [];
-              let tempId = 1;
-              for (const row of rows) {
-                const iri = renderTemplate(columnMap.subject, row);
-                if (!iri || iri.includes("{}")) continue;
-                const props: Record<string, string> = {};
-                for (const [col, propIri] of Object.entries(columnMap.fields ?? {})) {
-                  if (row[col]) props[propIri] = row[col];
-                }
-                candidateNodes.push({
-                  id: tempId++,
-                  workspaceId: ws.id,
-                  moduleKey,
-                  classIri: m.classIri,
-                  iri,
-                  label: columnMap.label ? row[columnMap.label] ?? iri : iri,
-                  propsJson: props,
-                  sourceMappingId: m.id,
-                  createdAt: new Date(),
-                  updatedAt: new Date(),
-                  deletedAt: null,
-                });
-              }
-
-              const dataTtl = knowledgeGraphToTurtle(candidateNodes, [], prefixMap);
-              const valRes = await semanticEngine.exclusive(async () => {
-                await semanticEngine.clearStore();
-                await semanticEngine.loadTurtle(dataTtl);
-                return semanticEngine.validateShacl(shapesTtl);
-              });
-              shaclReport = explainShaclReport(valRes);
-            }
-          } catch (shaclErr) {
-            console.warn("[mappingRouter] SHACL pre-validation encountered error:", shaclErr);
-          }
-        }
-
-        let processed = 0;
-        const iriToId = new Map<string, number>();
-        const pendingEdges: { from: number; toIri: string; predicate: string }[] = [];
-
-        for (const row of rows) {
-          const iri = renderTemplate(columnMap.subject, row);
-          if (!iri || iri.includes("{}")) continue;
-          const props: Record<string, string> = {};
-          for (const [col, propIri] of Object.entries(columnMap.fields ?? {})) {
-            if (row[col]) props[propIri] = row[col];
-          }
-          const label = columnMap.label ? row[columnMap.label] : iri;
-          await db
-            .insert(kgNodes)
-            .values({
-              workspaceId: ws.id,
-              moduleKey,
-              classIri: m.classIri,
-              iri,
-              label: label || iri,
-              propsJson: props,
-              sourceMappingId: m.id,
-            })
-            .onDuplicateKeyUpdate({
-              set: { label: label || iri, propsJson: props, sourceMappingId: m.id, updatedAt: new Date() },
-            });
-          const [node] = await db
-            .select()
-            .from(kgNodes)
-            .where(and(eq(kgNodes.workspaceId, ws.id), eq(kgNodes.iri, iri)))
-            .limit(1);
-          if (node) {
-            iriToId.set(iri, node.id);
-            for (const l of columnMap.links ?? []) {
-              const toIri = renderTemplate(l.target, { value: row[l.column] ?? "" });
-              if (row[l.column] && toIri) pendingEdges.push({ from: node.id, toIri, predicate: l.predicate });
-            }
-          }
-          processed++;
-        }
-
-        // resolve edge targets (must already exist in the KG)
-        let edgesCreated = 0;
-        for (const pe of pendingEdges) {
-          let toId = iriToId.get(pe.toIri);
-          if (!toId) {
-            const [t] = await db
-              .select()
-              .from(kgNodes)
-              .where(and(eq(kgNodes.workspaceId, ws.id), eq(kgNodes.iri, pe.toIri)))
-              .limit(1);
-            toId = t?.id;
-          }
-          if (!toId) continue;
-          const [dup] = await db
-            .select()
-            .from(kgEdges)
-            .where(
-              and(
-                eq(kgEdges.workspaceId, ws.id),
-                eq(kgEdges.fromNodeId, pe.from),
-                eq(kgEdges.toNodeId, toId),
-                eq(kgEdges.predicateIri, pe.predicate),
-              ),
-            )
-            .limit(1);
-          if (dup) continue;
-          await db.insert(kgEdges).values({
-            workspaceId: ws.id,
-            fromNodeId: pe.from,
-            toNodeId: toId,
-            predicateIri: pe.predicate,
-            moduleKey,
-            sourceMappingId: m.id,
-          });
-          edgesCreated++;
-        }
-
-        const snapLabel = await nextSnapshotLabel(ws.id);
-        const nodeCount = await db.select({ n: kgNodes.id }).from(kgNodes).where(eq(kgNodes.workspaceId, ws.id));
-        const edgeCount = await db.select({ n: kgEdges.id }).from(kgEdges).where(eq(kgEdges.workspaceId, ws.id));
-        await db.insert(graphSnapshots).values({
-          workspaceId: ws.id,
-          label: snapLabel,
-          statsJson: { nodes: nodeCount.length, edges: edgeCount.length, byModule: { [moduleKey]: processed } },
-        });
-
-        await db
-          .update(syncJobs)
-          .set({
-            status: "succeeded",
-            rowsProcessed: processed,
-            snapshotLabel: snapLabel,
-            finishedAt: new Date(),
-          })
-          .where(eq(syncJobs.id, jobId));
-        await writeAudit({
-          workspaceId: ws.id,
-          actor: actorLabelFor(ctx.user),
-          action: `Sync '${m.name}' upserted ${processed} instances, ${edgesCreated} edges (${snapLabel})${
-            shaclReport ? ` [SHACL ${shaclReport.conforms ? "PASSED" : `${shaclReport.violationCount} violations`}]` : ""
-          }`,
-          entityType: "sync_job",
-          entityId: jobId,
-          payload: { mappingId: m.id, processed, edgesCreated, snapshot: snapLabel, shaclReport },
-        });
-
-        const [job] = await db.select().from(syncJobs).where(eq(syncJobs.id, jobId));
-        return {
-          job,
-          nodesUpserted: processed,
-          edgesCreated,
-          snapshot: snapLabel,
-          shaclReport,
-        };
-      } catch (err) {
-        await db
-          .update(syncJobs)
-          .set({ status: "failed", finishedAt: new Date() })
-          .where(eq(syncJobs.id, jobId));
-        throw err;
-      }
+      const check = await checkRunnableMapping(ws.id, input.mappingId);
+      if (!check.ok) throw new TRPCError({ code: check.code, message: check.message });
+      return enqueueMappingSync(ws.id, input.mappingId, actorLabelFor(ctx.user));
     }),
+
+  /** Queues an import of every runnable CSV mapping that is not paused. */
+  runAllSyncs: workspaceOntologistMutation.mutation(async ({ ctx }) => {
+    const ws = ctx.workspace;
+    const actor = actorLabelFor(ctx.user);
+    const rows = await getDb()
+      .select({ mapping: mappings })
+      .from(mappings)
+      .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+      .where(and(eq(connectors.workspaceId, ws.id), eq(connectors.type, "csv")))
+      .orderBy(asc(mappings.id));
+    let queued = 0;
+    let alreadyActive = 0;
+    let skipped = 0;
+    for (const { mapping } of rows) {
+      const check = await checkRunnableMapping(ws.id, mapping.id);
+      if (!check.ok || mapping.status === "paused") {
+        skipped++;
+        continue;
+      }
+      const res = await enqueueMappingSync(ws.id, mapping.id, actor);
+      if (res.alreadyActive) alreadyActive++;
+      else queued++;
+    }
+    return { queued, alreadyActive, skipped };
+  }),
 
   listSyncJobs: workspaceQuery
     .input(z.object({ limit: z.number().int().min(1).max(100).default(25) }).optional())
@@ -537,17 +294,41 @@ export const mappingRouter = createRouter({
       if (conns.length === 0) return [];
       const maps = await db.select().from(mappings).where(inArray(mappings.connectorId, conns.map((c) => c.id)));
       if (maps.length === 0) return [];
-      const jobs = await db
+      const rows = await db
         .select()
         .from(syncJobs)
         .where(inArray(syncJobs.mappingId, maps.map((m) => m.id)))
         .orderBy(desc(syncJobs.id))
         .limit(input?.limit ?? 25);
+      // The queue's view of each import: attempts, the last error, the result.
+      const jobIds = rows.map((r) => r.jobId).filter((id): id is number => id != null);
+      const queueRows = jobIds.length
+        ? await db
+            .select({
+              id: jobs.id,
+              attempts: jobs.attempts,
+              maxAttempts: jobs.maxAttempts,
+              lastError: jobs.lastError,
+              resultJson: jobs.resultJson,
+            })
+            .from(jobs)
+            .where(and(eq(jobs.workspaceId, ws.id), inArray(jobs.id, jobIds)))
+        : [];
+      const queueById = new Map(queueRows.map((q) => [q.id, q]));
       const mapById = new Map(maps.map((m) => [m.id, m]));
       const connById = new Map(conns.map((c) => [c.id, c]));
-      return jobs.map((j) => {
+      return rows.map((j) => {
         const m = mapById.get(j.mappingId) ?? null;
-        return { ...j, mapping: m, connector: m ? (connById.get(m.connectorId) ?? null) : null };
+        const q = j.jobId != null ? queueById.get(j.jobId) : undefined;
+        return {
+          ...j,
+          attempts: q?.attempts ?? null,
+          maxAttempts: q?.maxAttempts ?? null,
+          lastError: q?.lastError ?? null,
+          result: (q?.resultJson as MappingSyncResult | null | undefined) ?? null,
+          mapping: m,
+          connector: m ? (connById.get(m.connectorId) ?? null) : null,
+        };
       });
     }),
 });

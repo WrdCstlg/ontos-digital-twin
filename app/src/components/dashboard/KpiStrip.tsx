@@ -14,7 +14,14 @@ const EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 export function KpiStrip() {
   const navigate = useNavigate();
   const overview = trpc.dashboard.overview.useQuery();
-  const jobsQ = trpc.mapping.listSyncJobs.useQuery({ limit: 25 });
+  const jobsQ = trpc.mapping.listSyncJobs.useQuery(
+    { limit: 25 },
+    {
+      // Imports run on a worker; refresh while any is queued or running.
+      refetchInterval: (q) =>
+        (q.state.data ?? []).some((j) => j.status === 'queued' || j.status === 'running') ? 3000 : false,
+    },
+  );
 
   if (overview.isLoading || jobsQ.isLoading) {
     return (
@@ -35,7 +42,9 @@ export function KpiStrip() {
 
   const { kpis } = overview.data;
   const jobs = jobsQ.data ?? [];
-  const done = jobs.filter((j) => j.status !== 'running');
+  // Queued and running imports have no outcome yet.
+  const done = jobs.filter((j) => j.status === 'succeeded' || j.status === 'failed');
+  const inFlight = jobs.length - done.length;
   const successRate = done.length ? (done.filter((j) => j.status === 'succeeded').length / done.length) * 100 : 100;
   const lastFailure = jobs.find((j) => j.status === 'failed');
   // react-query's dataUpdatedAt is a pure "now" reference for this render
@@ -91,6 +100,7 @@ export function KpiStrip() {
           {lastFailure ? `last failure ${daysAgoLabel(lastFailure.startedAt)}` : 'no failures on record'}
           {' · '}
           {done.length} runs
+          {inFlight > 0 && ` · ${inFlight} in progress`}
         </span>
       ),
     },

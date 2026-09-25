@@ -5,6 +5,7 @@ import {
   text,
   timestamp,
   bigint,
+  int,
   double,
   boolean,
   json,
@@ -201,6 +202,58 @@ export const mappings = mysqlTable("mappings", {
 });
 export type Mapping = typeof mappings.$inferSelect;
 
+/* ─────────────────────────────────────────────────────────────
+ * Background jobs: a durable queue in MySQL. The web app enqueues;
+ * worker processes lease a job, renew the lease while they work, and
+ * a job whose lease lapses (its worker died) becomes claimable again.
+ * ───────────────────────────────────────────────────────────── */
+export const jobs = mysqlTable(
+  "jobs",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 64 }).notNull(),
+    payloadJson: json("payloadJson"),
+    status: mysqlEnum("status", ["queued", "running", "succeeded", "failed"])
+      .notNull()
+      .default("queued"),
+    attempts: int("attempts").notNull().default(0),
+    maxAttempts: int("maxAttempts").notNull().default(3),
+    leaseOwner: varchar("leaseOwner", { length: 128 }),
+    leaseExpiresAt: timestamp("leaseExpiresAt"),
+    runAfter: timestamp("runAfter").defaultNow().notNull(),
+    lastError: text("lastError"),
+    resultJson: json("resultJson"),
+    createdBy: varchar("createdBy", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    startedAt: timestamp("startedAt"),
+    finishedAt: timestamp("finishedAt"),
+  },
+  (table) => [
+    index("jobs_status_run_after").on(table.status, table.runAfter),
+    index("jobs_ws_id").on(table.workspaceId, table.id),
+  ],
+);
+export type Job = typeof jobs.$inferSelect;
+
+/** One row per worker process, refreshed by its heartbeat. */
+export const workers = mysqlTable("workers", {
+  id: varchar("id", { length: 128 }).primaryKey(),
+  hostname: varchar("hostname", { length: 255 }).notNull(),
+  version: varchar("version", { length: 64 }),
+  status: mysqlEnum("status", ["running", "stopping", "stopped"]).notNull().default("running"),
+  currentJobId: bigint("currentJobId", { mode: "number", unsigned: true }),
+  jobsSucceeded: int("jobsSucceeded").notNull().default(0),
+  jobsFailed: int("jobsFailed").notNull().default(0),
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+});
+export type Worker = typeof workers.$inferSelect;
+
 export const syncJobs = mysqlTable("sync_jobs", {
   id: bigint("id", { mode: "number", unsigned: true })
     .autoincrement()
@@ -208,11 +261,16 @@ export const syncJobs = mysqlTable("sync_jobs", {
   mappingId: bigint("mappingId", { mode: "number", unsigned: true })
     .notNull()
     .references(() => mappings.id, { onDelete: "cascade" }),
-  status: mysqlEnum("status", ["running", "succeeded", "failed"]).notNull(),
+  status: mysqlEnum("status", ["queued", "running", "succeeded", "failed"]).notNull(),
+  // The queue job that runs this import. Null on rows from before the queue.
+  jobId: bigint("jobId", { mode: "number", unsigned: true }).references(() => jobs.id, {
+    onDelete: "set null",
+  }),
   rowsProcessed: bigint("rowsProcessed", { mode: "number", unsigned: true })
     .notNull()
     .default(0),
   snapshotLabel: varchar("snapshotLabel", { length: 64 }),
+  error: text("error"),
   startedAt: timestamp("startedAt").defaultNow().notNull(),
   finishedAt: timestamp("finishedAt"),
 });

@@ -47,7 +47,7 @@ export function NlQueryBar({ question, onQuestionChange, onAsk, asking, placehol
                 className="h-10 w-full bg-transparent text-[16px] text-text-primary outline-none"
               />
               {question === '' && placeholders.length > 0 && (
-                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center overflow-hidden">
+                <div className="pointer-events-none absolute inset-0 flex items-center overflow-hidden">
                   <AnimatePresence mode="wait">
                     <motion.span
                       key={phIdx}

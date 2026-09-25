@@ -271,14 +271,14 @@ export default function Studio() {
   /* ---------------- guards ---------------- */
   if (modulesQ.isLoading) {
     return (
-      <div className="-m-6 flex h-[calc(100dvh-3.5rem)] items-center justify-center lg:-m-8">
+      <div className="-m-4 flex h-[calc(100dvh-3.5rem)] md:-m-6 items-center justify-center lg:-m-8">
         <Loader2 className="size-5 animate-spin text-text-muted" />
       </div>
     );
   }
   if (modulesQ.error) {
     return (
-      <div className="-m-6 flex h-[calc(100dvh-3.5rem)] flex-col items-center justify-center gap-3 lg:-m-8">
+      <div className="-m-4 flex h-[calc(100dvh-3.5rem)] md:-m-6 flex-col items-center justify-center gap-3 lg:-m-8">
         <TriangleAlert className="size-6 text-risk" />
         <p className="text-[14px] text-text-secondary">Failed to load modules: {modulesQ.error.message}</p>
         <button
@@ -293,7 +293,7 @@ export default function Studio() {
   }
   if (!module) {
     return (
-      <div className="-m-6 flex h-[calc(100dvh-3.5rem)] items-center justify-center lg:-m-8">
+      <div className="-m-4 flex h-[calc(100dvh-3.5rem)] md:-m-6 items-center justify-center lg:-m-8">
         <p className="text-[14px] text-text-muted">Module “{moduleKey}” not found in this workspace.</p>
       </div>
     );
@@ -303,7 +303,7 @@ export default function Studio() {
   const canPublish = !!reasoner?.consistent;
 
   return (
-    <div className="-m-6 flex h-[calc(100dvh-3.5rem)] flex-col overflow-hidden lg:-m-8">
+    <div className="-m-4 flex h-[calc(100dvh-3.5rem)] md:-m-6 flex-col overflow-hidden lg:-m-8">
       {/* ================= Toolbar (48px) ================= */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border-hairline bg-bg-panel px-3">
         {/* module selector */}

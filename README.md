@@ -42,8 +42,12 @@ from working software, and the defects that passed every automated gate.
 - **Insight engine** — 12 deterministic anomaly rules over the graph (no LLM involved).
 - **Digital twins** — twin registry, live telemetry time series, topology subgraphs, and
   Azure DTDL v3 JSON export.
-- **Data mapping** — CSV → ontology class/property mapping with pre-commit SHACL checks.
-- **Natural language query** — pattern-based NL → SQL translation with a deterministic
+- **Data mapping** — CSV → ontology class/property mapping with pre-commit SHACL checks,
+  imported by a background worker.
+- **Background jobs** — a durable queue in MySQL with leases and retries; any number of
+  worker processes; a worker that dies mid-job has its job reclaimed. The Operations
+  page shows the queue and the workers.
+- **Natural language query** — pattern-based NL → SPARQL translation with a deterministic
   template engine; a pluggable LLM gateway (Ollama, OpenAI, Anthropic, OpenRouter) is
   available for SPARQL generation when configured. Both paths show the generated query
   and refuse write or unsafe intents.
@@ -55,15 +59,19 @@ from working software, and the defects that passed every automated gate.
 
 ```mermaid
 graph TD
-    User["Enterprise User / Ontologist"] <-->|HTTPS / WSS| Web["React 19 SPA<br/>(Vite 7, Cytoscape, Three.js)"]
-    Web <-->|tRPC 11 / JSON| Hono["Ontos API Server<br/>(Hono 4 + Node 24)"]
-    Hono <-->|Drizzle ORM| MySQL[("MySQL 8.4 LTS<br/>(Knowledge Graph & State)")]
-    Hono <-->|HTTP REST / SPARQL 1.1| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
-    
-    subgraph Compose ["Docker Compose Stack"]
+    User["Enterprise User / Ontologist"] <-->|HTTPS| Web["React 19 SPA<br/>(Vite 7, Cytoscape, Three.js)"]
+    Web <-->|tRPC 11 / JSON| Hono["API server<br/>(Hono 4 + Node 24)"]
+    Hono <-->|Drizzle ORM| MySQL[("MySQL 8.4<br/>graph, state, job queue, audit")]
+    Hono <-->|SPARQL 1.1 / HTTP| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
+    Worker["Worker(s)<br/>(Node 24)"] <-->|leases jobs| MySQL
+    Worker <-->|SHACL| EngineW["open-ontologies<br/>(the worker's own)"]
+
+    subgraph Compose ["Docker Compose stack"]
         Hono
+        Worker
         MySQL
         Engine
+        EngineW
     end
 ```
 
@@ -79,8 +87,38 @@ graph TD
 | Tests | Vitest |
 
 In development, Vite serves the SPA and mounts the Hono app at `/api/*` through
-`@hono/vite-dev-server` — a single process on port 3000. In production, `dist/boot.js`
-serves both the API and the static client bundle.
+`@hono/vite-dev-server`: a single process on port 3000, which also runs a job worker of
+its own. In production, `dist/boot.js` serves the API and the static client bundle, and
+`dist/worker.js` runs background jobs in the `worker` container, with a health endpoint
+on port 3001. `ONTOS_EMBEDDED_WORKER=true` runs jobs inside the API process instead, for
+a single-container deployment.
+
+Long-running work does not run inside an HTTP request. `mapping.runSync` records a
+queued import and returns; a worker claims it with `SELECT … FOR UPDATE SKIP LOCKED`,
+renews a 15-second lease while it works, and records the outcome only while it still
+holds the lease. A failed attempt is retried up to three times with backoff. A worker
+that stops renewing (crashed, killed, or cut off) loses the job to another worker when
+the lease lapses.
+
+---
+
+## Landscape
+
+Ontos is often measured against Palantir Foundry's Ontology. The **Landscape** page in the
+app compares them capability by capability and draws Ontos's own architecture; its source
+is [`app/src/lib/landscape.ts`](app/src/lib/landscape.ts). In short:
+
+| Comparable | Partial | Gap or planned | Different by design |
+|---|---|---|---|
+| Semantic model, validation, time series and twins, audit | Interfaces, exploration, data integration, background execution, change management, access control, applications, AI | Governed edits (actions, increment 2), a public API and SDK (increment 3), logic on the ontology, distributed scale | Open W3C standards end to end; the semantic layer only |
+
+The architecture is changing one increment at a time:
+
+1. **Worker service and job queue** (shipped): long-running work leaves the web process.
+2. **Action types** (next): named, parameterised edits with validation, permissions and an
+   audited record of every submission.
+3. **Ontology API and typed SDK**: a versioned public API generated from the ontology,
+   and a typed client for the systems that bind to it.
 
 ---
 
@@ -498,10 +536,10 @@ These are tracked, known behaviours rather than surprises:
   before trusting the result.
 - **Pre-commit SHACL checks are advisory.** Violations are recorded in the audit entry and
   surfaced as a warning, but they do not block a sync.
-- **The app assumes it is the only app process on its database.** On start it marks
-  any sync job still `running` as failed, because an import runs inside its request
-  and cannot outlive the process that served it. A second app process sharing the
-  database would, on starting, fail the first one's imports in progress.
+- **Some state still lives in the API process.** Background jobs are safe to spread
+  across workers, but a second API process would hold its own login and query rate
+  limits, need its own semantic engine, and open its own MQTT broker connections, so
+  broker telemetry would be ingested twice. Run one API process until those move out.
 - **The triple store holds one graph at a time, so engine work takes turns.** The
   Oxigraph engine is not partitioned per workspace: reasoning, SHACL validation, CSV
   import and SPARQL each clear the store and load what they need. The app runs those

@@ -72,7 +72,8 @@ export interface MappingEditorProps {
   onRequestCsvUpload: () => void;
   onPreview: (mappingId: number | null) => void;
   onRunSync: (mappingId: number) => void;
-  runningMappingId: number | null;
+  /** Mappings with an import being queued, waiting in the queue, or running. */
+  activeMappingIds: ReadonlySet<number>;
   onError: (message: string) => void;
 }
 
@@ -117,7 +118,7 @@ export function MappingEditor({
   onRequestCsvUpload,
   onPreview,
   onRunSync,
-  runningMappingId,
+  activeMappingIds,
   onError,
 }: MappingEditorProps) {
   const [form, setForm] = useState<EditorForm>(() => emptyForm(connector));
@@ -337,6 +338,7 @@ export function MappingEditor({
   }
 
   const mappedColumns = new Set([...Object.keys(form.fields), ...form.links.map((l) => l.column)]);
+  const syncActive = form.mappingId != null && activeMappingIds.has(form.mappingId);
 
   return (
     <section className="overflow-hidden rounded-xl border border-border-hairline bg-bg-panel">
@@ -433,11 +435,17 @@ export function MappingEditor({
           <button
             type="button"
             onClick={onRunClick}
-            disabled={saving || runningMappingId != null || !form.classIri || !form.subject || connector.type !== 'csv'}
-            title={connector.type !== 'csv' ? 'Demo sync engine materializes CSV connectors' : undefined}
+            disabled={saving || syncActive || !form.classIri || !form.subject || connector.type !== 'csv'}
+            title={
+              connector.type !== 'csv'
+                ? 'Demo sync engine materializes CSV connectors'
+                : syncActive
+                  ? 'An import of this mapping is queued or running'
+                  : undefined
+            }
             className="inline-flex h-8 items-center gap-1.5 rounded-md bg-iris px-3.5 text-[12.5px] font-medium text-white transition-colors hover:bg-iris-bright disabled:opacity-40"
           >
-            {runningMappingId != null ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />} Run sync
+            {syncActive ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />} Run sync
           </button>
         </div>
       </div>

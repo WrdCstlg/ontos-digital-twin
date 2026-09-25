@@ -244,7 +244,7 @@ export default function Explorer() {
   }));
 
   return (
-    <div className="-m-6 flex h-[calc(100dvh-3.5rem)] flex-col lg:-m-8">
+    <div className="-m-4 flex h-[calc(100dvh-3.5rem)] md:-m-6 flex-col lg:-m-8">
       {/* Section 1 — NL query bar */}
       <NlQueryBar
         question={question}

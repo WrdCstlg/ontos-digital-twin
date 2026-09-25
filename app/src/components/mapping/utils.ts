@@ -30,16 +30,62 @@ export interface MappingLike {
   connector?: ConnectorLike | null;
 }
 
+export type SyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+/** What the worker recorded for an import that succeeded (the queue job's result). */
+export interface SyncJobResultLike {
+  syncJobId: number;
+  nodesUpserted: number;
+  edgesCreated: number;
+  snapshot: string;
+  shacl: {
+    conforms: boolean | null;
+    violationCount: number;
+    signatureSummary: { remediationAction?: string; humanExplanation?: string }[];
+  } | null;
+}
+
 export interface SyncJobLike {
   id: number;
   mappingId: number;
-  status: 'running' | 'succeeded' | 'failed';
+  status: SyncJobStatus;
+  /** The queue job that runs this import; null on runs from before the queue. */
+  jobId?: number | null;
   rowsProcessed: number;
   snapshotLabel: string | null;
+  /** Why the import failed (or why the last attempt failed, while it is retried). */
+  error?: string | null;
+  attempts?: number | null;
+  maxAttempts?: number | null;
+  /** The queue's last error, e.g. a lease that expired and was reclaimed. */
+  lastError?: string | null;
+  result?: SyncJobResultLike | null;
+  /** When the run was queued, then when a worker started it. */
   startedAt: string | Date;
   finishedAt?: string | Date | null;
   mapping?: MappingLike | null;
   connector?: ConnectorLike | null;
+}
+
+/** Queued or running: the import has not reached a result yet. */
+export function isActiveSync(status: SyncJobStatus): boolean {
+  return status === 'queued' || status === 'running';
+}
+
+/**
+ * "attempt 2 of 3" once a run has needed more than one attempt. A queued run
+ * that already failed an attempt is waiting for its next one.
+ */
+export function attemptLabel(job: Pick<SyncJobLike, 'status' | 'attempts' | 'maxAttempts'>): string | null {
+  const { attempts, maxAttempts } = job;
+  if (attempts == null || maxAttempts == null) return null;
+  if (job.status === 'queued') return attempts >= 1 ? `retry · attempt ${attempts + 1} of ${maxAttempts}` : null;
+  return attempts > 1 ? `attempt ${attempts} of ${maxAttempts}` : null;
+}
+
+/** The reason a run failed: the import's own error, else the queue's. */
+export function syncErrorText(job: Pick<SyncJobLike, 'error' | 'lastError'>): string | null {
+  return job.error?.trim() || job.lastError?.trim() || null;
 }
 
 /** "2m ago" / "3d ago" style relative time. */

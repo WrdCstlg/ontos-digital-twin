@@ -146,7 +146,7 @@ export default function Twins() {
   const changedForDetail = selectedIri ? (changedByTwin.get(selectedIri) ?? new Set<string>()) : new Set<string>();
 
   return (
-    <div className="-m-6 flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6 lg:-m-8 lg:p-6">
+    <div className="-m-4 flex h-[calc(100dvh-3.5rem)] md:-m-6 flex-col gap-4 p-6 lg:-m-8 lg:p-6">
       <Toaster position="bottom-right" theme="dark" />
 
       {/* Section 1 — page header (persistent) */}

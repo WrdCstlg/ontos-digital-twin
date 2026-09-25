@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  ArrowRight,
   ChevronDown,
   Clock,
   GitCompareArrows,
@@ -11,7 +13,8 @@ import {
   Radio,
   Webhook,
 } from 'lucide-react';
-import { StatusDot, type StatusKind } from '@/components/ui/status-dot';
+import { StatusDot } from '@/components/ui/status-dot';
+import { JobStatusBadge } from '@/components/operations/JobStatusBadge';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import {
   AlertDialog,
@@ -31,11 +34,15 @@ import {
 import { cn } from '@/lib/utils';
 import { moduleAlpha, moduleForPrefix } from '@/lib/modules';
 import {
+  attemptLabel,
   clockTime,
   duration,
   inferTrigger,
+  isActiveSync,
   relTime,
+  syncErrorText,
   type SyncJobLike,
+  type SyncJobStatus,
   type TriggerKind,
 } from './utils';
 
@@ -46,10 +53,23 @@ const TRIGGER_META: Record<TriggerKind, { icon: typeof Clock; label: string }> =
   manual: { icon: Play, label: 'manual' },
 };
 
-const JOB_STATUS: Record<SyncJobLike['status'], { dot: StatusKind; label: string }> = {
-  running: { dot: 'info', label: 'running' },
-  succeeded: { dot: 'ok', label: 'ok' },
-  failed: { dot: 'risk', label: 'failed' },
+const JOB_STATUS_LABEL: Record<SyncJobStatus, string> = {
+  queued: 'queued',
+  running: 'running',
+  succeeded: 'ok',
+  failed: 'failed',
+};
+
+interface LogLine {
+  text: string;
+  tone?: 'risk' | 'warn' | 'muted';
+}
+
+const LOG_TONE: Record<NonNullable<LogLine['tone']> | 'default', string> = {
+  default: 'text-text-secondary',
+  muted: 'text-text-muted',
+  warn: 'text-warn',
+  risk: 'text-risk',
 };
 
 function snapshotNum(label: string): number {
@@ -63,6 +83,7 @@ export interface SyncJobsProps {
 }
 
 export function SyncJobs({ jobs, isLoading }: SyncJobsProps) {
+  const navigate = useNavigate();
   const [expanded, setExpanded] = useState<number | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -80,37 +101,79 @@ export function SyncJobs({ jobs, isLoading }: SyncJobsProps) {
 
   const jobAt = (label: string) => jobs.filter((j) => j.snapshotLabel === label);
 
-  const logLines = (job: SyncJobLike): string[] => {
+  const logLines = (job: SyncJobLike): LogLine[] => {
     const t = clockTime(job.startedAt);
-    const lines = [
-      `[${t}] sync job run-${job.id} started · trigger ${TRIGGER_META[inferTrigger(job.connector)].label}`,
-      `[${t}] source ${job.connector?.name ?? '—'} · mapping '${job.mapping?.name ?? '—'}' · table ${job.mapping?.sourceTable ?? '—'}`,
+    const end = clockTime(job.finishedAt);
+    const via = job.jobId ? ` · job #${job.jobId}` : '';
+    const lines: LogLine[] = [
+      {
+        text:
+          job.status === 'queued'
+            ? `[${t}] sync job run-${job.id} queued${via} · trigger ${TRIGGER_META[inferTrigger(job.connector)].label}`
+            : `[${t}] sync job run-${job.id} started${via} · trigger ${TRIGGER_META[inferTrigger(job.connector)].label}`,
+      },
+      { text: `[${t}] source ${job.connector?.name ?? '—'} · mapping '${job.mapping?.name ?? '—'}' · table ${job.mapping?.sourceTable ?? '—'}` },
     ];
+    const attempt = attemptLabel(job);
+    const err = syncErrorText(job);
     if (job.status === 'failed') {
-      lines.push(`[${clockTime(job.finishedAt)}] FAILED — see audit log for diagnostics`);
+      if (attempt) lines.push({ text: `[${end}] ${attempt}`, tone: 'warn' });
+      lines.push({ text: `[${end}] FAILED — ${err ?? 'no error recorded; see the audit log'}`, tone: 'risk' });
+    } else if (isActiveSync(job.status)) {
+      if (attempt && err) lines.push({ text: `[${t}] previous attempt failed — ${err}`, tone: 'warn' });
+      if (attempt) lines.push({ text: `[${t}] ${attempt}`, tone: 'warn' });
+      lines.push({
+        text: job.status === 'queued' ? `[${t}] waiting for a worker…` : `[${t}] a worker is importing rows…`,
+        tone: 'muted',
+      });
     } else {
-      lines.push(`[${clockTime(job.finishedAt)}] upserted ${job.rowsProcessed} instances into kg_nodes`);
-      if (job.snapshotLabel) lines.push(`[${clockTime(job.finishedAt)}] graph snapshot ${job.snapshotLabel} committed`);
+      const r = job.result;
+      if (attempt) lines.push({ text: `[${end}] succeeded on ${attempt}`, tone: 'warn' });
+      lines.push({ text: `[${end}] upserted ${r?.nodesUpserted ?? job.rowsProcessed} instances into kg_nodes` });
+      if (r) lines.push({ text: `[${end}] created ${r.edgesCreated} edges` });
+      if (r?.shacl) {
+        lines.push(
+          r.shacl.conforms === false
+            ? { text: `[${end}] SHACL: ${r.shacl.violationCount} violation(s)`, tone: 'warn' }
+            : { text: `[${end}] SHACL: ${r.shacl.conforms ? 'conforms' : 'not evaluated'}` },
+        );
+      }
+      if (job.snapshotLabel) lines.push({ text: `[${end}] graph snapshot ${job.snapshotLabel} committed` });
     }
     return lines;
   };
 
+  const activeCount = jobs.filter((j) => isActiveSync(j.status)).length;
+
   return (
     <section className="rounded-xl border border-border-hairline bg-bg-panel">
-      <div className="flex items-center gap-3 border-b border-border-hairline px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border-hairline px-4 py-3">
         <h2 className="font-display text-[16px] font-semibold text-text-primary">Sync Runs</h2>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-ok/30 bg-ok/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ok">
           <StatusDot status="ok" className="size-1.5" /> live
         </span>
-        {selected.length === 2 && (
-          <button
-            type="button"
-            onClick={() => setCompareOpen(true)}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-iris/50 bg-iris/15 px-2.5 py-1 font-mono text-[11px] text-text-accent transition-colors hover:bg-iris/25"
-          >
-            <GitCompareArrows className="size-3.5" /> Compare {selected[0]} ↔ {selected[1]}
-          </button>
+        {activeCount > 0 && (
+          <span className="font-mono text-[11px] text-text-muted">
+            {activeCount} in the queue · run by a worker
+          </span>
         )}
+        <div className="ml-auto flex items-center gap-3">
+          {selected.length === 2 && (
+            <button
+              type="button"
+              onClick={() => setCompareOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-iris/50 bg-iris/15 px-2.5 py-1 font-mono text-[11px] text-text-accent transition-colors hover:bg-iris/25"
+            >
+              <GitCompareArrows className="size-3.5" /> Compare {selected[0]} ↔ {selected[1]}
+            </button>
+          )}
+          <Link
+            to="/app/operations"
+            className="inline-flex items-center gap-1 font-mono text-[11px] text-text-muted transition-colors hover:text-text-accent"
+          >
+            Operations <ArrowRight className="size-3" />
+          </Link>
+        </div>
       </div>
 
       {/* graph snapshots strip */}
@@ -177,8 +240,11 @@ export function SyncJobs({ jobs, isLoading }: SyncJobsProps) {
             <AnimatePresence initial={false}>
               {jobs.map((job) => {
                 const trig = TRIGGER_META[inferTrigger(job.connector)];
-                const st = JOB_STATUS[job.status];
                 const isOpen = expanded === job.id;
+                const active = isActiveSync(job.status);
+                const attempt = attemptLabel(job);
+                const err = syncErrorText(job);
+                const lines = isOpen ? logLines(job) : [];
                 return [
                   <motion.tr
                     key={job.id}
@@ -202,6 +268,8 @@ export function SyncJobs({ jobs, isLoading }: SyncJobsProps) {
                     <td className="px-3 py-1.5 font-mono text-[11.5px]">
                       {job.status === 'failed' ? (
                         <span className="text-risk">+0/−0</span>
+                      ) : active ? (
+                        <span className="text-text-muted">…</span>
                       ) : (
                         <span className="text-ok">+{job.rowsProcessed}/−0</span>
                       )}
@@ -216,20 +284,26 @@ export function SyncJobs({ jobs, isLoading }: SyncJobsProps) {
                       )}
                     </td>
                     <td className="px-3 py-1.5">
-                      {job.status === 'running' ? (
-                        <span className="inline-flex items-center gap-1.5 text-[12px] text-info">
-                          <Loader2 className="size-3 animate-spin" /> running
-                        </span>
-                      ) : (
-                        <motion.span
-                          initial={{ scale: 0.9, opacity: 0.6 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          transition={{ duration: 0.3 }}
-                          className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary"
-                        >
-                          <StatusDot status={st.dot} pulse={false} /> {st.label}
-                        </motion.span>
-                      )}
+                      <div className="flex flex-col gap-0.5 py-0.5">
+                        {active ? (
+                          <JobStatusBadge status={job.status} label={JOB_STATUS_LABEL[job.status]} />
+                        ) : (
+                          <motion.span
+                            initial={{ scale: 0.9, opacity: 0.6 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ duration: 0.3 }}
+                            className="inline-flex"
+                          >
+                            <JobStatusBadge status={job.status} label={JOB_STATUS_LABEL[job.status]} />
+                          </motion.span>
+                        )}
+                        {attempt && <span className="font-mono text-[10px] text-warn">{attempt}</span>}
+                        {job.status === 'failed' && err && (
+                          <span title={err} className="max-w-[240px] truncate font-mono text-[10.5px] text-risk">
+                            {err}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1">
@@ -242,6 +316,12 @@ export function SyncJobs({ jobs, isLoading }: SyncJobsProps) {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="border-border-hairline bg-bg-panel-raised">
                             <DropdownMenuItem onSelect={() => setExpanded(job.id)}>View log</DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!job.jobId}
+                              onSelect={() => job.jobId && navigate(`/app/operations?job=${job.jobId}`)}
+                            >
+                              Open in Operations
+                            </DropdownMenuItem>
                             <DropdownMenuItem disabled={!job.snapshotLabel} onSelect={() => setRollback(job.snapshotLabel)}>
                               Rollback snapshot
                             </DropdownMenuItem>
@@ -261,9 +341,9 @@ export function SyncJobs({ jobs, isLoading }: SyncJobsProps) {
                         >
                           <div className="rounded-lg border border-border-hairline bg-bg-inset p-3">
                             <div className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-text-muted">Log</div>
-                            {logLines(job).map((l, i) => (
-                              <div key={i} className={cn('font-mono text-[11px] leading-relaxed', job.status === 'failed' && i === logLines(job).length - 1 ? 'text-risk' : 'text-text-secondary')}>
-                                {l}
+                            {lines.map((l, i) => (
+                              <div key={i} className={cn('break-words font-mono text-[11px] leading-relaxed', LOG_TONE[l.tone ?? 'default'])}>
+                                {l.text}
                               </div>
                             ))}
                           </div>

@@ -316,7 +316,7 @@ export default function Insights() {
 
           <span className="hidden h-4 w-px bg-border-hairline sm:block" aria-hidden />
 
-          <div className="flex items-center gap-1.5" role="group" aria-label="Module filter">
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Module filter">
             {MODULES.map((m) => {
               const on = moduleFilter.has(m.key);
               return (

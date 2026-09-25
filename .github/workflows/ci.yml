@@ -125,6 +125,22 @@ jobs:
           test "$(jq -r .totalNodes <<< "$kpis")" = 3627
           test "$(jq -r .totalEdges <<< "$kpis")" = 7739
 
+          # An import is queued by the app and run by the worker. Queue one and
+          # wait for the worker to finish it against the real database.
+          sync="$(curl -fsS -b jar -X POST "$base/api/trpc/mapping.runSync" \
+            -H 'content-type: application/json' -d '{"json":{"mappingId":1}}')"
+          job="$(jq -r .result.data.json.jobId <<< "$sync")"
+          echo "queued job $job"
+          status=queued
+          for _ in $(seq 1 60); do
+            input="$(jq -rn --argjson id "$job" '{json:{jobId:$id}}|@uri')"
+            status="$(curl -fsS -b jar "$base/api/trpc/operations.getJob?input=$input" | jq -r .result.data.json.status)"
+            if [ "$status" = succeeded ] || [ "$status" = failed ]; then break; fi
+            sleep 2
+          done
+          echo "job $job: $status"
+          test "$status" = succeeded
+
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --no-color

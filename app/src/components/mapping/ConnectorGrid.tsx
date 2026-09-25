@@ -4,6 +4,7 @@ import {
   Database,
   FileSpreadsheet,
   Globe,
+  Loader2,
   MoreHorizontal,
   Play,
   Plus,
@@ -19,7 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { getModule, moduleAlpha, type ModuleKey } from '@/lib/modules';
-import { relTime, type ConnectorLike, type MappingLike, type SyncJobLike } from './utils';
+import { isActiveSync, relTime, type ConnectorLike, type MappingLike, type SyncJobLike } from './utils';
 
 const TYPE_META: Record<ConnectorLike['type'], { icon: typeof Database; tag: string }> = {
   csv: { icon: FileSpreadsheet, tag: 'CSV' },
@@ -44,7 +45,7 @@ function subtitle(conn: ConnectorLike): string {
 
 function statsLine(conn: ConnectorLike, jobs: SyncJobLike[]): string {
   const cfg = (conn.configJson ?? {}) as Record<string, unknown>;
-  const mine = jobs.filter((j) => j.connector?.id === conn.id);
+  const mine = jobs.filter((j) => j.connector?.id === conn.id && !isActiveSync(j.status));
   const last = mine[0];
   const parts: string[] = [];
   if (typeof cfg.rows === 'number') {
@@ -85,7 +86,8 @@ export interface ConnectorGridProps {
   onNewConnector: () => void;
   onUploadCsv: (connectorId: number) => void;
   onRunNow: (mappingId: number) => void;
-  runningMappingId: number | null;
+  /** Mappings with an import being queued, waiting in the queue, or running. */
+  activeMappingIds: ReadonlySet<number>;
 }
 
 export function ConnectorGrid({
@@ -97,7 +99,7 @@ export function ConnectorGrid({
   onNewConnector,
   onUploadCsv,
   onRunNow,
-  runningMappingId,
+  activeMappingIds,
 }: ConnectorGridProps) {
   const mappingByConnector = useMemo(() => {
     const m = new Map<number, MappingLike>();
@@ -113,11 +115,15 @@ export function ConnectorGrid({
         const Icon = TYPE_META[conn.type].icon;
         const mine = jobs.filter((j) => j.connector?.id === conn.id);
         const lastOk = mine.find((j) => j.status === 'succeeded');
-        const sparkValues = [...mine].reverse().map((j) => j.rowsProcessed);
+        const sparkValues = [...mine]
+          .filter((j) => !isActiveSync(j.status))
+          .reverse()
+          .map((j) => j.rowsProcessed);
         const dot = conn.status === 'connected' ? 'ok' : conn.status === 'error' ? 'risk' : 'warn';
         const cfg = (conn.configJson ?? {}) as Record<string, unknown>;
         const runnable = conn.type === 'csv' && cfg.hasInlineData === true && mapping != null;
-        const running = runningMappingId != null && mapping?.id === runningMappingId;
+        const running = mapping != null && activeMappingIds.has(mapping.id);
+        const activeJob = mapping ? mine.find((j) => j.mappingId === mapping.id && isActiveSync(j.status)) : undefined;
 
         return (
           <motion.div
@@ -164,7 +170,13 @@ export function ConnectorGrid({
                   )}
                   <DropdownMenuItem disabled={!runnable || running} onSelect={() => mapping && onRunNow(mapping.id)}>
                     <Play className="size-3.5" />
-                    {runnable ? (running ? 'Running…' : 'Run now') : 'Run now (needs inline CSV data)'}
+                    {runnable
+                      ? running
+                        ? activeJob?.status === 'running'
+                          ? 'Importing…'
+                          : 'Queued…'
+                        : 'Run now'
+                      : 'Run now (needs inline CSV data)'}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -181,6 +193,26 @@ export function ConnectorGrid({
                       ? `Synced ${relTime(lastOk.finishedAt ?? lastOk.startedAt)}`
                       : 'Connected'}
               </span>
+              {running && (
+                <span
+                  className={cn(
+                    'ml-auto inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10.5px]',
+                    activeJob?.status === 'running'
+                      ? 'border-info/30 bg-info/10 text-info'
+                      : 'border-border-hairline bg-bg-inset text-text-secondary',
+                  )}
+                >
+                  {activeJob?.status === 'running' ? (
+                    <>
+                      <Loader2 className="size-3 animate-spin" /> importing
+                    </>
+                  ) : (
+                    <>
+                      <span aria-hidden className="size-1.5 rounded-full border border-text-muted" /> queued
+                    </>
+                  )}
+                </span>
+              )}
             </div>
             {cfg.mode === 'cdc' && (
               <div className="relative mx-4 mt-2 h-px overflow-hidden rounded bg-border-hairline" aria-hidden>

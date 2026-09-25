@@ -8,6 +8,8 @@
 #   engine  open-ontologies semantic engine (OWL-RL, SHACL, SPARQL over Oxigraph)
 #   init    one-shot: migrations, first-boot demo seed, admin account
 #   app     the Ontos server and web client, on ${ONTOS_PORT:-3000}
+#   worker  runs background jobs (CSV imports) from the queue in MySQL
+#   engine-worker  the worker's own semantic engine
 #
 # Images are pinned by digest so a rebuild months from now produces the same
 # stack. Bump the tag and digest together.
@@ -101,6 +103,46 @@ services:
       engine:
         condition: service_started
 
+  # The worker takes jobs from the queue in MySQL; more than one can run. It has
+  # its own engine because the engine holds one graph at a time and the lock
+  # that keeps operations from interleaving lives in the process using it.
+  worker:
+    build: *app-build
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      OPEN_ONTOLOGIES_URL: http://engine-worker:8085
+      SHACL_EXCHANGE_DIR: /exchange
+    volumes:
+      - shacl-exchange-worker:/exchange
+    healthcheck:
+      # The image's own healthcheck probes the web server on 3000; the worker
+      # answers on 3001.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      engine-worker:
+        condition: service_started
+
+  engine-worker:
+    image: ghcr.io/fabio-rovai/open-ontologies:1.3.0@sha256:db7a7e0f03ae7c3df4649c81d438a0952033abe4b524d3cd84d59dd617e4207a
+    restart: unless-stopped
+    command: ["serve-http", "--host", "0.0.0.0", "--port", "8085"]
+    user: "65534:65534"
+    environment:
+      HOME: /tmp
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - shacl-exchange-worker:/exchange:ro
+
 volumes:
   db-data:
   # A small in-memory directory shared by app and engine. The engine takes SHACL
@@ -108,6 +150,12 @@ volumes:
   # see. uid/gid 1000 is the `node` user the app image runs as, so the app can
   # write; mode 0755 lets the engine's unprivileged user read.
   shacl-exchange:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=1000,gid=1000,mode=0755,size=16m"
+  # The same, shared by the worker and its engine.
+  shacl-exchange-worker:
     driver_opts:
       type: tmpfs
       device: tmpfs

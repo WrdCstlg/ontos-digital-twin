@@ -346,29 +346,33 @@ if (env.isProduction) {
   const { serveStaticFiles } = await import("./lib/vite");
   serveStaticFiles(app);
 
-  // Before the first request: a sync job still `running` was abandoned by an
-  // earlier process. Production only, because a dev reload re-runs this module
-  // inside a process whose imports may really be in flight.
-  try {
-    const { failAbandonedSyncJobs } = await import("./services/syncJobs");
-    const abandoned = await failAbandonedSyncJobs();
-    if (abandoned > 0) {
-      console.warn(`[boot] marked ${abandoned} abandoned sync job(s) as failed`);
-    }
-  } catch (err) {
-    // Serving matters more than tidying the job list; the next start retries.
-    console.error("[boot] could not reconcile abandoned sync jobs:", err);
-  }
-
   const port = parseInt(process.env.PORT || "3000");
   serverHandle = serve({ fetch: app.fetch, port }, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
 
+// Background jobs normally run in the worker process (dist/worker.js). In local
+// development this process runs one itself, so a single command runs everything.
+{
+  const { embeddedWorkerEnabled, startEmbeddedWorker } = await import("./services/jobs/embedded");
+  if (embeddedWorkerEnabled()) {
+    const w = await startEmbeddedWorker();
+    console.log(`[boot] embedded job worker ${w.id} started`);
+  }
+}
+
 // Graceful process lifecycle supervisor (SIGTERM / SIGINT)
 const gracefulShutdown = async (signal: string) => {
   console.log(`[process] Received ${signal}. Initiating deterministic graceful teardown...`);
+  try {
+    // Before the pool closes: an embedded worker's job must finish or go back
+    // to the queue while it still has a database.
+    const { embeddedWorker } = await import("./services/jobs/embedded");
+    await embeddedWorker()?.stop(5000);
+  } catch (err) {
+    console.error("[process] Error stopping the embedded job worker:", err);
+  }
   try {
     const { iotBrokerManager } = await import("./services/iot/iotBrokerManager");
     await iotBrokerManager.shutdownAll();

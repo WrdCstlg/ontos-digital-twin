@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { motion } from 'framer-motion';
 import { Database, FileSpreadsheet, Globe, Loader2, Plus, Search } from 'lucide-react';
 import { toast } from 'sonner';
@@ -19,9 +20,38 @@ import { PreviewDrawer } from '@/components/mapping/PreviewDrawer';
 import { SyncJobs } from '@/components/mapping/SyncJobs';
 import { RdfStarBanner } from '@/components/mapping/RdfStarBanner';
 import { AuthNotice } from '@/components/mapping/AuthNotice';
-import type { ConnectorLike, MappingLike, SyncJobLike } from '@/components/mapping/utils';
+import {
+  isActiveSync,
+  syncErrorText,
+  type ConnectorLike,
+  type MappingLike,
+  type SyncJobLike,
+} from '@/components/mapping/utils';
 
 type StatusFilter = 'all' | 'active' | 'error' | 'paused';
+
+/** The toasts for an import this page queued, once a worker has finished it. */
+function announceSyncResult(job: SyncJobLike, mappingName: string, openInOperations: () => void) {
+  if (job.status === 'failed') {
+    toast.error(`Sync failed — ${mappingName}`, {
+      description: syncErrorText(job) ?? 'The import failed without an error message.',
+      action: job.jobId ? { label: 'Operations', onClick: openInOperations } : undefined,
+    });
+    return;
+  }
+  const r = job.result;
+  toast.success(`Sync complete — snapshot ${r?.snapshot ?? job.snapshotLabel ?? '—'}`, {
+    description: r
+      ? `${mappingName} · ${r.nodesUpserted} instances upserted · ${r.edgesCreated} edges created`
+      : `${mappingName} · ${job.rowsProcessed} instances upserted`,
+  });
+  if (r?.shacl && r.shacl.conforms === false) {
+    toast.warning(`SHACL Validation: ${r.shacl.violationCount} issue(s) detected`, {
+      description:
+        r.shacl.signatureSummary?.[0]?.remediationAction || 'Check SHACL compliance report for remediation actions',
+    });
+  }
+}
 
 const PILLS: { key: StatusFilter; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -40,6 +70,7 @@ function matchesStatus(conn: ConnectorLike, filter: StatusFilter): boolean {
 export default function Mapping() {
   const { isAuthenticated } = useAuth();
   const utils = trpc.useUtils();
+  const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -48,9 +79,11 @@ export default function Mapping() {
   const [csvData, setCsvData] = useState<CsvData | null>(null);
   const [preview, setPreview] = useState<{ open: boolean; mappingId: number | null }>({ open: false, mappingId: null });
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const [runningMappingId, setRunningMappingId] = useState<number | null>(null);
   const uploadConnRef = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Imports queued from this page (sync job id → mapping name), followed until
+  // a worker finishes them so the result can be announced.
+  const followedRef = useRef(new Map<number, string>());
 
   /* ── queries ── */
   const connectorsQ = trpc.mapping.listConnectors.useQuery(undefined, { retry: 1 });
@@ -59,8 +92,8 @@ export default function Mapping() {
     { limit: 25 },
     {
       retry: 1,
-      refetchInterval: (q) =>
-        (q.state.data ?? []).some((j) => j.status === 'running') ? 2000 : false,
+      // A worker runs imports in the background: poll while any is queued or running.
+      refetchInterval: (q) => ((q.state.data ?? []).some((j) => isActiveSync(j.status)) ? 2000 : false),
     },
   );
 
@@ -86,33 +119,51 @@ export default function Mapping() {
     [mappings, selectedConnector],
   );
 
-  /* ── run sync ── */
+  /* ── run sync: queue an import; a worker runs it ── */
   const runSyncMutation = trpc.mapping.runSync.useMutation({
-    onSuccess: async (res) => {
-      setRunningMappingId(null);
-      toast.success(`Sync complete — snapshot ${res.snapshot}`, {
-        description: `${res.nodesUpserted} instances upserted · ${res.edgesCreated} edges created`,
-      });
-      if (res.shaclReport && !res.shaclReport.conforms) {
-        toast.warning(`SHACL Validation: ${res.shaclReport.violationCount} issue(s) detected`, {
-          description:
-            res.shaclReport.signatureSummary?.[0]?.remediationAction ||
-            "Check SHACL compliance report for remediation actions",
+    onSuccess: async (res, vars) => {
+      const name = mappings.find((m) => m.id === vars.mappingId)?.name ?? `mapping #${vars.mappingId}`;
+      followedRef.current.set(res.syncJob.id, name);
+      if (res.alreadyActive) {
+        toast.info('Already running — following the existing import', {
+          description: `${name} · run-${res.syncJob.id} is ${res.syncJob.status}`,
         });
+      } else {
+        toast.info('Sync queued', { description: `${name} · run-${res.syncJob.id} · a worker will pick it up` });
       }
-      await Promise.all([utils.mapping.listSyncJobs.invalidate(), utils.mapping.listMappings.invalidate()]);
+      // Awaited so the row keeps its indicator until the queued run is in the list.
+      await utils.mapping.listSyncJobs.invalidate();
     },
-    onError: (err) => {
-      setRunningMappingId(null);
-      setMutationError(err.message);
-    },
+    onError: (err) => setMutationError(err.message),
   });
 
   const runSync = (mappingId: number) => {
     setMutationError(null);
-    setRunningMappingId(mappingId);
     runSyncMutation.mutate({ mappingId });
   };
+
+  // Mappings whose import is being queued, is waiting for a worker, or is running.
+  const pendingMappingId = runSyncMutation.isPending ? runSyncMutation.variables?.mappingId : undefined;
+  const activeMappingIds = useMemo(() => {
+    const ids = new Set(jobs.filter((j) => isActiveSync(j.status)).map((j) => j.mappingId));
+    if (pendingMappingId != null) ids.add(pendingMappingId);
+    return ids;
+  }, [jobs, pendingMappingId]);
+
+  // Announce followed imports once they reach a terminal state.
+  useEffect(() => {
+    const followed = followedRef.current;
+    if (followed.size === 0) return;
+    let finished = false;
+    for (const job of jobs) {
+      const name = followed.get(job.id);
+      if (name === undefined || isActiveSync(job.status)) continue;
+      followed.delete(job.id);
+      finished = true;
+      announceSyncResult(job, name, () => navigate(`/app/operations?job=${job.jobId}`));
+    }
+    if (finished) void utils.mapping.listMappings.invalidate();
+  }, [jobs, navigate, utils]);
 
   /* ── CSV upload (client-side read → previewCsv) ── */
   const requestCsvUpload = (connectorId: number) => {
@@ -244,7 +295,7 @@ export default function Mapping() {
           onNewConnector={() => setWizard({ open: true })}
           onUploadCsv={requestCsvUpload}
           onRunNow={runSync}
-          runningMappingId={runningMappingId}
+          activeMappingIds={activeMappingIds}
         />
       )}
 
@@ -261,7 +312,7 @@ export default function Mapping() {
           onRequestCsvUpload={() => selectedConnector && requestCsvUpload(selectedConnector.id)}
           onPreview={(mappingId) => setPreview({ open: true, mappingId })}
           onRunSync={runSync}
-          runningMappingId={runningMappingId}
+          activeMappingIds={activeMappingIds}
           onError={setMutationError}
         />
       )}
