@@ -50,6 +50,22 @@ export function toPublicUser(user: User): PublicUser {
 
 /* ─── Request Authentication ─────────────────────────────────── */
 
+/**
+ * The signed-in user, or null when the request has no valid session: no
+ * token, an invalid or expired one, or an unknown user. Any other error, such
+ * as a database that cannot be reached, is thrown, because then the session
+ * could not be checked, and answering "not signed in" would sign out someone
+ * who is.
+ */
+export async function sessionUser(headers: Headers): Promise<User | null> {
+  try {
+    return await authenticateRequest(headers);
+  } catch (err) {
+    if (err instanceof TRPCError && err.code === "UNAUTHORIZED") return null;
+    throw err;
+  }
+}
+
 export async function authenticateRequest(headers: Headers): Promise<User> {
   const cookies = cookie.parse(headers.get("cookie") || "");
   const preferredName = getSessionCookieName(headers);

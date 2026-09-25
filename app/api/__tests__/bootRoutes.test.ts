@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Hono } from "hono";
+import { sessionUser } from "../auth/service";
 
 // Engine stub whose steps record whether they ran inside exclusive().
 const engine = vi.hoisted(() => {
@@ -46,7 +47,7 @@ vi.mock("../services/iot/iotBrokerManager", () => ({
 }));
 vi.mock("../auth/service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auth/service")>()),
-  authenticateRequest: vi.fn(async () => ({ id: 7, role: "viewer", email: "v@acme.test" })),
+  sessionUser: vi.fn(async () => ({ id: 7, role: "viewer", email: "v@acme.test" })),
 }));
 vi.mock("../services/workspaceGuard", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/workspaceGuard")>()),
@@ -93,6 +94,15 @@ describe("POST /api/sparql", () => {
     expect(engine.syncWorkspace).not.toHaveBeenCalled();
     expect(engine.ensureWorkspaceLoaded).toHaveBeenCalledWith(42);
     expect(engine.lock.log).toEqual(["ensureWorkspaceLoaded:locked", "querySparql:locked"]);
+  });
+
+  it("answers 401 without a session, and 503 when the session could not be checked", async () => {
+    vi.mocked(sessionUser).mockResolvedValueOnce(null);
+    expect((await sparql("SELECT ?s WHERE { ?s ?p ?o }")).status).toBe(401);
+
+    vi.mocked(sessionUser).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+    expect((await sparql("SELECT ?s WHERE { ?s ?p ?o }")).status).toBe(503);
+    expect(engine.exclusive).not.toHaveBeenCalled();
   });
 
   it("rejects update forms before touching the engine", async () => {

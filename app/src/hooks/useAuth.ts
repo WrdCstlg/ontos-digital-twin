@@ -23,7 +23,10 @@ export function useAuth(options?: UseAuthOptions) {
     refetch,
   } = trpc.auth.me.useQuery(undefined, {
     staleTime: 1000 * 60 * 5,
-    retry: false,
+    // "Not signed in" ends the check at once. Anything else, such as a session
+    // the server could not check (503), is retried: the person may well be
+    // signed in, and redirecting them to the login page would be wrong.
+    retry: (failures, err) => err.data?.code !== "UNAUTHORIZED" && failures < 3,
   });
 
   const logoutMutation = trpc.auth.logout.useMutation({

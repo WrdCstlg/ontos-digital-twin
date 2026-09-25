@@ -14,7 +14,7 @@ import { csrf } from "hono/csrf";
 import { sql } from "drizzle-orm";
 import { getDb } from "./queries/connection";
 import { semanticEngine } from "./services/semanticEngine";
-import { authenticateRequest } from "./auth/service";
+import { sessionUser } from "./auth/service";
 import { sparqlRateLimiter } from "./lib/rateLimit";
 import { isReadOnlySparql, MAX_SPARQL_LENGTH } from "./lib/sparqlGuard";
 import { resolveUserWorkspace } from "./services/workspaceGuard";
@@ -145,10 +145,12 @@ app.get("/api/health", healthCheck);
 app.post("/api/sparql", async (c) => {
   let user;
   try {
-    user = await authenticateRequest(c.req.raw.headers);
+    user = await sessionUser(c.req.raw.headers);
   } catch {
-    return c.json({ error: "Authentication required." }, 401);
+    // The session could not be checked; the caller may well be signed in.
+    return c.json({ error: "Your session could not be checked just now. Try again in a moment." }, 503);
   }
+  if (!user) return c.json({ error: "Authentication required." }, 401);
 
   let workspace;
   try {

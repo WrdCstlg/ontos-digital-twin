@@ -36,15 +36,21 @@ export const createRouter = t.router;
 export const publicQuery = t.procedure;
 export const publicProcedure = t.procedure;
 
+/**
+ * Why a signed-in procedure has no user: no session (401), or a session that
+ * could not be checked (503), which the client should retry, not treat as a
+ * sign-out.
+ */
+function noUser(ctx: TrpcContext): TRPCError {
+  return ctx.sessionUnavailable
+    ? new TRPCError({ code: "SERVICE_UNAVAILABLE", message: "Your session could not be checked just now. Try again in a moment." })
+    : new TRPCError({ code: "UNAUTHORIZED", message: ErrorMessages.unauthenticated });
+}
+
 const requireAuth = t.middleware(async (opts) => {
   const { ctx, next } = opts;
 
-  if (!ctx.user) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: ErrorMessages.unauthenticated,
-    });
-  }
+  if (!ctx.user) throw noUser(ctx);
 
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
@@ -101,12 +107,7 @@ export const ontologistMutation = ontologistProcedure;
 export const requireWorkspace = t.middleware(async (opts) => {
   const { ctx, next } = opts;
 
-  if (!ctx.user) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: ErrorMessages.unauthenticated,
-    });
-  }
+  if (!ctx.user) throw noUser(ctx);
 
   if (ctx.workspace && ctx.membership) {
     return next({

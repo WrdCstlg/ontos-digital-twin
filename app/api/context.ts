@@ -1,6 +1,6 @@
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import type { User, Workspace, WorkspaceMember } from "@db/schema";
-import { authenticateRequest } from "./auth/service";
+import { sessionUser } from "./auth/service";
 
 export type TrpcContext = {
   req: Request;
@@ -8,6 +8,12 @@ export type TrpcContext = {
   user?: User;
   workspace?: Workspace;
   membership?: WorkspaceMember;
+  /**
+   * The request carried a session that could not be checked (the database was
+   * unreachable, say). Signed-in procedures then answer 503, not 401: the
+   * person may well be signed in.
+   */
+  sessionUnavailable?: boolean;
 };
 
 export async function createContext(
@@ -15,9 +21,11 @@ export async function createContext(
 ): Promise<TrpcContext> {
   const ctx: TrpcContext = { req: opts.req, resHeaders: opts.resHeaders };
   try {
-    ctx.user = await authenticateRequest(opts.req.headers);
-  } catch {
-    // Authentication is optional here
+    // Authentication is optional here: public procedures run without a user.
+    ctx.user = (await sessionUser(opts.req.headers)) ?? undefined;
+  } catch (err) {
+    ctx.sessionUnavailable = true;
+    console.warn("[auth] session could not be checked:", err instanceof Error ? err.message : String(err));
   }
   return ctx;
 }
