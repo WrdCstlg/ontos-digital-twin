@@ -54,7 +54,7 @@ worker lands on a job it holds.
 | `compose.gate.yaml` | Images only, `restart: "no"`, every node on a `127.0.0.1` port |
 | `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, writes the history, honours the stdin drain |
 | `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still be queued or running |
-| `cmd/oracle-job-leases` | The `jobs.lease_lapse` oracle: a job's lease lapses only on a worker the world froze or killed; a worker asked to stop, or left alone, finishes its job or hands it back |
+| `cmd/oracle-job-leases` | The `jobs.lease_lapse` oracle: a worker that recorded it was asked to stop never leaves its job to the lease; it finishes the job or hands it back. Lapses on workers that went silent (frozen, killed) are excused |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |
 | `observations/` | What the worlds showed, against their pre-registration, with each run's `verdict.json` and world files |

@@ -1,18 +1,18 @@
 // Command oracle-job-leases is the `jobs.lease_lapse` oracle for the Ontos gate.
 //
-// Invariant: a job's lease lapses only on a worker the world froze or killed. A
-// worker that is asked to stop (SIGTERM, which is what proc.restart sends) or
-// is left alone either finishes its job or hands it back to the queue. A lease
-// that lapsed on such a worker means it died holding the job: the job then
-// waited out the lease and was imported again from the start by another
-// worker. The queue recovers either way, so only this oracle tells the two
-// apart.
+// Invariant: a worker that was asked to stop never leaves its job to the lease.
+// On SIGTERM a worker records in the `workers` table that it is stopping, then
+// finishes its job within its grace or hands it back to the queue. A job whose
+// lease lapsed on a worker that had recorded one of the --asked-to-stop statuses
+// means that worker died holding the job: the job waited out the lease and was
+// imported again from the start by another worker. The queue recovers either
+// way, so only this oracle tells the two apart. A lease that lapsed on a worker
+// still recorded as running is excused: that worker went silent without being
+// asked to stop (frozen, killed, or hung), which is what leases are for.
 //
-// Which workers may lose a lease comes from the world file: the nodes of every
-// realized fault other than proc.restart, and every worker when a fault touched
-// the database (renewals cannot land while it is away). Each lapse is
-// attributed to a node through its owner's id, which starts with the worker
-// container's hostname, and so its short container id.
+// Everything it judges is Ontos's own record. The world file would say which
+// nodes the world disturbed, but at v0.1.0-phase0 the harness writes it after
+// the oracles run.
 //
 // The jobs table records only each job's latest attempt reason, so a lapse
 // followed by a failed retry is not seen. When this oracle fires it is right;
@@ -28,7 +28,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -45,13 +44,12 @@ import (
 const (
 	oracleName     = "jobs.lease_lapse"
 	nodeLabel      = "io.prothesis.node"
-	projectLabel   = "com.docker.compose.project"
 	pollInterval   = time.Second
 	queryTimeout   = 10 * time.Second
 	lapsedPrefix   = "lease held by "
 	lapsedPattern  = lapsedPrefix + "% expired%"
-	restartKind    = schema.FaultProcRestart
 	unsettledCount = "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
+	workersSQL     = "SELECT id, status FROM workers ORDER BY id"
 )
 
 // jobsSQL returns, per job, the worker whose lease lapsed: from the reason the
@@ -67,13 +65,22 @@ func main() {
 	fs := flag.NewFlagSet(oracleName, flag.ContinueOnError)
 	node := fs.String("node", "", "node id of the MySQL container (required)")
 	settle := fs.Duration("settle", 0, "how long to wait for queued and running jobs to finish before judging (required)")
+	askedFlag := fs.String("asked-to-stop", "", "comma-separated worker statuses that mean the worker was asked to stop (required)")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		finish(inconclusive("bad arguments: %v", err))
 	}
-	if *node == "" || *settle <= 0 {
-		finish(inconclusive("--node and a positive --settle are required"))
+	if *node == "" || *settle <= 0 || *askedFlag == "" {
+		finish(inconclusive("--node, a positive --settle and --asked-to-stop are required"))
 	}
-	finish(evaluate(*node, *settle))
+	asked := map[string]bool{}
+	for _, s := range strings.Split(*askedFlag, ",") {
+		s = strings.TrimSpace(s)
+		if s != "stopping" && s != "stopped" {
+			finish(inconclusive("--asked-to-stop names %q; only stopping and stopped mean a worker was asked to stop", s))
+		}
+		asked[s] = true
+	}
+	finish(evaluate(*node, *settle, asked))
 }
 
 type verdict struct {
@@ -113,86 +120,28 @@ func finish(v verdict) {
 }
 
 // ---------------------------------------------------------------------------
-// the world's faults
-// ---------------------------------------------------------------------------
-
-type faults struct {
-	realized  []string
-	disturbed map[string]bool // nodes frozen, killed or otherwise disturbed
-	allHit    bool            // a fault touched the database, so every worker may lose a lease
-}
-
-func (f *faults) excuses(node string) bool { return f.allHit || f.disturbed[node] }
-
-func (f *faults) describe() string {
-	if len(f.realized) == 0 {
-		return "no fault"
-	}
-	return strings.Join(f.realized, ", ")
-}
-
-func readFaults(path, dbNode string) (*faults, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read world file: %w", err)
-	}
-	w, err := schema.UnmarshalWorld(raw)
-	if err != nil {
-		return nil, fmt.Errorf("world file: %w", err)
-	}
-	if w.FaultSchedule.Realized == nil {
-		return nil, errors.New("the world file records no realized fault schedule, so it is not known which workers were disturbed")
-	}
-	f := &faults{realized: []string{}, disturbed: map[string]bool{}}
-	for _, r := range w.FaultSchedule.Realized {
-		spec, err := schema.ParseFault(r.Fault)
-		if err != nil {
-			return nil, fmt.Errorf("realized fault %q: %w", r.Fault, err)
-		}
-		f.realized = append(f.realized, r.Resolved)
-		for _, n := range r.Nodes {
-			if n == dbNode {
-				f.allHit = true
-			}
-			if spec.Kind != restartKind {
-				f.disturbed[n] = true
-			}
-		}
-	}
-	return f, nil
-}
-
-// ---------------------------------------------------------------------------
 // evaluation
 // ---------------------------------------------------------------------------
 
 type lapse struct {
-	jobID    int64
-	status   string
-	attempts int64
-	owner    string
-	node     string
+	jobID       int64
+	status      string
+	attempts    int64
+	owner       string
+	ownerStatus string
+	node        string
 }
 
-func evaluate(dbNode string, settle time.Duration) verdict {
+func evaluate(dbNode string, settle time.Duration, asked map[string]bool) verdict {
 	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	if err != nil {
 		return inconclusive("could not read the oracle input: %v", err)
 	}
-	in, err := schema.UnmarshalOracleInput(raw)
-	if err != nil {
-		return inconclusive("%v", err)
-	}
-	f, err := readFaults(in.WorldPath, dbNode)
-	if err != nil {
+	if _, err := schema.UnmarshalOracleInput(raw); err != nil {
 		return inconclusive("%v", err)
 	}
 
 	db, err := findContainer(dbNode)
-	if err != nil {
-		return inconclusive("%v", err)
-	}
-	project, err := containerLabel(db, projectLabel)
 	if err != nil {
 		return inconclusive("%v", err)
 	}
@@ -222,6 +171,14 @@ func evaluate(dbNode string, settle time.Duration) verdict {
 	if len(rows) == 0 {
 		return inconclusive("the jobs table is empty: no job ran, so there is no lease to judge")
 	}
+	workerRows, err := mysqlRows(db, workersSQL, 2)
+	if err != nil {
+		return inconclusive("the workers table could not be read: %v", err)
+	}
+	workerStatus := map[string]string{}
+	for _, w := range workerRows {
+		workerStatus[w[0]] = w[1]
+	}
 
 	var excused, violations []lapse
 	for _, r := range rows {
@@ -233,15 +190,17 @@ func evaluate(dbNode string, settle time.Duration) verdict {
 		if err1 != nil || err2 != nil {
 			return inconclusive("unexpected jobs row %q", strings.Join(r, "\t"))
 		}
-		l := lapse{jobID: id, status: r[1], attempts: attempts, owner: r[3]}
-		l.node, err = ownerNode(l.owner, project)
-		if err != nil {
-			return inconclusive("job %d's lease lapsed on %q, which cannot be placed on a node: %v", id, l.owner, err)
+		l := lapse{jobID: id, status: r[1], attempts: attempts, owner: r[3], node: ownerNode(r[3])}
+		st, ok := workerStatus[l.owner]
+		if !ok {
+			return inconclusive("job %d's lease lapsed on %q, which has no row in workers, so whether it was asked "+
+				"to stop cannot be told", id, l.owner)
 		}
-		if f.excuses(l.node) {
-			excused = append(excused, l)
-		} else {
+		l.ownerStatus = st
+		if asked[st] {
 			violations = append(violations, l)
+		} else {
+			excused = append(excused, l)
 		}
 	}
 
@@ -250,52 +209,53 @@ func evaluate(dbNode string, settle time.Duration) verdict {
 		note = fmt.Sprintf(" Some jobs were still queued or running after %s; judged on what was visible then.", settle)
 	}
 	if len(violations) > 0 {
-		return violated(violations, f, len(rows), note)
+		return violated(violations, len(rows), note)
 	}
 	if len(excused) == 0 {
 		return verdict{status: schema.StatusOK, explanation: fmt.Sprintf(
-			"no lease lapsed across %d job(s); this world had %s.%s", len(rows), f.describe(), note)}
+			"no lease lapsed across %d job(s).%s", len(rows), note)}
 	}
 	return verdict{status: schema.StatusOK, explanation: fmt.Sprintf(
-		"%d of %d job(s) recovered from a lapsed lease, all on nodes this world disturbed (%s: %s).%s",
-		len(excused), len(rows), f.describe(), nodesOf(excused), note)}
+		"%d of %d job(s) recovered from a lapsed lease, all on workers that went silent without being asked "+
+			"to stop (%s).%s", len(excused), len(rows), describe(excused), note)}
 }
 
-func violated(ls []lapse, f *faults, total int, note string) verdict {
+func violated(ls []lapse, total int, note string) verdict {
 	entries := make([]map[string]interface{}, 0, len(ls))
 	ids := make([]string, 0, len(ls))
 	for _, l := range ls {
 		entries = append(entries, map[string]interface{}{
-			"job_id": l.jobID, "status": l.status, "attempts": l.attempts, "lease_owner": l.owner, "node": l.node,
+			"job_id": l.jobID, "status": l.status, "attempts": l.attempts,
+			"lease_owner": l.owner, "owner_status": l.ownerStatus, "node": l.node,
 		})
 		ids = append(ids, strconv.FormatInt(l.jobID, 10))
 	}
 	w := schema.Witness{Key: "jobs", Extra: map[string]json.RawMessage{}}
 	w.Extra["lapsed_leases"] = mustJSON(entries)
-	w.Extra["realized_faults"] = mustJSON(f.realized)
 	w.Extra["phase"] = mustJSON("ASSERT")
 	return verdict{
 		status:  schema.StatusViolated,
 		witness: w,
-		explanation: fmt.Sprintf("%d of %d job(s) (job %s) recovered only because a lease lapsed on %s, which this "+
-			"world did not freeze or kill (it had %s). A worker that is asked to stop, or left alone, finishes its "+
-			"job or hands it back; a lapsed lease means it died holding the job, which then waited out the lease "+
-			"and ran again from the start.%s",
-			len(ls), total, strings.Join(ids, ", "), nodesOf(ls), f.describe(), note),
+		explanation: fmt.Sprintf("%d of %d job(s) (job %s) recovered only because a lease lapsed on a worker that "+
+			"had recorded it was asked to stop (%s). Such a worker finishes its job or hands it back; a lapsed "+
+			"lease means it died holding the job, which then waited out the lease and ran again from the start.%s",
+			len(ls), total, strings.Join(ids, ", "), describe(ls), note),
 	}
 }
 
-func nodesOf(ls []lapse) string {
+// describe names each distinct worker as "node (worker id, status)".
+func describe(ls []lapse) string {
 	seen := map[string]bool{}
 	var out []string
 	for _, l := range ls {
-		if !seen[l.node] {
-			seen[l.node] = true
-			out = append(out, l.node)
+		if seen[l.owner] {
+			continue
 		}
+		seen[l.owner] = true
+		out = append(out, fmt.Sprintf("%s (%s, %s)", l.node, l.owner, l.ownerStatus))
 	}
 	sort.Strings(out)
-	return strings.Join(out, ", ")
+	return strings.Join(out, "; ")
 }
 
 func mustJSON(v interface{}) json.RawMessage {
@@ -310,38 +270,20 @@ func mustJSON(v interface{}) json.RawMessage {
 // Docker and MySQL
 // ---------------------------------------------------------------------------
 
-// ownerNode finds the node a worker id belongs to. The id starts with the
-// worker's hostname, which Docker sets to the container's short id, and a
-// restarted container keeps its id.
-func ownerNode(owner, project string) (string, error) {
+// ownerNode names the node a worker id belongs to, for the explanation only.
+// The id starts with the worker's hostname, which Docker sets to the
+// container's short id, and a restarted container keeps its id.
+func ownerNode(owner string) string {
 	host, _, ok := strings.Cut(owner, "-")
 	if !ok || host == "" {
-		return "", errors.New("the worker id has no hostname part")
+		return "unknown node"
 	}
-	node, err := containerLabel(host, nodeLabel)
-	if err != nil {
-		return "", err
-	}
-	if node == "" {
-		return "", fmt.Errorf("container %s carries no %s label", host, nodeLabel)
-	}
-	p, err := containerLabel(host, projectLabel)
-	if err != nil {
-		return "", err
-	}
-	if p != project {
-		return "", fmt.Errorf("container %s belongs to compose project %q, not this world's %q", host, p, project)
-	}
-	return node, nil
-}
-
-func containerLabel(container, label string) (string, error) {
 	out, err := docker(context.Background(), "inspect", "--type", "container",
-		"--format", `{{index .Config.Labels "`+label+`"}}`, container)
-	if err != nil {
-		return "", err
+		"--format", `{{index .Config.Labels "`+nodeLabel+`"}}`, host)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "unknown node"
 	}
-	return strings.TrimSpace(out), nil
+	return strings.TrimSpace(out)
 }
 
 // findContainer resolves the running container the harness labelled with the

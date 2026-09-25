@@ -287,3 +287,51 @@ compose files would likely pass. The fix makes both hosts behave alike.
 | It fails with the fix | The grace did not run, or the worker does not hand back its job on SIGTERM: a bug in the worker's shutdown. |
 | `jobs.lease_lapse` inconclusive | It could not place a lapse on a node, or read the jobs table. A defect in the oracle, not a finding about Ontos. |
 | Exit 4 | The lock was not taken after this commit. |
+
+# Pre-registration 5: `jobs.lease_lapse` judged from Ontos's own records
+
+Written on 2026-09-24, before any world ran with this definition, and committed
+ahead of the lock and of the fix. It replaces pre-registration 4's oracle
+design; pre-registration 4's fix, fault windows and predictions stand.
+
+## Why pre-registration 4's oracle could not work
+
+Its first world, `r_2026_09_25_8672` (worker restart, fix absent), was
+INCONCLUSIVE, exit 2. `jobs.lease_lapse` could not open `world.thesis`: at
+v0.1.0-phase0 the harness evaluates the oracles (`internal/control/runner.go`,
+line 1254) and writes the world file afterwards (from line 1284), although the
+oracle input names its path. The oracle failed closed, as it should, and every
+other oracle was ok. That is a finding for the PRO-THESIS side. It was found
+before any counted result, and the harness is not patched.
+
+## The oracle now
+
+A worker that was asked to stop never leaves its job to the lease. On SIGTERM a
+worker writes `stopping` to its row in `workers` before it waits out its
+grace. A job whose lease lapsed on a worker recorded as `stopping` or `stopped`
+(`--asked-to-stop stopping,stopped`, in the locked definition) is a violation.
+A lapse on a worker still recorded as `running` is excused: that worker went
+silent without being asked to stop, whether frozen, killed or hung. It no longer
+reads the world file. It is weaker than the world-file version in one way: a
+worker that hangs for 15 s in a world with no fault is excused, where the
+world-file version would have flagged it.
+
+Checked before the lock on a scratch stack of the `e3efc36` images:
+
+| Scenario | worker-a's row | Oracle |
+|---|---|---|
+| `docker stop worker-a` mid-import (SIGKILL after 1.6 s); worker-b reclaims | `stopping` | `violated`, job 2, worker-a |
+| `docker pause worker-a` mid-import until worker-b reclaims, then unpause | `running` | `ok`, the lapse excused |
+
+## Predictions
+
+As in pre-registration 4, with this definition:
+
+| World | Without the fix | With the fix | Fix reverted |
+|---|---|---|---|
+| Worker restart, `proc.restart(worker-a)@4000..10000` | **FAIL, exit 1**: `jobs.lease_lapse` violated on worker-a's job, worker-a recorded `stopping`; every other oracle ok | PASS | FAIL, as without |
+| Worker frozen, `proc.pause(worker-a)@4000..40000` | PASS; `jobs.lease_lapse` ok, excusing worker-a's lapse (recorded `running`) | PASS | not run |
+| Smoke | PASS, 3 of 3; no lease lapses | PASS | not run |
+| App restart, `proc.restart(app)@3000..9000` | PASS; no lease lapses | PASS | not run |
+
+The table of other outcomes in pre-registration 4 applies unchanged.

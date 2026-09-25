@@ -1,23 +1,23 @@
 {
   "schema": "prothesis.lock/v1",
-  "manifest_sha": "sha256:9009721e9afa1951c9e95041613a5a96a4cd9ccec3ba853bc485d767f1e006f2",
-  "reason": "OBS-GATE-002 follow-up: add jobs.lease_lapse. A job's lease may lapse only on a worker the world froze or killed, so a worker asked to stop must finish its job or hand it back.",
-  "locked_at": "2026-09-25T03:23:05Z",
+  "manifest_sha": "sha256:44f5b4f4e6e15ac7a7b88ee49c16bf1e34b87b189d7f7d0314db46c097f6f708",
+  "reason": "Pre-registration 5: jobs.lease_lapse judged from Ontos's workers table, since the harness writes the world file after the oracles run. A lease may not lapse on a worker that recorded it was asked to stop (--asked-to-stop stopping,stopped).",
+  "locked_at": "2026-09-25T03:32:34Z",
   "tool_version": "0.1.0-phase0",
   "builtin_options_fingerprint": "sha256:ca5cba3edb828e29bd4b1357c9ff2d86ae2e3eb6a6bd009a2430b076304064bf",
   "executables": [
     {
       "oracle": "jobs.lease_lapse",
-      "cmd": "./bin/oracle-job-leases --node db --settle 60s",
+      "cmd": "./bin/oracle-job-leases --node db --settle 60s --asked-to-stop stopping,stopped",
       "resolved": "bin/oracle-job-leases.exe",
-      "sha256": "sha256:c8ca24b8caec1ee2ca1fd78074ad7438a4710812e1acb64b6b54c09af3482b77",
-      "size": 5205504
+      "sha256": "sha256:a244656c545630567fbe7758c18cef81c9500bd9cfb547552b5519623e53574a",
+      "size": 5068288
     },
     {
       "oracle": "sync_jobs.settle",
       "cmd": "./bin/oracle-sync-jobs --node db --settle 30s --unsettled queued,running",
       "resolved": "bin/oracle-sync-jobs.exe",
-      "sha256": "sha256:d2411ca82cd7dd378300634dd84c699b2944e08912a8acf1e258c4fba65d30a5",
+      "sha256": "sha256:7f34cbe3fe4b839a7e7f6747d6d1c282338938b90d2944cc1a4cad0b2a64025b",
       "size": 5117952
     }
   ],
@@ -49,8 +49,8 @@
       },
       {
         "path": "jobs.lease_lapse.yaml",
-        "sha256": "sha256:8de27dfd83cc01fff3dedd8bbb8981b47e539786d2693c61a8d728955427b6e5",
-        "size": 161
+        "sha256": "sha256:7105709be2cb4356b9c48f072ecb1dad6883a7786eb4b406eedf321005d86ce6",
+        "size": 194
       },
       {
         "path": "sync_jobs.settle.yaml",
