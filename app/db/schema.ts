@@ -276,6 +276,97 @@ export const syncJobs = mysqlTable("sync_jobs", {
 });
 export type SyncJob = typeof syncJobs.$inferSelect;
 
+/* ─────────────────────────────────────────────────────────────
+ * Action types: named, parameterised edits to the knowledge graph.
+ * The definition (parameters, criteria, rules, side effects) is
+ * contracts/actions.ts; every saved version is kept, and every
+ * submission is recorded with the version it ran.
+ * ───────────────────────────────────────────────────────────── */
+export const actionTypes = mysqlTable(
+  "action_types",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    moduleId: bigint("moduleId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => ontologyModules.id, { onDelete: "cascade" }),
+    key: varchar("key", { length: 64 }).notNull(),
+    displayName: varchar("displayName", { length: 255 }).notNull(),
+    description: text("description"),
+    status: mysqlEnum("status", ["active", "draft", "disabled"]).notNull().default("draft"),
+    // The lowest workspace role that may submit it.
+    minRole: mysqlEnum("minRole", ["viewer", "editor", "ontologist", "admin"]).notNull().default("editor"),
+    version: int("version").notNull().default(1),
+    definitionJson: json("definitionJson").notNull(),
+    createdBy: varchar("createdBy", { length: 255 }),
+    updatedBy: varchar("updatedBy", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [uniqueIndex("action_types_ws_key").on(table.workspaceId, table.key)],
+);
+export type ActionType = typeof actionTypes.$inferSelect;
+
+export const actionTypeVersions = mysqlTable(
+  "action_type_versions",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    actionTypeId: bigint("actionTypeId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => actionTypes.id, { onDelete: "cascade" }),
+    version: int("version").notNull(),
+    displayName: varchar("displayName", { length: 255 }).notNull(),
+    description: text("description"),
+    minRole: mysqlEnum("minRole", ["viewer", "editor", "ontologist", "admin"]).notNull(),
+    definitionJson: json("definitionJson").notNull(),
+    changedBy: varchar("changedBy", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("action_type_versions_type_version").on(table.actionTypeId, table.version)],
+);
+export type ActionTypeVersion = typeof actionTypeVersions.$inferSelect;
+
+export const actionSubmissions = mysqlTable(
+  "action_submissions",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    actionTypeId: bigint("actionTypeId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => actionTypes.id, { onDelete: "cascade" }),
+    actionKey: varchar("actionKey", { length: 64 }).notNull(),
+    actionVersion: int("actionVersion").notNull(),
+    status: mysqlEnum("status", ["applied", "rejected"]).notNull(),
+    submittedBy: varchar("submittedBy", { length: 255 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }),
+    paramsJson: json("paramsJson"),
+    // What the edits did (applied) or why nothing was done (rejected).
+    resultJson: json("resultJson"),
+    errorsJson: json("errorsJson"),
+    shaclJson: json("shaclJson"),
+    sideEffectJobIds: json("sideEffectJobIds"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    index("action_submissions_ws_id").on(table.workspaceId, table.id),
+    index("action_submissions_type_id").on(table.actionTypeId, table.id),
+  ],
+);
+export type ActionSubmission = typeof actionSubmissions.$inferSelect;
+
 export const kgNodes = mysqlTable(
   "kg_nodes",
   {
@@ -294,6 +385,8 @@ export const kgNodes = mysqlTable(
       mode: "number",
       unsigned: true,
     }),
+    // The action submission that created or last changed it, if one did.
+    sourceSubmissionId: bigint("sourceSubmissionId", { mode: "number", unsigned: true }),
     deletedAt: timestamp("deletedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt")
@@ -330,6 +423,8 @@ export const kgEdges = mysqlTable(
       mode: "number",
       unsigned: true,
     }),
+    // The action submission that created or removed it, if one did.
+    sourceSubmissionId: bigint("sourceSubmissionId", { mode: "number", unsigned: true }),
     deletedAt: timestamp("deletedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },

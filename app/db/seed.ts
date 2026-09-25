@@ -50,6 +50,9 @@ import { createHash } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../api/queries/connection";
 import {
+  actionSubmissions,
+  actionTypeVersions,
+  actionTypes,
   auditLog,
   connectors,
   graphSnapshots,
@@ -67,6 +70,7 @@ import {
   workspaceMembers,
   workspaces,
 } from "@db/schema";
+import { actionDefinitionSchema, checkDefinition, type ActionDefinition, type ActionRole } from "@contracts/actions";
 import { reconcileInsights } from "../api/insightsRouter";
 
 /* ── deterministic RNG ───────────────────────────────────────── */
@@ -336,6 +340,143 @@ const SHACL: Record<string, unknown> = {
   },
 };
 
+/* Action types: governed edits. Two of them resolve planted insights:
+ * reassign-manager gives an orphan (anomaly b) a manager, and renew-contract
+ * moves an expiring contract's end date out of the 30-day window (anomaly h). */
+type ActionTypeSeed = {
+  key: string;
+  displayName: string;
+  description: string;
+  moduleKey: string;
+  minRole: ActionRole;
+  author: string;
+  definition: ActionDefinition;
+};
+const ACTION_TYPES: ActionTypeSeed[] = [
+  {
+    key: "reassign-manager",
+    displayName: "Reassign manager",
+    description: "Moves a person to a new manager: replaces their hr:reportsTo line and records when it took effect.",
+    moduleKey: "hr",
+    minRole: "editor",
+    author: "Amara Okafor",
+    definition: {
+      parameters: [
+        { name: "employee", label: "Employee", type: "object", classIri: "hr:Person", required: true },
+        { name: "manager", label: "New manager", type: "object", classIri: "hr:Person", required: true },
+        { name: "effectiveDate", label: "Effective date", type: "date", required: true, description: "When the new reporting line starts." },
+      ],
+      criteria: [
+        { kind: "distinct", a: "employee", b: "manager", message: "A person cannot report to themselves" },
+        { kind: "compare", left: "{employee.status}", op: "neq", right: "terminated", message: "The employee has left: their reporting line is history" },
+        { kind: "compare", left: "{manager.status}", op: "neq", right: "terminated", message: "The new manager has left the company" },
+      ],
+      rules: [
+        { kind: "set_link", from: "employee", predicate: "hr:reportsTo", to: "manager" },
+        { kind: "modify_object", object: "employee", properties: { managerSince: "{effectiveDate}" } },
+      ],
+      validation: { shacl: false },
+      sideEffects: [],
+    },
+  },
+  {
+    key: "renew-contract",
+    displayName: "Renew contract",
+    description: "Extends an active contract to a new end date, optionally with a new total value.",
+    moduleKey: "legal",
+    minRole: "editor",
+    author: "R. Alvarez",
+    definition: {
+      parameters: [
+        { name: "contract", label: "Contract", type: "object", classIri: "lgl:Contract", required: true },
+        { name: "newEndDate", label: "New end date", type: "date", required: true },
+        { name: "value", label: "New total value", type: "number", required: false, min: 0, description: "Leave empty to keep the current value." },
+      ],
+      criteria: [
+        { kind: "compare", left: "{contract.status}", op: "eq", right: "active", message: "Only an active contract can be renewed; an expired one needs a new contract" },
+        { kind: "compare", left: "{newEndDate}", op: "gt", right: "{contract.endDate}", message: "The new end date must be after the current one" },
+        { kind: "compare", left: "{newEndDate}", op: "gt", right: "{today}", message: "The new end date must be in the future" },
+      ],
+      rules: [
+        {
+          kind: "modify_object",
+          object: "contract",
+          properties: { endDate: "{newEndDate}", value: "{value}", renewedBy: "{actor}", renewedOn: "{today}" },
+        },
+      ],
+      validation: { shacl: false },
+      sideEffects: [],
+    },
+  },
+  {
+    key: "record-termination",
+    displayName: "Record termination",
+    description: "Records that a person has left: their last day and the reason. Their reporting line is kept as history.",
+    moduleKey: "hr",
+    minRole: "ontologist",
+    author: "Amara Okafor",
+    definition: {
+      parameters: [
+        { name: "employee", label: "Employee", type: "object", classIri: "hr:Person", required: true },
+        { name: "lastDay", label: "Last working day", type: "date", required: true },
+        { name: "reason", label: "Reason", type: "enum", options: ["resignation", "retirement", "dismissal", "end of contract"], required: true },
+        { name: "note", label: "Note", type: "string", required: false, maxLength: 500 },
+      ],
+      criteria: [
+        { kind: "compare", left: "{employee.status}", op: "neq", right: "terminated", message: "This person's termination is already recorded" },
+        { kind: "compare", left: "{employee.isCeo}", op: "absent", message: "The CEO's departure is not recorded through this action" },
+      ],
+      rules: [
+        {
+          kind: "modify_object",
+          object: "employee",
+          properties: { status: "terminated", terminationDate: "{lastDay}", terminationReason: "{reason}", terminationNote: "{note}" },
+        },
+      ],
+      validation: { shacl: false },
+      sideEffects: [],
+    },
+  },
+  {
+    key: "onboard-employee",
+    displayName: "Onboard employee",
+    description: "Creates a person in an org unit, optionally under a manager. Checked against hr:PersonShape, so the work email must be an @acme.com address.",
+    moduleKey: "hr",
+    minRole: "editor",
+    author: "Amara Okafor",
+    definition: {
+      parameters: [
+        { name: "empId", label: "Employee ID", type: "string", required: true, maxLength: 16, description: "For example E-0421." },
+        { name: "fullName", label: "Full name", type: "string", required: true, maxLength: 200 },
+        { name: "email", label: "Work email", type: "string", required: true, maxLength: 200 },
+        { name: "title", label: "Job title", type: "string", required: false, maxLength: 200 },
+        { name: "unit", label: "Org unit", type: "object", classIri: "hr:OrgUnit", required: true },
+        { name: "manager", label: "Manager", type: "object", classIri: "hr:Person", required: false },
+        { name: "startDate", label: "Start date", type: "date", required: true },
+      ],
+      criteria: [{ kind: "compare", left: "{manager.status}", op: "neq", right: "terminated", message: "The manager has left the company" }],
+      rules: [
+        {
+          kind: "create_object",
+          as: "person",
+          classIri: "hr:Person",
+          iri: "hr:Person/{empId}",
+          label: "{fullName}",
+          properties: { empId: "{empId}", fullName: "{fullName}", email: "{email}", title: "{title}", hireDate: "{startDate}", status: "active" },
+        },
+        { kind: "add_link", from: "person", predicate: "hr:memberOf", to: "unit" },
+        { kind: "add_link", from: "person", predicate: "hr:reportsTo", to: "manager" },
+      ],
+      validation: { shacl: true },
+      sideEffects: [],
+    },
+  },
+];
+for (const a of ACTION_TYPES) {
+  const problems = checkDefinition(actionDefinitionSchema.parse(a.definition));
+  if (problems.length) throw new Error(`seed action type ${a.key}: ${problems.map((p) => `${p.path}: ${p.message}`).join("; ")}`);
+}
+
 /* ── seed body ───────────────────────────────────────────────── */
 
 type NodeSpec = {
@@ -357,6 +498,9 @@ type EdgeSpec = {
 async function main() {
   const db = getDb();
   console.log("Wiping Ontos tables (users untouched)…");
+  await db.delete(actionSubmissions);
+  await db.delete(actionTypeVersions);
+  await db.delete(actionTypes);
   await db.delete(auditLog);
   await db.delete(graphSnapshots);
   await db.delete(insights);
@@ -1248,6 +1392,110 @@ async function main() {
   await audit("insight-engine", "Raised warn finding: CMP-118 no evidence in 94 days", "insight", "cmp:Control/CMP-118", { ruleId: "control-without-evidence-90d" }, at());
   await audit("S. Park", "Exported module legal v1.8 as Turtle", "ontology_module", "legal", { format: "turtle" }, at());
   await audit("Amara Okafor", "Validated module hr v2.3 — 0 violations, 2 warnings", "ontology_module", "hr", { violations: 0, warnings: 2 }, at());
+
+  /* action types, then one applied and one rejected submission */
+  const actionTypeIdByKey = new Map<string, number>();
+  for (const a of ACTION_TYPES) {
+    const when = at();
+    const [{ id }] = await db
+      .insert(actionTypes)
+      .values({
+        workspaceId,
+        moduleId: moduleIdByKey.get(a.moduleKey)!,
+        key: a.key,
+        displayName: a.displayName,
+        description: a.description,
+        status: "active",
+        minRole: a.minRole,
+        version: 1,
+        definitionJson: a.definition,
+        createdBy: a.author,
+        updatedBy: a.author,
+        createdAt: when,
+        updatedAt: when,
+      })
+      .$returningId();
+    await db.insert(actionTypeVersions).values({
+      actionTypeId: id,
+      version: 1,
+      displayName: a.displayName,
+      description: a.description,
+      minRole: a.minRole,
+      definitionJson: a.definition,
+      changedBy: a.author,
+      createdAt: when,
+    });
+    actionTypeIdByKey.set(a.key, id);
+    await audit(a.author, `Created action type '${a.displayName}' (${a.key}) in module ${a.moduleKey}`, "action_type", id, { key: a.key, version: 1, status: "active", minRole: a.minRole }, when);
+  }
+
+  // Renewed a year on, as renew-contract would: the edit, its record and its audit entry.
+  const renewIri = "lgl:Contract/ACME-CTR-0007";
+  const [renewNode] = await db.select().from(kgNodes).where(and(eq(kgNodes.workspaceId, workspaceId), eq(kgNodes.iri, renewIri)));
+  const renewBefore = (renewNode.propsJson ?? {}) as Record<string, unknown>;
+  const renewWhen = at();
+  const renewedOn = iso(renewWhen);
+  const newEndDate = iso(new Date(Date.parse(`${String(renewBefore.endDate)}T00:00:00Z`) + 365 * DAY));
+  const renewParams = { contract: renewIri, newEndDate, value: null };
+  const renewResult = {
+    created: [],
+    modified: [
+      {
+        iri: renewIri,
+        set: {
+          endDate: { from: renewBefore.endDate, to: newEndDate },
+          renewedBy: { from: null, to: "R. Alvarez" },
+          renewedOn: { from: null, to: renewedOn },
+        },
+        unset: [],
+      },
+    ],
+    deleted: [],
+    linksAdded: [],
+    linksRemoved: [],
+  };
+  const [{ id: renewSubmissionId }] = await db
+    .insert(actionSubmissions)
+    .values({
+      workspaceId,
+      actionTypeId: actionTypeIdByKey.get("renew-contract")!,
+      actionKey: "renew-contract",
+      actionVersion: 1,
+      status: "applied",
+      submittedBy: "R. Alvarez",
+      paramsJson: renewParams,
+      resultJson: renewResult,
+      shaclJson: { status: "skipped", violations: [] },
+      createdAt: renewWhen,
+    })
+    .$returningId();
+  await db
+    .update(kgNodes)
+    .set({ propsJson: { ...renewBefore, endDate: newEndDate, renewedBy: "R. Alvarez", renewedOn }, sourceSubmissionId: renewSubmissionId, updatedAt: renewWhen })
+    .where(eq(kgNodes.id, renewNode.id));
+  await audit("R. Alvarez", "Applied action 'Renew contract' v1: changed 1", "action_submission", renewSubmissionId, { actionKey: "renew-contract", version: 1, params: renewParams, result: renewResult }, renewWhen);
+
+  // Refused by its first criterion, and recorded like any submission.
+  const selfIri = `hr:Person/${people[5].id}`;
+  const rejectWhen = at();
+  const rejectParams = { employee: selfIri, manager: selfIri, effectiveDate: iso(rejectWhen) };
+  const rejectProblems = [{ code: "criterion_failed", message: "A person cannot report to themselves", path: "criteria.0" }];
+  const [{ id: rejectSubmissionId }] = await db
+    .insert(actionSubmissions)
+    .values({
+      workspaceId,
+      actionTypeId: actionTypeIdByKey.get("reassign-manager")!,
+      actionKey: "reassign-manager",
+      actionVersion: 1,
+      status: "rejected",
+      submittedBy: "R. Alvarez",
+      paramsJson: rejectParams,
+      errorsJson: rejectProblems,
+      shaclJson: { status: "skipped", violations: [] },
+      createdAt: rejectWhen,
+    })
+    .$returningId();
+  await audit("R. Alvarez", "Rejected action 'Reassign manager' v1: A person cannot report to themselves", "action_submission", rejectSubmissionId, { actionKey: "reassign-manager", version: 1, params: rejectParams, problems: rejectProblems }, rejectWhen);
   await audit("system", "Sync 'hris-people' upserted 212 instances (v48)", "sync_job", 6, { mappingId: hrisMapId, rows: 212, snapshot: "v48" }, at());
   // pad the story to ~40 entries with routine activity
   const FILLER: [string, string, string, string | null][] = [

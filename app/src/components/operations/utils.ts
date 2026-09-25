@@ -76,6 +76,7 @@ export function prettyJson(v: unknown): string {
 
 const KIND_LABELS: Record<string, string> = {
   'mapping.sync': 'CSV import',
+  'action.webhook': 'Action webhook',
 };
 
 export function kindLabel(kind: string): string {

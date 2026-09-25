@@ -43,17 +43,43 @@ export function actorLabelFor(user?: User): string {
   return user?.name?.trim() || user?.email || "anonymous (demo)";
 }
 
-/** Append a hash-chained audit entry. Returns the inserted row. */
-export async function writeAudit(opts: {
-  workspaceId: number;
+export type AuditFields = {
   actor: string;
   action: string;
   entityType: string;
   entityId?: string | number | null;
   payload?: unknown;
-}) {
-  const db = getDb();
-  return await db.transaction(async (tx) => {
+};
+
+/**
+ * The payload an entry stores and the hash that chains it. The hash is taken
+ * over the payload as the JSON column will hold it: undefined members dropped,
+ * dates as strings. Hashing the value before that round trip would chain
+ * something verifyAuditChain can never read back.
+ */
+export function auditRecord(prevHash: string | null, f: AuditFields): { payloadJson: Record<string, unknown>; hash: string } {
+  const payloadJson = JSON.parse(
+    JSON.stringify({
+      actor: f.actor,
+      action: f.action,
+      entityType: f.entityType,
+      entityId: f.entityId ?? null,
+      payload: f.payload ?? null,
+    }),
+  ) as Record<string, unknown>;
+  return { payloadJson, hash: auditHash(prevHash, canonicalize(payloadJson)) };
+}
+
+type Db = ReturnType<typeof getDb>;
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/**
+ * Append a hash-chained audit entry. Returns the inserted row. Given `inTx`,
+ * the entry is written inside that transaction, so it commits or rolls back
+ * with the change it records.
+ */
+export async function writeAudit(opts: AuditFields & { workspaceId: number }, inTx?: Tx) {
+  const write = async (tx: Tx) => {
     const [last] = await tx
       .select()
       .from(auditLog)
@@ -63,14 +89,7 @@ export async function writeAudit(opts: {
       .for("update");
 
     const prevHash = last?.hash ?? null;
-    const canonicalPayload = canonicalize({
-      actor: opts.actor,
-      action: opts.action,
-      entityType: opts.entityType,
-      entityId: opts.entityId ?? null,
-      payload: opts.payload ?? null,
-    });
-    const hash = auditHash(prevHash, canonicalPayload);
+    const { payloadJson, hash } = auditRecord(prevHash, opts);
     const [{ id }] = await tx
       .insert(auditLog)
       .values({
@@ -79,20 +98,15 @@ export async function writeAudit(opts: {
         action: opts.action,
         entityType: opts.entityType,
         entityId: opts.entityId != null ? String(opts.entityId) : null,
-        payloadJson: {
-          actor: opts.actor,
-          action: opts.action,
-          entityType: opts.entityType,
-          entityId: opts.entityId ?? null,
-          payload: opts.payload ?? null,
-        },
+        payloadJson,
         hash,
         prevHash,
       })
       .$returningId();
     const [row] = await tx.select().from(auditLog).where(eq(auditLog.id, id));
     return row;
-  });
+  };
+  return inTx ? write(inTx) : getDb().transaction(write);
 }
 
 /** Recompute the hash chain; returns true if intact. */

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Loader2, Play, Search, ShieldAlert, Square, X } from 'lucide-react';
 import { trpc } from '@/providers/trpc';
@@ -95,8 +96,21 @@ export default function Explorer() {
     { enabled: !!browseCenter && !exec },
   );
 
+  // ?iri=<iri> (from Actions, a submission, …) centres the canvas on that
+  // object and opens its drawer. Adjust-during-render when the param changes.
+  const [searchParams] = useSearchParams();
+  const linkedIri = searchParams.get('iri');
+  const [lastLinkedIri, setLastLinkedIri] = useState<string | null>(null);
+  if (linkedIri && linkedIri !== lastLinkedIri) {
+    setLastLinkedIri(linkedIri);
+    setExec(null);
+    setBrowseCenter(linkedIri);
+    setSelectedIri(linkedIri);
+    setDrawerIri(linkedIri);
+  }
+
   // Set default browse center once hub data arrives
-  if (!browseCenter && hubQ.data?.[0]) {
+  if (!browseCenter && !linkedIri && hubQ.data?.[0]) {
     setBrowseCenter(hubQ.data[0].iri);
   }
 

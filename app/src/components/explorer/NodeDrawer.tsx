@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, ChevronRight, Loader2, Sparkles, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Sparkles, X, Zap } from 'lucide-react';
 import { Link } from 'react-router';
 import { trpc } from '@/providers/trpc';
 import { cn } from '@/lib/utils';
 import { moduleForPrefix, type ModuleKey } from '@/lib/modules';
 import { IRIChip } from '@/components/ui/iri-chip';
 import { ModuleBadge } from '@/components/ui/module-badge';
+import { ObjectActionLinks } from '@/components/actions/ObjectActions';
+import { runHref, submissionHref } from '@/components/actions/links';
 
 export interface NodeDrawerProps {
   iri: string | null;
@@ -120,13 +122,22 @@ export function NodeDrawer({ iri, onClose, onNavigate }: NodeDrawerProps) {
                     </dl>
                   </Section>
 
+                  {/* Actions this object can be the subject of */}
+                  <Section title="Actions">
+                    <ObjectActionLinks iri={data.node.iri} />
+                  </Section>
+
                   {/* Provenance */}
                   <Section title="Provenance">
                     <dl className="space-y-1.5 text-[12px]">
                       <div className="flex justify-between gap-3">
                         <dt className="text-text-muted">source mapping</dt>
                         <dd className="font-mono text-[11.5px] text-text-primary">
-                          {data.provenance.mapping ? data.provenance.mapping.name : 'manual / seeded'}
+                          {data.provenance.mapping
+                            ? data.provenance.mapping.name
+                            : data.provenance.submission
+                              ? 'an action (below)'
+                              : 'manual / seeded'}
                         </dd>
                       </div>
                       {data.provenance.mapping && (
@@ -152,6 +163,23 @@ export function NodeDrawer({ iri, onClose, onNavigate }: NodeDrawerProps) {
                         <dd className="font-mono text-[11px] text-text-secondary">{fmtTs(data.provenance.updatedAt)}</dd>
                       </div>
                     </dl>
+                    {data.provenance.submission && (
+                      <p className="mt-2.5 flex items-start gap-2 rounded-lg border border-border-hairline bg-bg-inset px-2.5 py-2 text-[12px] leading-[1.55] text-text-secondary">
+                        <Zap className="mt-0.5 size-3.5 shrink-0 text-iris-bright" aria-hidden />
+                        <span className="min-w-0 break-words">
+                          Last changed by action{' '}
+                          <Link to={runHref(data.provenance.submission.actionKey)} className="font-mono text-text-accent hover:underline">
+                            {data.provenance.submission.actionKey}
+                          </Link>{' '}
+                          v{data.provenance.submission.actionVersion},{' '}
+                          <Link to={submissionHref(data.provenance.submission.id)} className="font-mono text-text-accent hover:underline">
+                            submission #{data.provenance.submission.id}
+                          </Link>
+                          , by {data.provenance.submission.submittedBy},{' '}
+                          <span className="font-mono text-[11px]">{fmtTs(data.provenance.submission.createdAt)}</span>
+                        </span>
+                      </p>
+                    )}
                   </Section>
 
                   {/* Source record */}

@@ -242,6 +242,7 @@ export async function runMappingSync(
             label: columnMap.label ? row[columnMap.label] ?? iri : iri,
             propsJson: props,
             sourceMappingId: m.id,
+            sourceSubmissionId: null,
             createdAt: new Date(),
             updatedAt: new Date(),
             deletedAt: null,
@@ -285,7 +286,8 @@ export async function runMappingSync(
         sourceMappingId: m.id,
       })
       .onDuplicateKeyUpdate({
-        set: { label: label || iri, propsJson: props, sourceMappingId: m.id, updatedAt: new Date() },
+        // The import is now the last thing to have changed it.
+        set: { label: label || iri, propsJson: props, sourceMappingId: m.id, sourceSubmissionId: null, updatedAt: new Date() },
       });
     const [node] = await db
       .select()

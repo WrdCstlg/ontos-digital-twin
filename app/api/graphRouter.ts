@@ -2,6 +2,7 @@ import { z } from "zod";
 import { and, count, desc, eq, inArray, isNull, like, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
+  actionSubmissions,
   connectors,
   graphSnapshots,
   kgEdges,
@@ -14,6 +15,7 @@ import { createRouter, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { isReadOnlySparql } from "./lib/sparqlGuard";
 import { semanticEngine } from "./services/semanticEngine";
+import { classWithDescendants } from "./services/actions/definitions";
 
 async function resolveWorkspace(userWorkspace: Workspace, workspaceKey?: string) {
   if (!workspaceKey) return userWorkspace;
@@ -75,6 +77,8 @@ export const graphRouter = createRouter({
       z.object({
         q: z.string().min(1).max(255),
         moduleKey: z.string().max(64).optional(),
+        // Only objects of this class or a subclass, e.g. for an action's object parameter.
+        classIri: z.string().max(512).optional(),
         limit: z.number().int().min(1).max(100).default(20),
       }),
     )
@@ -88,6 +92,7 @@ export const graphRouter = createRouter({
         or(like(kgNodes.label, pattern), like(kgNodes.iri, pattern)),
       ];
       if (input.moduleKey) conds.push(eq(kgNodes.moduleKey, input.moduleKey));
+      if (input.classIri) conds.push(inArray(kgNodes.classIri, await classWithDescendants(ws.id, input.classIri)));
       const rows = await db
         .select()
         .from(kgNodes)
@@ -238,6 +243,20 @@ export const graphRouter = createRouter({
         mapping: typeof mappings.$inferSelect | null;
         connector: typeof connectors.$inferSelect | null;
       } = { mapping: null, connector: null };
+      // The action submission that created or last changed it.
+      const [submission] = node.sourceSubmissionId
+        ? await db
+            .select({
+              id: actionSubmissions.id,
+              actionKey: actionSubmissions.actionKey,
+              actionVersion: actionSubmissions.actionVersion,
+              submittedBy: actionSubmissions.submittedBy,
+              createdAt: actionSubmissions.createdAt,
+            })
+            .from(actionSubmissions)
+            .where(and(eq(actionSubmissions.id, node.sourceSubmissionId), eq(actionSubmissions.workspaceId, ws.id)))
+            .limit(1)
+        : [];
       if (node.sourceMappingId) {
         const [m] = await db
           .select()
@@ -275,6 +294,7 @@ export const graphRouter = createRouter({
         incoming: incoming.map((e) => pack(e, "in")),
         provenance: {
           ...provenance,
+          submission: submission ?? null,
           createdAt: node.createdAt,
           updatedAt: node.updatedAt,
         },

@@ -16,10 +16,12 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { getModule, type ModuleKey } from '@/lib/modules';
+import { ActOnIt } from '@/components/actions/ObjectActions';
 import { EvidenceCanvas, type EvidenceEdge, type EvidenceNode } from './EvidenceCanvas';
 import type { InsightRow, KgNodeRow, SubgraphResult } from './types';
 import {
   SEVERITY_COLOR,
+  evidenceObjectIris,
   resolveInstanceIri,
   iriLocalName,
   moduleKeyForIri,
@@ -213,6 +215,14 @@ export function TraceDrawer({
 
   const insight = target?.kind === 'insight' ? target.insight : null;
   const meta = insight ? ruleMetaFor(insight.ruleId) : null;
+  // Objects the evidence names: missing-edge endpoints, and evidence node ids the subgraph resolved.
+  const actIris = useMemo(() => {
+    if (!insight) return [];
+    const ev = parseEvidence(insight.evidenceJson);
+    const ids = new Set(ev.nodeIds);
+    const resolved = ((sub.data as SubgraphResult | undefined)?.nodes ?? []).filter((n) => ids.has(n.id)).map((n) => n.iri);
+    return evidenceObjectIris(insight.evidenceJson, resolved);
+  }, [insight, sub.data]);
   const snapshotLabel = target?.kind === 'grounding' ? target.snapshot : (stats.data?.snapshot?.label ?? null);
 
   const share = async () => {
@@ -321,6 +331,20 @@ export function TraceDrawer({
               {sub.isLoading ? <Skeleton className="h-24 w-full" /> : <SourceRecords nodes={evidenceNodes} />}
             </div>
           </section>
+
+          {/* Zone 4 — actions on the objects the evidence names */}
+          {insight && actIris.length > 0 && (
+            <section>
+              <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-text-muted">Act on it</span>
+              <p className="mt-1 text-[12.5px] text-text-muted">
+                Governed edits that apply to the objects in this evidence. Each opens with the object filled in; preview
+                shows exactly what would change.
+              </p>
+              <div className="mt-2">
+                <ActOnIt iris={actIris} />
+              </div>
+            </section>
+          )}
         </div>
 
         {/* Footer actions */}

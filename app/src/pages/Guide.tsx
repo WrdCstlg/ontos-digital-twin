@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Sparkles,
   Waypoints,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -128,6 +129,13 @@ const SCREENS = [
     body: 'The job queue behind every import. How many jobs are queued, running, done or failed, how long the oldest has waited, and whether a worker is alive to run them — with each job’s attempts, lease and last error. A job gets up to three attempts, with a backoff between them; admins can retry a failed job or cancel one that hasn’t started.',
   },
   {
+    icon: Zap,
+    color: '#818CF8',
+    title: 'Actions',
+    path: '/app/actions',
+    body: 'Governed edits to the graph. An action type such as “Reassign manager” or “Renew contract” names its parameters, the criteria a submission must meet, and exactly what it changes; some also check the result against the class’s SHACL shapes. Preview shows every check and every before → after without writing anything. Submit either applies it in one transaction or records why it was refused, and each object it touches remembers the submission. Start one from an object’s drawer in the Graph Explorer or from a finding in Insights; ontologists and admins define new ones, and every saved change is a new version.',
+  },
+  {
     icon: ScanHeart,
     color: '#2DD4BF',
     title: 'Twin Explorer',
@@ -171,8 +179,8 @@ const TIMELINE = [
 
 const ROLE_TABLE = [
   { role: 'Viewer', view: 'Dashboard, Insights, Graph Explorer', change: 'Nothing — read-only', who: 'Alex Morgan, Compliance Analyst' },
-  { role: 'Editor', view: '+ Mapping & Sync, connector status', change: 'Field mappings, sync jobs — not the model itself', who: 'Priya Sharma, Data Steward' },
-  { role: 'Ontologist', view: '+ Ontology Studio', change: 'Classes, properties, SHACL shapes, module versions', who: 'Dr. James Wei, Ontology Engineer' },
+  { role: 'Editor', view: '+ Mapping & Sync, connector status', change: 'Field mappings, sync jobs, actions open to editors — not the model itself', who: 'Priya Sharma, Data Steward' },
+  { role: 'Ontologist', view: '+ Ontology Studio', change: 'Classes, properties, SHACL shapes, module versions, action types', who: 'Dr. James Wei, Ontology Engineer' },
   { role: 'Admin', view: 'Everything', change: 'Workspaces, member roles, LLM providers, audit export', who: 'Elena Cortez, Chief Data Officer' },
 ];
 

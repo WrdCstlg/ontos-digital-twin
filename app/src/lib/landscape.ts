@@ -8,7 +8,7 @@
  * reading of that documentation, not a benchmark.
  */
 
-export const LANDSCAPE_AS_OF = "2026-09-24";
+export const LANDSCAPE_AS_OF = "2026-09-25";
 
 /* ── architecture ────────────────────────────────────────────── */
 
@@ -33,7 +33,7 @@ export const services: Service[] = [
     name: "Web app",
     kind: "client",
     runtime: "React single-page app",
-    responsibilities: ["Studio, Explorer, Mapping, Insights, Twins, Operations", "Talks to the API over tRPC"],
+    responsibilities: ["Studio, Explorer, Mapping, Insights, Twins, Actions, Operations", "Talks to the API over tRPC"],
   },
   {
     id: "app",
@@ -43,6 +43,7 @@ export const services: Service[] = [
     responsibilities: [
       "Authentication, workspace isolation, roles",
       "Ontology, graph, twin and insight APIs; SPARQL 1.1 endpoint",
+      "Action types: checks a submission, then applies it with its record and audit entry in one transaction",
       "Queues background work instead of running it in the request",
       "Still in this process: MQTT connections, reasoning runs, insight scans",
     ],
@@ -54,7 +55,7 @@ export const services: Service[] = [
     runtime: "Node · container `worker` · any number",
     responsibilities: [
       "Runs queued jobs under leases; a crashed worker's job is reclaimed",
-      "CSV imports today",
+      "CSV imports, and the webhooks of applied actions",
     ],
     since: "Increment 1",
   },
@@ -66,6 +67,7 @@ export const services: Service[] = [
     responsibilities: [
       "System of record: ontology modules, knowledge graph, twin history",
       "Job queue and worker heartbeats",
+      "Action types, their versions and every submission",
       "Hash-chained audit log",
     ],
   },
@@ -98,6 +100,14 @@ export const services: Service[] = [
     runtime: "OpenAI, Anthropic, Ollama, OpenRouter (optional)",
     responsibilities: ["Questions to read-only SPARQL, checked before it runs"],
   },
+  {
+    id: "webhooks",
+    name: "Webhook receivers",
+    kind: "external",
+    runtime: "Any HTTP endpoint an action names",
+    responsibilities: ["Receive each applied action, at least once"],
+    since: "Increment 2",
+  },
 ];
 
 export const links: Link[] = [
@@ -108,28 +118,31 @@ export const links: Link[] = [
   { from: "app", to: "engine", label: "SPARQL · reasoning · SHACL" },
   { from: "worker", to: "engine-worker", label: "SHACL" },
   { from: "app", to: "llm", label: "NLQ" },
+  { from: "worker", to: "webhooks", label: "action side effects" },
 ];
 
+export type RoadmapStatus = "shipped" | "next" | "planned";
+
 /** Where the architecture goes next, one increment at a time. */
-export const roadmap = [
+export const roadmap: { increment: number; title: string; status: RoadmapStatus; summary: string }[] = [
   {
     increment: 1,
     title: "Worker service and job queue",
-    status: "shipped" as const,
+    status: "shipped",
     summary:
       "Long-running work leaves the web process. A durable queue in MySQL with leases, a separate worker container, an Operations page.",
   },
   {
     increment: 2,
     title: "Action types",
-    status: "next" as const,
+    status: "shipped",
     summary:
       "Named, parameterised edits with validation, role permissions and an audited record of every submission; side effects run on the worker.",
   },
   {
     increment: 3,
     title: "Ontology API and typed SDK",
-    status: "planned" as const,
+    status: "next",
     summary:
       "A versioned public API described by OpenAPI and generated from the ontology, with a typed TypeScript client: the contract other systems bind to.",
   },
@@ -172,8 +185,8 @@ export const capabilities: Capability[] = [
   {
     area: "Governed edits",
     palantir: "Action types: parameterised edits with submission criteria, permissions, side effects and a record of every submission.",
-    ontos: "Edits are individual API calls with role checks and a hash-chained audit trail. No named, parameterised actions yet.",
-    status: "planned",
+    ontos: "Action types: typed parameters (including objects), submission criteria, declarative edits, a minimum role and module scopes, an optional SHACL check, webhook side effects on the worker, versioned definitions, and a record and audit entry for every submission. No function-backed or bulk actions.",
+    status: "has",
     increment: 2,
   },
   {
@@ -204,13 +217,13 @@ export const capabilities: Capability[] = [
   {
     area: "Background execution",
     palantir: "Platform services run builds, syncs and action side effects apart from the user's session.",
-    ontos: "A durable job queue with leases and a separate worker; a crashed worker's job is reclaimed. Reasoning runs and insight scans still run in the API process.",
+    ontos: "A durable job queue with leases and a separate worker, which runs imports and action side effects; a crashed worker's job is reclaimed. Reasoning runs and insight scans still run in the API process.",
     status: "partial",
   },
   {
     area: "Validation",
     palantir: "Validation rules on action submissions.",
-    ontos: "W3C SHACL shapes per class with explained violations and remediation, checked before imports; OWL-RL reasoning for consistency.",
+    ontos: "W3C SHACL shapes per class with explained violations and remediation, checked before imports and, where an action asks, before its edits are applied; OWL-RL reasoning for consistency.",
     status: "has",
   },
   {
@@ -222,7 +235,7 @@ export const capabilities: Capability[] = [
   {
     area: "Access control",
     palantir: "Granular permissions down to properties, and markings as mandatory controls.",
-    ontos: "Workspace isolation, four workspace roles and module scopes. Nothing finer than a module.",
+    ontos: "Workspace isolation and four workspace roles. Each action type has a minimum role, and module scopes limit which actions a member may submit. Nothing finer than a module.",
     status: "partial",
   },
   {
@@ -252,7 +265,7 @@ export const capabilities: Capability[] = [
   {
     area: "Audit",
     palantir: "Audit logs of user activity and action submissions.",
-    ontos: "A hash-chained, tamper-evident audit log per workspace.",
+    ontos: "A hash-chained, tamper-evident audit log per workspace, with an entry for every action submission, applied or rejected.",
     status: "has",
   },
   {

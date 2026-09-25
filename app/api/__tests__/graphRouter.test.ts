@@ -358,6 +358,7 @@ describe("graph.getNode", () => {
     expect(result.provenance).toEqual({
       mapping,
       connector,
+      submission: null,
       createdAt: node.createdAt,
       updatedAt: node.updatedAt,
     });

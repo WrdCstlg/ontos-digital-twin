@@ -21,6 +21,7 @@ import {
   Split,
   Waypoints,
   X,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { StatusDot, type StatusKind } from '@/components/ui/status-dot';
@@ -71,6 +72,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'System',
     items: [
       { label: 'Operations', to: '/app/operations', icon: ServerCog },
+      { label: 'Actions', to: '/app/actions', icon: Zap },
       { label: 'Audit Log', to: '/app/admin#audit', icon: ScrollText },
       { label: 'Admin', to: '/app/admin', icon: ShieldCheck, end: true, requiredRole: 'admin' },
       { label: 'Decisions & Architecture', to: '/app/decisions', icon: Split },
@@ -89,6 +91,7 @@ const CRUMB_NAMES: Record<string, string> = {
   admin: 'Admin',
   guide: 'Field Guide',
   operations: 'Operations',
+  actions: 'Actions',
   landscape: 'Landscape',
 };
 

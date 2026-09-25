@@ -47,6 +47,12 @@ from working software, and the defects that passed every automated gate.
 - **Background jobs** — a durable queue in MySQL with leases and retries; any number of
   worker processes; a worker that dies mid-job has its job reclaimed. The Operations
   page shows the queue and the workers.
+- **Action types** — named, parameterised edits to the knowledge graph: typed parameters
+  (including objects of a class), submission criteria, declarative rules (create, change
+  and delete objects; add, remove and replace links), a minimum role and module scopes,
+  an optional SHACL check of the result, and webhook side effects run by the worker.
+  Definitions are versioned, and every submission, applied or rejected, is recorded and
+  audited. See [Action types](#action-types).
 - **Natural language query** — pattern-based NL → SPARQL translation with a deterministic
   template engine; a pluggable LLM gateway (Ollama, OpenAI, Anthropic, OpenRouter) is
   available for SPARQL generation when configured. Both paths show the generated query
@@ -65,6 +71,7 @@ graph TD
     Hono <-->|SPARQL 1.1 / HTTP| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
     Worker["Worker(s)<br/>(Node 24)"] <-->|leases jobs| MySQL
     Worker <-->|SHACL| EngineW["open-ontologies<br/>(the worker's own)"]
+    Worker -->|action side effects| Hooks["Webhook receivers"]
 
     subgraph Compose ["Docker Compose stack"]
         Hono
@@ -100,6 +107,11 @@ holds the lease. A failed attempt is retried up to three times with backoff. A w
 that stops renewing (crashed, killed, or cut off) loses the job to another worker when
 the lease lapses.
 
+An action submission is planned outside any lock, then applied in one transaction: the
+objects it read are locked and checked unchanged, and the edits, the submission record,
+its audit entry and its side-effect jobs commit together or not at all. A deadlock runs
+the whole transaction again; objects that changed in between are planned again once.
+
 ---
 
 ## Landscape
@@ -110,15 +122,15 @@ is [`app/src/lib/landscape.ts`](app/src/lib/landscape.ts). In short:
 
 | Comparable | Partial | Gap or planned | Different by design |
 |---|---|---|---|
-| Semantic model, validation, time series and twins, audit | Interfaces, exploration, data integration, background execution, change management, access control, applications, AI | Governed edits (actions, increment 2), a public API and SDK (increment 3), logic on the ontology, distributed scale | Open W3C standards end to end; the semantic layer only |
+| Semantic model, governed edits, validation, time series and twins, audit | Interfaces, exploration, data integration, background execution, change management, access control, applications, AI | A public API and SDK (increment 3), logic on the ontology, distributed scale | Open W3C standards end to end; the semantic layer only |
 
 The architecture is changing one increment at a time:
 
 1. **Worker service and job queue** (shipped): long-running work leaves the web process.
-2. **Action types** (next): named, parameterised edits with validation, permissions and an
-   audited record of every submission.
-3. **Ontology API and typed SDK**: a versioned public API generated from the ontology,
-   and a typed client for the systems that bind to it.
+2. **Action types** (shipped): named, parameterised edits with validation, permissions and
+   an audited record of every submission; side effects run on the worker.
+3. **Ontology API and typed SDK** (next): a versioned public API generated from the
+   ontology, and a typed client for the systems that bind to it.
 
 ---
 
@@ -226,6 +238,7 @@ required; `docker compose` refuses to start without them.
 | `OPEN_ONTOLOGIES_PORT` | no | `8085` | Port used when auto-starting the engine |
 | `OPEN_ONTOLOGIES_TOKEN` | no | — | Bearer token, if the engine requires one |
 | `OPEN_ONTOLOGIES_BIN` | no | — | Explicit path to the engine binary |
+| `ACTION_WEBHOOK_ALLOW_PRIVATE` | no | `false` | `true` lets action webhooks reach loopback and private addresses (for receivers inside your network) |
 | `VITE_APP_ID` | no | — | Application identifier exposed to the browser |
 
 ---
@@ -370,6 +383,37 @@ its evidence nodes.
 | `vendor-spend-concentration` | warn |
 | `carrier-shipment-concentration` | warn |
 | `person-without-manager` | info |
+
+### Action types
+
+An action type is a named, versioned edit that people submit through the **Actions** page,
+or from an object in the Explorer. Its definition (`contracts/actions.ts`) has:
+
+- **Parameters**: text, number, yes/no, date, a choice from a list, or an object of a class
+  (or a subclass of it).
+- **Criteria** every submission must meet: comparisons over parameters and the named
+  objects' properties, such as "the contract is active" or "the new end date is after the
+  current one", and "these two objects differ".
+- **Rules**, applied in order: create, change or delete an object; add, remove or replace a
+  link. Values are templates such as `{newEndDate}`, `{contract.endDate}`, `{actor}` or
+  `{today}`.
+- **Validation**: optionally, the objects it creates or changes are checked against their
+  classes' SHACL shapes, and a violation refuses the submission.
+- **Side effects**: webhooks the worker POSTs the applied submission to, at least once,
+  with an `Idempotency-Key`. The worker refuses internal addresses unless
+  `ACTION_WEBHOOK_ALLOW_PRIVATE=true`.
+
+Each action type has a minimum workspace role. A member whose membership is scoped to
+modules may submit only the actions of those modules. Admins and ontologists write
+definitions; every save is a new version, and a submission records the version it ran.
+Every submission is recorded with its parameters and its outcome, applied or rejected with
+the reasons, and written to the audit log. An object an action created or changed shows
+the submission in its provenance.
+
+The seed defines four: **Reassign manager** and **Renew contract**, which resolve the
+`person-without-manager` and `contract-expiring-without-renewal` findings; **Record
+termination**, for ontologists; and **Onboard employee**, whose SHACL check refuses a work
+email outside `@acme.com`.
 
 ### Roles
 
@@ -536,6 +580,13 @@ These are tracked, known behaviours rather than surprises:
   before trusting the result.
 - **Pre-commit SHACL checks are advisory.** Violations are recorded in the audit entry and
   surfaced as a warning, but they do not block a sync.
+- **A later import replaces what an action changed.** A CSV import writes the properties of
+  the objects it maps, so an import after an action overwrites that action's edits to the
+  same object. The object's provenance then shows the import, not the action.
+- **An action checked against SHACL is refused while the engine is offline**, rather than
+  applied unchecked.
+- **Webhook addresses are checked when the job runs.** A host whose DNS answer changes
+  between that check and the request is not caught.
 - **Some state still lives in the API process.** Background jobs are safe to spread
   across workers, but a second API process would hold its own login and query rate
   limits, need its own semantic engine, and open its own MQTT broker connections, so

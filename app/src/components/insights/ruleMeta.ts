@@ -180,6 +180,26 @@ export function resolveInstanceIri(
   return candidates.find(isInstanceIri) ?? null;
 }
 
+/**
+ * The objects an insight's evidence names, for acting on them: instance IRIs
+ * at either end of a missing edge (class IRIs such as `hr:Person` are left
+ * out), then evidence nodes the caller resolved from their ids. Evidence
+ * that carries only text names nothing here. At most `limit`, first seen first.
+ */
+export function evidenceObjectIris(evidenceJson: unknown, resolvedNodeIris: string[] = [], limit = 6): string[] {
+  const ev = parseEvidence(evidenceJson);
+  const out: string[] = [];
+  const add = (iri: string | undefined) => {
+    if (iri && isInstanceIri(iri) && !out.includes(iri)) out.push(iri);
+  };
+  for (const m of ev.missingEdges) {
+    add(m.fromIri);
+    add(m.toIri);
+  }
+  resolvedNodeIris.forEach(add);
+  return out.slice(0, limit);
+}
+
 /** Map an IRI prefix to a module key — seed data uses `lgl:` for Legal. */
 export function moduleKeyForIri(iri: string): ModuleKey {
   const prefix = iri.split(':')[0] ?? '';
