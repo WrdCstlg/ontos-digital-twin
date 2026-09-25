@@ -1,17 +1,17 @@
 {
   "schema": "prothesis.lock/v1",
-  "manifest_sha": "sha256:e1b362c3071c7d21e6f0b79f4dd7c1caed45ae3b5221c3f333fe403bc111c428",
-  "reason": "Initial baseline for the Ontos gate: sync_jobs.settle oracle, builtin oracles, proc.restart-only fault policy, smoke and stuckjob profiles.",
-  "locked_at": "2026-09-24T04:51:52Z",
+  "manifest_sha": "sha256:db7a96cdc53efaa82e2296a671d3b305116dc3bf16986cd0c70ea378cb7461fe",
+  "reason": "Increment 1, job queue and workers: sync_jobs.settle also counts queued jobs as unsettled; health probes for worker-a, worker-b and their engines; proc.pause allowed; workers profile for faults under a backlog.",
+  "locked_at": "2026-09-25T02:42:06Z",
   "tool_version": "0.1.0-phase0",
   "builtin_options_fingerprint": "sha256:ca5cba3edb828e29bd4b1357c9ff2d86ae2e3eb6a6bd009a2430b076304064bf",
   "executables": [
     {
       "oracle": "sync_jobs.settle",
-      "cmd": "./bin/oracle-sync-jobs --node db --settle 30s",
+      "cmd": "./bin/oracle-sync-jobs --node db --settle 30s --unsettled queued,running",
       "resolved": "bin/oracle-sync-jobs.exe",
-      "sha256": "sha256:367b59ccd3749c73cf02cb71e1a31e99b747440a8143a6f222adb0afe1a09a5e",
-      "size": 5114368
+      "sha256": "sha256:3cae36205c3b7f87750bbeb436ce8f262c55fde2948151f79e64cd337242e960",
+      "size": 5117952
     }
   ],
   "covers": [
@@ -42,8 +42,8 @@
       },
       {
         "path": "sync_jobs.settle.yaml",
-        "sha256": "sha256:1e53454307f8c9d928a71ad29a5a76d2eb3b086edf4c5f301f258b58c1253478",
-        "size": 162
+        "sha256": "sha256:9c1d621549cd05134d668aec83e592403701162d1c80d003b1f08f8636e36d74",
+        "size": 189
       }
     ],
     "config": [
@@ -78,6 +78,66 @@
         "value": "60s"
       },
       {
+        "path": "harness.health[2].node",
+        "kind": "scalar",
+        "value": "worker-a"
+      },
+      {
+        "path": "harness.health[2].probe",
+        "kind": "scalar",
+        "value": "http://{host}:{port}/health"
+      },
+      {
+        "path": "harness.health[2].timeout",
+        "kind": "scalar",
+        "value": "60s"
+      },
+      {
+        "path": "harness.health[3].node",
+        "kind": "scalar",
+        "value": "worker-b"
+      },
+      {
+        "path": "harness.health[3].probe",
+        "kind": "scalar",
+        "value": "http://{host}:{port}/health"
+      },
+      {
+        "path": "harness.health[3].timeout",
+        "kind": "scalar",
+        "value": "60s"
+      },
+      {
+        "path": "harness.health[4].node",
+        "kind": "scalar",
+        "value": "engine-worker-a"
+      },
+      {
+        "path": "harness.health[4].probe",
+        "kind": "scalar",
+        "value": "http://{host}:{port}/health"
+      },
+      {
+        "path": "harness.health[4].timeout",
+        "kind": "scalar",
+        "value": "60s"
+      },
+      {
+        "path": "harness.health[5].node",
+        "kind": "scalar",
+        "value": "engine-worker-b"
+      },
+      {
+        "path": "harness.health[5].probe",
+        "kind": "scalar",
+        "value": "http://{host}:{port}/health"
+      },
+      {
+        "path": "harness.health[5].timeout",
+        "kind": "scalar",
+        "value": "60s"
+      },
+      {
         "path": "oracles.builtin",
         "kind": "scalar",
         "value": "availability_after_heal"
@@ -101,6 +161,11 @@
         "path": "oracles.dir",
         "kind": "scalar",
         "value": ".prothesis/oracles"
+      },
+      {
+        "path": "perturber.allow",
+        "kind": "scalar",
+        "value": "proc.pause"
       },
       {
         "path": "perturber.allow",
@@ -144,6 +209,21 @@
       },
       {
         "path": "profiles.stuckjob.worlds",
+        "kind": "scalar",
+        "value": "1"
+      },
+      {
+        "path": "profiles.workers.budget",
+        "kind": "scalar",
+        "value": "5m"
+      },
+      {
+        "path": "profiles.workers.driver_profile",
+        "kind": "scalar",
+        "value": "backlog"
+      },
+      {
+        "path": "profiles.workers.worlds",
         "kind": "scalar",
         "value": "1"
       }

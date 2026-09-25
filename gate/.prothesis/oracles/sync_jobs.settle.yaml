@@ -2,5 +2,5 @@ version: prothesis.oracle_def/v1
 name: sync_jobs.settle
 class: liveness
 valid_phases: [ASSERT]
-cmd: "./bin/oracle-sync-jobs --node db --settle 30s"
+cmd: "./bin/oracle-sync-jobs --node db --settle 30s --unsettled queued,running"
 timeout: 120s

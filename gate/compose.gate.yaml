@@ -79,10 +79,107 @@ services:
       engine:
         condition: service_started
 
+  # Two workers, so a job whose worker is stopped, paused or killed has another
+  # worker to reclaim it. Each has its own engine, as in ../compose.yaml.
+  worker-a:
+    image: ontos-app:${ONTOS_GATE_TAG:?set ONTOS_GATE_TAG to the image tag under test}
+    restart: "no"
+    command: ["node", "dist/worker.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://ontos:gate-db-password@db:3306/ontos
+      APP_SECRET: gate-only-app-secret-not-a-real-secret-0001
+      ADMIN_EMAIL: admin@acme-ontology.com
+      OPEN_ONTOLOGIES_URL: http://engine-worker-a:8085
+      SHACL_EXCHANGE_DIR: /exchange
+    volumes:
+      - shacl-exchange-a:/exchange
+    ports:
+      - "127.0.0.1:${ONTOS_GATE_WORKER_A_PORT:-13001}:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    depends_on:
+      db:
+        condition: service_healthy
+      engine-worker-a:
+        condition: service_started
+
+  engine-worker-a:
+    image: ghcr.io/fabio-rovai/open-ontologies:1.3.0@sha256:db7a7e0f03ae7c3df4649c81d438a0952033abe4b524d3cd84d59dd617e4207a
+    restart: "no"
+    command: ["serve-http", "--host", "0.0.0.0", "--port", "8085"]
+    user: "65534:65534"
+    environment:
+      HOME: /tmp
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - shacl-exchange-a:/exchange:ro
+    ports:
+      - "127.0.0.1:${ONTOS_GATE_ENGINE_WORKER_A_PORT:-18086}:8085"
+
+  worker-b:
+    image: ontos-app:${ONTOS_GATE_TAG:?set ONTOS_GATE_TAG to the image tag under test}
+    restart: "no"
+    command: ["node", "dist/worker.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://ontos:gate-db-password@db:3306/ontos
+      APP_SECRET: gate-only-app-secret-not-a-real-secret-0001
+      ADMIN_EMAIL: admin@acme-ontology.com
+      OPEN_ONTOLOGIES_URL: http://engine-worker-b:8085
+      SHACL_EXCHANGE_DIR: /exchange
+    volumes:
+      - shacl-exchange-b:/exchange
+    ports:
+      - "127.0.0.1:${ONTOS_GATE_WORKER_B_PORT:-13002}:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    depends_on:
+      db:
+        condition: service_healthy
+      engine-worker-b:
+        condition: service_started
+
+  engine-worker-b:
+    image: ghcr.io/fabio-rovai/open-ontologies:1.3.0@sha256:db7a7e0f03ae7c3df4649c81d438a0952033abe4b524d3cd84d59dd617e4207a
+    restart: "no"
+    command: ["serve-http", "--host", "0.0.0.0", "--port", "8085"]
+    user: "65534:65534"
+    environment:
+      HOME: /tmp
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - shacl-exchange-b:/exchange:ro
+    ports:
+      - "127.0.0.1:${ONTOS_GATE_ENGINE_WORKER_B_PORT:-18087}:8085"
+
 volumes:
   # Same shared in-memory directory as ../compose.yaml: the engine takes SHACL
   # shapes only as a file path. uid/gid 1000 is the app image's `node` user.
+  # One per process and its engine.
   shacl-exchange:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=1000,gid=1000,mode=0755,size=16m"
+  shacl-exchange-a:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=1000,gid=1000,mode=0755,size=16m"
+  shacl-exchange-b:
     driver_opts:
       type: tmpfs
       device: tmpfs

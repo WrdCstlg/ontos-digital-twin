@@ -37,16 +37,18 @@ build the images for the commit, then `smoke` and the stranded-sync-job world.
 holds the demo workspace, migrated, seeded and with the gate admin provisioned,
 by running that app image's own bootstrap against a scratch database. Each world
 tears down with its volumes, so this is what makes every world start from the
-same state with no init service.
+same state with no init service. It also adds three copies of the CSV mapping as
+gate fixtures: imports of one mapping are deduplicated, so more mappings are what
+let both workers be busy at once.
 
 ## What is here
 
 | Path | What it is |
 |---|---|
-| `prothesis.yaml` | Nodes (`app`, `engine`, `db`), health probes, driver, fault policy, oracles, profiles |
+| `prothesis.yaml` | Nodes (`app`, `engine`, `db`, workers `worker-a` and `worker-b` with their engines), health probes, driver, fault policy, oracles, profiles |
 | `compose.gate.yaml` | Images only, `restart: "no"`, every node on a `127.0.0.1` port |
-| `cmd/ontosload` | The driver: signs in once, runs `mapping.runSync` imports from the plan, writes the history, honours the stdin drain |
-| `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still claim to be running |
+| `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, writes the history, honours the stdin drain |
+| `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still be queued or running |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |
 | `observations/` | What the worlds showed, against their pre-registration, with each run's `verdict.json` and world files |

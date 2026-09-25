@@ -14,11 +14,29 @@ harness:
     # node, so that no_crash covers it, its log is kept, faults can target it,
     # and the sync_jobs.settle oracle can find it by the harness's node label.
     - { id: db, service: db, port: 3306, port_env: ONTOS_GATE_DB_PORT }
+    # Background jobs: two workers (logical service `worker`, so faults can
+    # target either or both), each with its own semantic engine.
+    - { id: worker-a, service: worker, compose_service: worker-a, port: 3001, port_env: ONTOS_GATE_WORKER_A_PORT }
+    - { id: worker-b, service: worker, compose_service: worker-b, port: 3001, port_env: ONTOS_GATE_WORKER_B_PORT }
+    - { id: engine-worker-a, service: engine-worker, compose_service: engine-worker-a, port: 8085, port_env: ONTOS_GATE_ENGINE_WORKER_A_PORT }
+    - { id: engine-worker-b, service: engine-worker, compose_service: engine-worker-b, port: 8085, port_env: ONTOS_GATE_ENGINE_WORKER_B_PORT }
   health:
     - node: app
       probe: "http://{host}:{port}/health"
       timeout: 90s
     - node: engine
+      probe: "http://{host}:{port}/health"
+      timeout: 60s
+    - node: worker-a
+      probe: "http://{host}:{port}/health"
+      timeout: 60s
+    - node: worker-b
+      probe: "http://{host}:{port}/health"
+      timeout: 60s
+    - node: engine-worker-a
+      probe: "http://{host}:{port}/health"
+      timeout: 60s
+    - node: engine-worker-b
       probe: "http://{host}:{port}/health"
       timeout: 60s
 
@@ -29,16 +47,19 @@ driver:
   # into ontos-gate-db by scripts/build-images.ps1.
   cmd: "./bin/ontosload --history {history_path} --plan {plan_path} --seed {seed} --profile {profile} --app http://127.0.0.1:13000 --email admin@acme-ontology.com --password ontos-gate-admin-password"
   profiles:
-    # `sync` is mapping.runSync on a CSV mapping: one full import. Two clients
-    # keep an import in flight at almost every instant of DRIVE. `ops` is a
-    # ceiling; the drain at QUIESCE ends DRIVE long before it is reached.
+    # `sync` queues an import of a CSV mapping and follows its job to the end.
+    # `ops` is a ceiling; the drain at QUIESCE ends DRIVE long before it.
     imports: { clients: 2, ops: 400, mix: { sync: 1 } }
+    # Six clients over the four CSV mappings keep both workers busy at every
+    # instant, so a fault on one worker always lands on a job it holds.
+    backlog: { clients: 6, ops: 1000, mix: { sync: 1 } }
 
 perturber:
   budget: { max_concurrent_faults: 1, max_faults_per_world: 2 }
   # proc.restart is the only way to bring a node back inside a world: HEAL
-  # never restarts a node that proc.kill stopped.
-  allow: [proc.restart]
+  # never restarts a node that proc.kill stopped. proc.pause freezes a worker
+  # past its lease and then lets it wake, which is the case leases exist for.
+  allow: [proc.restart, proc.pause]
 
 oracles:
   dir: .prothesis/oracles
@@ -54,6 +75,8 @@ profiles:
   smoke: { budget: 10m, worlds: 3, driver_profile: imports }
   # Run with the fault on the command line; see .prothesis/PREREGISTRATION.md.
   stuckjob: { budget: 5m, worlds: 1, driver_profile: imports }
+  # Faults on a worker under a full backlog, also from the command line.
+  workers: { budget: 5m, worlds: 1, driver_profile: backlog }
 
 artifacts:
   dir: .prothesis/runs

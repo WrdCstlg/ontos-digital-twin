@@ -1,10 +1,10 @@
 // Command oracle-sync-jobs is the `sync_jobs.settle` oracle for the Ontos gate.
 //
-// Invariant: once the system has healed and gone quiet, no sync job still
-// claims to be running. mapping.runSync records its job as `running` before it
-// imports anything, and every job must end `succeeded` or `failed`. A job
-// still `running` after the settle window is one no process will finish: the
-// job list will report it as in progress forever.
+// Invariant: once the system has healed and gone quiet, every sync job has
+// settled: none is still in one of the --unsettled statuses (queued and
+// running, since imports moved to a job queue). Every job must end `succeeded`
+// or `failed`. One still unsettled after the settle window is one no process
+// will finish: the job list will report it as waiting or in progress forever.
 //
 // The harness's final_state carries no target data, so this reads MySQL
 // directly, through `docker exec` into the container the harness labels as
@@ -47,14 +47,32 @@ const (
 func main() {
 	fs := flag.NewFlagSet(oracleName, flag.ContinueOnError)
 	node := fs.String("node", "", "node id of the MySQL container (required)")
-	settle := fs.Duration("settle", 0, "how long running jobs may take to finish (required)")
+	settle := fs.Duration("settle", 0, "how long unsettled jobs may take to finish (required)")
+	unsettledFlag := fs.String("unsettled", "", "comma-separated sync job statuses that are not yet settled (required)")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		finish(inconclusive("bad arguments: %v", err))
 	}
-	if *node == "" || *settle <= 0 {
-		finish(inconclusive("--node and a positive --settle are required"))
+	if *node == "" || *settle <= 0 || *unsettledFlag == "" {
+		finish(inconclusive("--node, a positive --settle and --unsettled are required"))
 	}
-	finish(evaluate(*node, *settle))
+	unsettled := map[string]bool{}
+	for _, s := range strings.Split(*unsettledFlag, ",") {
+		s = strings.TrimSpace(s)
+		if s != "queued" && s != "running" {
+			finish(inconclusive("--unsettled names %q; only queued and running are unsettled statuses", s))
+		}
+		unsettled[s] = true
+	}
+	finish(evaluate(*node, *settle, unsettled))
+}
+
+func statusList(set map[string]bool) string {
+	names := make([]string, 0, len(set))
+	for s := range set {
+		names = append(names, s)
+	}
+	sort.Strings(names)
+	return strings.Join(names, " or ")
 }
 
 type verdict struct {
@@ -93,7 +111,7 @@ func finish(v verdict) {
 	}
 }
 
-func evaluate(node string, settle time.Duration) verdict {
+func evaluate(node string, settle time.Duration, unsettled map[string]bool) verdict {
 	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	if err != nil {
 		return inconclusive("could not read the oracle input: %v", err)
@@ -124,17 +142,17 @@ func evaluate(node string, settle time.Duration) verdict {
 	var last *jobTable
 	var lastErr error
 	for {
-		jobs, err := queryJobs(container)
+		jobs, err := queryJobs(container, unsettled)
 		if err != nil {
 			lastErr = err
 			fmt.Fprintf(os.Stderr, "query failed: %v\n", err)
 		} else {
 			last = jobs
-			if len(jobs.running) == 0 {
+			if len(jobs.unsettled) == 0 {
 				return verdict{
 					status: schema.StatusOK,
-					explanation: fmt.Sprintf("no sync job is left running: %s. The driver recorded %s.",
-						jobs.summary(), h.summary()),
+					explanation: fmt.Sprintf("no sync job is left %s: %s. The driver recorded %s.",
+						statusList(unsettled), jobs.summary(), h.summary()),
 				}
 			}
 		}
@@ -146,14 +164,14 @@ func evaluate(node string, settle time.Duration) verdict {
 	if last == nil {
 		return inconclusive("the sync_jobs table could not be read within %s: %v", settle, lastErr)
 	}
-	return violated(last, h, settle)
+	return violated(last, h, settle, unsettled)
 }
 
-func violated(jobs *jobTable, h *historyFacts, settle time.Duration) verdict {
-	stuck := make([]map[string]int64, 0, len(jobs.running))
-	ids := make([]string, 0, len(jobs.running))
-	for _, j := range jobs.running {
-		entry := map[string]int64{"job_id": j.id, "mapping_id": j.mappingID}
+func violated(jobs *jobTable, h *historyFacts, settle time.Duration, unsettled map[string]bool) verdict {
+	stuck := make([]map[string]interface{}, 0, len(jobs.unsettled))
+	ids := make([]string, 0, len(jobs.unsettled))
+	for _, j := range jobs.unsettled {
+		entry := map[string]interface{}{"job_id": j.id, "mapping_id": j.mappingID, "status": j.status}
 		if h.driveStartNS > 0 && j.startedUnix > 0 {
 			entry["started_ms"] = j.startedUnix*1000 - h.driveStartNS/int64(time.Millisecond)
 		}
@@ -171,11 +189,12 @@ func violated(jobs *jobTable, h *historyFacts, settle time.Duration) verdict {
 	return verdict{
 		status:  schema.StatusViolated,
 		witness: w,
-		explanation: fmt.Sprintf("%d sync job(s) still claim to be running %s after the system went quiet "+
+		explanation: fmt.Sprintf("%d sync job(s) are still %s %s after the system went quiet "+
 			"(job %s). %s. The driver recorded %s; %d sync operation(s) ended indeterminate, which is where "+
-			"an import was cut off. Nothing will ever finish these jobs: the job list will show them in "+
-			"progress indefinitely.",
-			len(jobs.running), settle, strings.Join(ids, ", "), jobs.summary(), h.summary(), len(h.infoOpIDs)),
+			"an import was cut off. Nothing will ever finish these jobs: the job list will show them waiting "+
+			"or in progress indefinitely.",
+			len(jobs.unsettled), statusList(unsettled), settle, strings.Join(ids, ", "), jobs.summary(), h.summary(),
+			len(h.infoOpIDs)),
 	}
 }
 
@@ -282,8 +301,8 @@ type job struct {
 }
 
 type jobTable struct {
-	all     []job
-	running []job
+	all       []job
+	unsettled []job
 }
 
 func (t *jobTable) summary() string {
@@ -305,7 +324,7 @@ func (t *jobTable) summary() string {
 
 const jobsSQL = "SELECT id, mappingId, status, IFNULL(UNIX_TIMESTAMP(startedAt), 0) FROM sync_jobs ORDER BY id"
 
-func queryJobs(container string) (*jobTable, error) {
+func queryJobs(container string, unsettled map[string]bool) (*jobTable, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 	// The SQL travels as a positional argument, so no shell quoting touches it.
@@ -332,8 +351,8 @@ func queryJobs(container string) (*jobTable, error) {
 		}
 		j := job{id: id, mappingID: mid, status: cols[2], startedUnix: int64(started)}
 		t.all = append(t.all, j)
-		if j.status == "running" {
-			t.running = append(t.running, j)
+		if unsettled[j.status] {
+			t.unsettled = append(t.unsettled, j)
 		}
 	}
 	if len(t.all) == 0 {

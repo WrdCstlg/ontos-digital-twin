@@ -63,6 +63,15 @@ jobs:
         working-directory: gate
         run: thesis run --profile stuckjob --fault 'proc.restart(app)@3000..9000'
 
+      # Pre-registration 2: the job queue and its workers.
+      - name: Worker restarted under a backlog
+        working-directory: gate
+        run: thesis run --profile workers --fault 'proc.restart(worker-a)@3000..9000'
+
+      - name: Worker frozen past its lease
+        working-directory: gate
+        run: thesis run --profile workers --fault 'proc.pause(worker-a)@3000..23000'
+
       - name: Show verdicts and app logs on failure
         if: failure()
         working-directory: gate

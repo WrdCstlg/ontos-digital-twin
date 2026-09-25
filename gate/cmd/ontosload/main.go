@@ -16,13 +16,15 @@
 //
 // Operations (the plan's mix keys, and the history's `f`):
 //
-//	sync  mapping.runSync on a CSV mapping, i.e. one full import.
-//	      key "mapping/<id>"; the ok value is the sync job's id.
+//	sync  one full import of a CSV mapping: mapping.runSync queues it, a worker
+//	      runs it, and the operation follows the job until it ends.
+//	      key "mapping/<id>"; the ok value is the queue job's id. ok means the
+//	      job succeeded; a failed job is info, since an attempt may have
+//	      written rows before failing.
 //
 // At QUIESCE the harness writes {"cmd":"stop"} on stdin and closes it. The
-// driver then stops issuing operations, lets the ones in flight finish (each is
-// bounded by the request timeout, which is below the harness's drain
-// deadline), flushes the history and exits.
+// driver then stops issuing operations, ends the ones still following a job as
+// info, flushes the history and exits, well inside the drain deadline.
 //
 // Every parameter is required. A missing one, a plan it cannot execute
 // verbatim, or a failed sign-in exits non-zero instead of improvising.
@@ -40,6 +42,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -68,6 +71,12 @@ const (
 	// down every request is refused at once; without a pause two clients would
 	// spend the whole `ops` ceiling in a tight loop against a closed port.
 	backoff = 200 * time.Millisecond
+
+	// A queued import is followed until its job ends. The ceiling leaves room
+	// for a job whose worker died to be reclaimed when its 15 s lease lapses.
+	followTimeout = 45 * time.Second
+	pollInterval  = 250 * time.Millisecond
+	pollTimeout   = 3 * time.Second
 )
 
 // Exit codes. Any non-zero exit leaves the harness with whatever history was
@@ -334,7 +343,7 @@ func runProfile(ctx context.Context, pl *plan, seed uint64, mappings []int64, c 
 			for !stop.fired() && h.err() == nil && remaining.Add(-1) >= 0 {
 				op := pickOp(pl.Mix, rng)
 				mapping := mappings[rng.Intn(len(mappings))]
-				if doOp(ctx, c, h, counts, proc, 0, op, mapping) != schema.HistoryOK {
+				if doOp(ctx, c, h, counts, stop, proc, 0, op, mapping) != schema.HistoryOK {
 					select {
 					case <-time.After(backoff):
 					case <-stop.done:
@@ -384,7 +393,7 @@ func runOperations(ctx context.Context, pl *plan, mappings []int64, c *client,
 					}
 				}
 				id, _ := mappingFromKey(op.Key)
-				doOp(ctx, c, h, counts, proc, op.OpID, op.F, id)
+				doOp(ctx, c, h, counts, stop, proc, op.OpID, op.F, id)
 			}
 		}(proc, ops)
 	}
@@ -415,11 +424,11 @@ func pickOp(mix []planMix, rng *rand.Rand) string {
 
 // doOp records the invoke, performs the operation, records its completion and
 // returns the outcome. A zero opID asks the history for the next id.
-func doOp(ctx context.Context, c *client, h *history, counts *outcomeCounts,
+func doOp(ctx context.Context, c *client, h *history, counts *outcomeCounts, stop *stopSignal,
 	proc, opID int64, f string, mapping int64) schema.HistoryType {
 	key := "mapping/" + strconv.FormatInt(mapping, 10)
 	id, invokedAt := h.invoke(proc, opID, f, key)
-	res := c.sync(ctx, mapping)
+	res := c.sync(ctx, mapping, stop)
 	h.complete(proc, id, invokedAt, f, key, res)
 	counts.add(res.kind)
 	return res.kind
@@ -464,8 +473,12 @@ type result struct {
 	err   string
 }
 
-// sync runs mapping.runSync once and classifies the outcome.
-func (c *client) sync(ctx context.Context, mappingID int64) result {
+// sync queues an import with mapping.runSync and follows its job to the end.
+// The import runs on a worker, so the operation completes when the job does:
+// ok when it succeeded (the value is the job id); info when it failed (an
+// attempt may have written rows before failing), when the drain stops the
+// driver first, or when it outlives followTimeout.
+func (c *client) sync(ctx context.Context, mappingID int64, stop *stopSignal) result {
 	body := fmt.Sprintf(`{"json":{"mappingId":%d}}`, mappingID)
 	resp, err := c.post(ctx, "/api/trpc/mapping.runSync", body)
 	if err != nil {
@@ -475,35 +488,101 @@ func (c *client) sync(ctx context.Context, mappingID int64) result {
 		}
 		return result{kind: schema.HistoryInfo, err: "indeterminate: " + err.Error()}
 	}
-	defer resp.Body.Close()
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
 
 	switch {
 	case resp.StatusCode == http.StatusOK:
-		// The server sends 200 only after the import has committed, so the
-		// operation took effect even if the body cannot be read in full.
-		var ok struct {
+		var queued struct {
 			Result struct {
 				Data struct {
 					JSON struct {
-						Job struct {
-							ID int64 `json:"id"`
-						} `json:"job"`
+						JobID int64 `json:"jobId"`
 					} `json:"json"`
 				} `json:"data"`
 			} `json:"result"`
 		}
-		if readErr == nil && json.Unmarshal(payload, &ok) == nil && ok.Result.Data.JSON.Job.ID > 0 {
-			return result{kind: schema.HistoryOK, value: json.RawMessage(strconv.FormatInt(ok.Result.Data.JSON.Job.ID, 10))}
+		if readErr != nil || json.Unmarshal(payload, &queued) != nil || queued.Result.Data.JSON.JobID <= 0 {
+			return result{kind: schema.HistoryInfo, err: "indeterminate: queued, but the job id could not be read"}
 		}
-		return result{kind: schema.HistoryOK}
+		return c.follow(ctx, queued.Result.Data.JSON.JobID, stop)
 	case rejectedBeforeWork(resp.StatusCode):
 		return result{kind: schema.HistoryFail, err: fmt.Sprintf("rejected: HTTP %d %s", resp.StatusCode, trpcMessage(payload))}
 	default:
-		// A 5xx can come part-way through an import that has already written
-		// rows, so the outcome is unknown.
+		// A 5xx may come after the import was queued, so the outcome is unknown.
 		return result{kind: schema.HistoryInfo, err: fmt.Sprintf("indeterminate: HTTP %d %s", resp.StatusCode, trpcMessage(payload))}
 	}
+}
+
+// follow asks operations.getJob about the job until it ends. An error while
+// asking (the app restarting, say) is not an outcome; it keeps asking.
+func (c *client) follow(ctx context.Context, jobID int64, stop *stopSignal) result {
+	deadline := time.Now().Add(followTimeout)
+	last := "queued"
+	for {
+		status, lastErr, err := c.jobStatus(ctx, jobID)
+		switch {
+		case err != nil:
+			last = "unknown (" + err.Error() + ")"
+		case status == "succeeded":
+			return result{kind: schema.HistoryOK, value: json.RawMessage(strconv.FormatInt(jobID, 10))}
+		case status == "failed":
+			return result{kind: schema.HistoryInfo, err: fmt.Sprintf("indeterminate: job %d failed: %s", jobID, lastErr)}
+		default:
+			last = status
+		}
+		if stop.fired() {
+			return result{kind: schema.HistoryInfo, err: fmt.Sprintf("indeterminate: stopped while job %d was %s", jobID, last)}
+		}
+		if time.Now().After(deadline) {
+			return result{kind: schema.HistoryInfo, err: fmt.Sprintf("indeterminate: job %d still %s after %s", jobID, last, followTimeout)}
+		}
+		select {
+		case <-time.After(pollInterval):
+		case <-stop.done:
+		}
+	}
+}
+
+func (c *client) jobStatus(ctx context.Context, jobID int64) (status, lastError string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, pollTimeout)
+	defer cancel()
+	input := url.QueryEscape(fmt.Sprintf(`{"json":{"jobId":%d}}`, jobID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/trpc/operations.getJob?input="+input, nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Cookie", c.cookie)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("HTTP %d %s", resp.StatusCode, trpcMessage(payload))
+	}
+	var job struct {
+		Result struct {
+			Data struct {
+				JSON struct {
+					Status    string  `json:"status"`
+					LastError *string `json:"lastError"`
+				} `json:"json"`
+			} `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &job); err != nil {
+		return "", "", err
+	}
+	j := job.Result.Data.JSON
+	if j.LastError != nil {
+		lastError = *j.LastError
+	}
+	return j.Status, lastError, nil
 }
 
 // rejectedBeforeWork lists the statuses runSync returns only before it has

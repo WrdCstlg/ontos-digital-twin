@@ -7,7 +7,8 @@
     ontos-gate-db:<tag>  MySQL holding the demo workspace, migrated, seeded and
                          with the gate admin provisioned, produced by running
                          that same app image's bootstrap against a scratch
-                         database and dumping the result
+                         database and dumping the result, plus three copies of
+                         the CSV mapping as gate fixtures
 
 .NOTES
   The credentials below exist only inside throwaway containers on a private
@@ -74,6 +75,16 @@ try {
       -e "ADMIN_EMAIL=$adminEmail" -e "ADMIN_PASSWORD=$adminPassword" `
       "ontos-app:$Tag" node dist/db/bootstrap.js
   }
+
+  Write-Host "==> gate fixtures: three more CSV mappings"
+  # Imports of one mapping are deduplicated (a second request follows the first),
+  # so more mappings are what let two workers be busy at the same moment. These
+  # copies of the seeded CSV mapping are gate fixture data, not Ontos's seed.
+  $fixtureSql = "INSERT INTO mappings (connectorId, moduleId, name, sourceTable, classIri, columnMapJson, status) " +
+    "SELECT m.connectorId, m.moduleId, CONCAT(m.name, ' (gate copy ', k.n, ')'), m.sourceTable, m.classIri, m.columnMapJson, m.status " +
+    "FROM mappings m CROSS JOIN (SELECT 2 AS n UNION ALL SELECT 3 UNION ALL SELECT 4) k " +
+    "WHERE m.id = (SELECT MIN(x.id) FROM (SELECT mm.id FROM mappings mm JOIN connectors c ON c.id = mm.connectorId WHERE c.type = 'csv') x);"
+  Invoke-Checked "gate fixtures" { docker exec -e "MYSQL_PWD=$dbPassword" $db mysql -uroot ontos -e $fixtureSql }
 
   Write-Host "==> dump"
   # Written inside the container and copied out, so no shell re-encodes it.
