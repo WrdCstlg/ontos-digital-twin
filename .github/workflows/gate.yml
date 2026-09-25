@@ -87,6 +87,12 @@ jobs:
         working-directory: gate
         run: thesis run --profile actions --fault 'proc.restart(db)@5000..12000'
 
+      # Pre-registration 8: a signed-in client is never told it is signed out,
+      # with requests in flight through the whole outage.
+      - name: Signed-in clients across a database restart
+        working-directory: gate
+        run: thesis run --profile sessions --fault 'proc.restart(db)@5000..12000'
+
       - name: Show verdicts, app and worker logs on failure
         if: failure()
         working-directory: gate

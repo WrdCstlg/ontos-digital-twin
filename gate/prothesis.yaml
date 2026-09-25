@@ -63,6 +63,10 @@ driver:
     # webhook to `sink` run by a worker. Imports alongside, so actions and
     # imports write the audit log at the same time.
     actions: { clients: 4, ops: 1000, mix: { action: 3, sync: 1 } }
+    # Mostly quick requests, so some client is making one whenever the
+    # database goes away: a client following an import waits it out instead.
+    # One import in twenty keeps sync_jobs.settle judging. Pre-registration 8.
+    sessions: { clients: 8, ops: 4000, mix: { action: 19, sync: 1 } }
 
 perturber:
   budget: { max_concurrent_faults: 1, max_faults_per_world: 2 }
@@ -89,6 +93,9 @@ profiles:
   workers: { budget: 5m, worlds: 1, driver_profile: backlog }
   # Action submissions, with or without a fault from the command line.
   actions: { budget: 5m, worlds: 1, driver_profile: actions }
+  # Signed-in clients across a database outage, with the fault from the
+  # command line.
+  sessions: { budget: 5m, worlds: 1, driver_profile: sessions }
 
 artifacts:
   dir: .prothesis/runs

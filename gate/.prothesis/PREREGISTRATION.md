@@ -468,3 +468,49 @@ on images built from the fix's commit.
 | It fails with the fix | Another path still answers 401 when it cannot check the session. A finding in the fix. |
 | Another oracle fails with the fix | 503 during the outage changed something else, for example a client that stops on it. A finding. |
 | Exit 4 | The lock was not taken after this commit. |
+
+# Pre-registration 8: signed-in clients across a database outage
+
+Written on 2026-09-25, before any world ran with this profile, and committed with
+it ahead of the lock.
+
+## Why a new world
+
+Pre-registration 7's database world under the `actions` profile rarely tests
+`session.honoured`. A client that is following an import when the database goes
+away keeps polling that job until the outage ends, and the driver records no
+answer for a poll. Only a client that happens to be between imports sends new
+requests during the outage. Of the 18 runs of that world so far, on the old code,
+with the fix and with the fix reverted, 4 recorded any answer from inside the
+outage. OBS-GATE-005 records every one of them.
+
+## The profile
+
+`sessions`, driver profile and run profile: eight clients, nineteen action
+submissions to every import. Submissions answer within tens of milliseconds, so
+at any moment most clients are between requests, not waiting on an import. The
+imports keep `sync_jobs.settle` judging: it is inconclusive in a world with no
+import. The fault is the same database restart, `proc.restart(db)@5000..12000`.
+
+A run counts only if the driver recorded at least one request answered during
+the outage (a 401 or a 503). One that did not is recorded and not counted.
+
+## Predictions
+
+| World | Code | Prediction |
+|---|---|---|
+| `thesis run --profile sessions --fault "proc.restart(db)@5000..12000"` | the fix reverted (images `a47caf6-revert`) | **FAIL, exit 1**: `session.honoured` violated by 401s answered during the outage; every other oracle ok |
+| the same | with the fix (images built at or after this commit, which all hold a47caf6) | **PASS**: the requests answered during the outage end `info` with HTTP 503; every oracle ok |
+
+With the fix, the web app keeps the user signed in through an outage of up
+to three minutes and signs them out after that (lib/sessionGrace.ts). The
+driver is not the web app, so no world judges that; its tests do.
+
+## What would make it come out differently
+
+| Outcome | What it would mean |
+|---|---|
+| No request answered during the outage | The world missed; not counted. More than one miss in a row means the profile does not do what this pre-registration says. |
+| With the fix, `session.honoured` violated | Some path still answers 401 when it cannot check the session. A finding. |
+| `actions.durable` or `actions.delivered` violated | Submissions during the outage broke atomicity or delivery. A finding. |
+| Exit 4 | The lock was not taken after this commit. |
