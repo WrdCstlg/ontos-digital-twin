@@ -1,0 +1,6 @@
+version: prothesis.oracle_def/v1
+name: actions.durable
+class: safety
+valid_phases: [ASSERT]
+cmd: "./bin/oracle-actions --check durable --node db"
+timeout: 120s

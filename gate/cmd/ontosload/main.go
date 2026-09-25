@@ -22,6 +22,12 @@
 //	      job succeeded; a failed job is info, since an attempt may have
 //	      written rows before failing.
 //
+//	action  one submission of the gate-annotate action type (a gate fixture)
+//	      with actions.submit: a note on a person, and a webhook to the stack's
+//	      receiver. key "person/<iri>"; the ok value is the submission's id. ok
+//	      means it was applied; fail means it certainly was not (rejected and
+//	      recorded, a conflict that rolled back, or refused before any work).
+//
 // At QUIESCE the harness writes {"cmd":"stop"} on stdin and closes it. The
 // driver then stops issuing operations, ends the ones still following a job as
 // info, flushes the history and exits, well inside the drain deadline.
@@ -66,6 +72,13 @@ const (
 	// recorded in the history as `sync`: same operation, different workload.
 	opSyncBulk = "sync_bulk"
 	bulkPrefix = "gate-bulk"
+	opAction   = "action"
+	// gateAction is the action type the gate's image build adds for `action`.
+	gateAction = "gate-annotate"
+	// The people `action` annotates: E-0100 to E-0199. The gate's CSV imports
+	// replace the properties of E-0001 to E-0012, which would erase a note.
+	peoplePrefix = "hr:Person/E-01"
+	peopleLimit  = 100
 
 	// requestTimeout bounds every operation. It stays below the harness's 10 s
 	// drain deadline, so an operation in flight at QUIESCE always completes (as
@@ -151,12 +164,20 @@ func run() int {
 		}
 	}
 	log.printf("runnable CSV mappings: sync %v, sync_bulk %v", pools[opSync], pools[opSyncBulk])
+	var people []string
+	if planUses(pl, opAction) {
+		if people, err = c.people(ctx); err != nil {
+			log.printf("refusing: cannot list people for %s: %v", opAction, err)
+			return exitRefuse
+		}
+		log.printf("people for %s: %d", opAction, len(people))
+	}
 
 	var counts outcomeCounts
 	if len(pl.Operations) > 0 {
 		err = runOperations(ctx, pl, mappings, c, hist, stop, &counts, log)
 	} else {
-		err = runProfile(ctx, pl, p.seed, pools, c, hist, stop, &counts, log)
+		err = runProfile(ctx, pl, p.seed, pools, people, c, hist, stop, &counts, log)
 	}
 	if err != nil {
 		log.printf("refusing: %v", err)
@@ -289,14 +310,40 @@ func loadPlan(p params) (*plan, error) {
 		if op.OpID <= 0 || (i > 0 && op.OpID <= pl.Operations[i-1].OpID) {
 			return nil, fmt.Errorf("plan operation %d has op_id %d; op_ids must be positive and strictly ascending", i, op.OpID)
 		}
-		if _, err := mappingFromKey(op.Key); err != nil {
+		check := func(key *string) error { _, err := mappingFromKey(key); return err }
+		if op.F == opAction {
+			check = func(key *string) error { _, err := personFromKey(key); return err }
+		}
+		if err := check(op.Key); err != nil {
 			return nil, fmt.Errorf("plan operation op_id %d: %w", op.OpID, err)
 		}
 	}
 	return &pl, nil
 }
 
-func supportedOp(op string) bool { return op == opSync || op == opSyncBulk }
+func supportedOp(op string) bool { return op == opSync || op == opSyncBulk || op == opAction }
+
+// planUses reports whether the mix weights op or a replayed operation is op.
+func planUses(pl *plan, op string) bool {
+	for _, m := range pl.Mix {
+		if m.Op == op && m.WeightPPM > 0 {
+			return true
+		}
+	}
+	for _, o := range pl.Operations {
+		if o.F == op {
+			return true
+		}
+	}
+	return false
+}
+
+func personFromKey(key *string) (string, error) {
+	if key == nil || !strings.HasPrefix(*key, "person/") || len(*key) == len("person/") {
+		return "", errors.New(`an action operation needs key "person/<iri>"`)
+	}
+	return strings.TrimPrefix(*key, "person/"), nil
+}
 
 func mappingFromKey(key *string) (int64, error) {
 	if key == nil || !strings.HasPrefix(*key, "mapping/") {
@@ -340,10 +387,16 @@ func samePath(a, b string) bool {
 
 // runProfile generates operations from the mix. `ops` is the total across all
 // clients; the stop signal usually ends DRIVE long before it is used up.
-func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]int64, c *client,
+func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]int64, people []string, c *client,
 	h *history, stop *stopSignal, counts *outcomeCounts, log *logger) error {
 	for _, m := range pl.Mix {
-		if m.WeightPPM > 0 && len(pools[m.Op]) == 0 {
+		if m.WeightPPM <= 0 {
+			continue
+		}
+		if m.Op == opAction && len(people) == 0 {
+			return fmt.Errorf("the plan needs %s, but Ontos has no person to annotate", m.Op)
+		}
+		if m.Op != opAction && len(pools[m.Op]) == 0 {
 			return fmt.Errorf("the plan needs %s, but Ontos has no runnable CSV mapping for it", m.Op)
 		}
 	}
@@ -355,11 +408,18 @@ func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]i
 		go func(proc int64) {
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(int64(seed) + proc))
-			for !stop.fired() && h.err() == nil && remaining.Add(-1) >= 0 {
-				op := pickOp(pl.Mix, rng)
-				pool := pools[op]
-				mapping := pool[rng.Intn(len(pool))]
-				if doOp(ctx, c, h, counts, stop, proc, 0, opSync, mapping) != schema.HistoryOK {
+			for n := 1; !stop.fired() && h.err() == nil && remaining.Add(-1) >= 0; n++ {
+				var kind schema.HistoryType
+				if op := pickOp(pl.Mix, rng); op == opAction {
+					person := people[rng.Intn(len(people))]
+					note := fmt.Sprintf("gate %d/%d/%d", seed, proc, n)
+					kind = doOp(h, counts, proc, 0, opAction, "person/"+person, func() result { return c.submitAction(ctx, person, note) })
+				} else {
+					pool := pools[op]
+					mapping := pool[rng.Intn(len(pool))]
+					kind = doOp(h, counts, proc, 0, opSync, "mapping/"+strconv.FormatInt(mapping, 10), func() result { return c.sync(ctx, mapping, stop) })
+				}
+				if kind != schema.HistoryOK {
 					select {
 					case <-time.After(backoff):
 					case <-stop.done:
@@ -385,9 +445,11 @@ func runOperations(ctx context.Context, pl *plan, mappings []int64, c *client,
 	}
 	byProc := map[int64][]planOp{}
 	for _, op := range pl.Operations {
-		id, _ := mappingFromKey(op.Key)
-		if !runnable[id] {
-			return fmt.Errorf("plan op_id %d targets mapping %d, which is not a runnable CSV mapping here", op.OpID, id)
+		if op.F != opAction {
+			id, _ := mappingFromKey(op.Key)
+			if !runnable[id] {
+				return fmt.Errorf("plan op_id %d targets mapping %d, which is not a runnable CSV mapping here", op.OpID, id)
+			}
 		}
 		byProc[op.Process] = append(byProc[op.Process], op)
 	}
@@ -408,8 +470,14 @@ func runOperations(ctx context.Context, pl *plan, mappings []int64, c *client,
 						return
 					}
 				}
-				id, _ := mappingFromKey(op.Key)
-				doOp(ctx, c, h, counts, stop, proc, op.OpID, op.F, id)
+				if op.F == opAction {
+					person, _ := personFromKey(op.Key)
+					note := fmt.Sprintf("replay %d", op.OpID)
+					doOp(h, counts, proc, op.OpID, op.F, *op.Key, func() result { return c.submitAction(ctx, person, note) })
+				} else {
+					id, _ := mappingFromKey(op.Key)
+					doOp(h, counts, proc, op.OpID, op.F, *op.Key, func() result { return c.sync(ctx, id, stop) })
+				}
 			}
 		}(proc, ops)
 	}
@@ -440,11 +508,9 @@ func pickOp(mix []planMix, rng *rand.Rand) string {
 
 // doOp records the invoke, performs the operation, records its completion and
 // returns the outcome. A zero opID asks the history for the next id.
-func doOp(ctx context.Context, c *client, h *history, counts *outcomeCounts, stop *stopSignal,
-	proc, opID int64, f string, mapping int64) schema.HistoryType {
-	key := "mapping/" + strconv.FormatInt(mapping, 10)
+func doOp(h *history, counts *outcomeCounts, proc, opID int64, f, key string, perform func() result) schema.HistoryType {
 	id, invokedAt := h.invoke(proc, opID, f, key)
-	res := c.sync(ctx, mapping, stop)
+	res := perform()
 	h.complete(proc, id, invokedAt, f, key, res)
 	counts.add(res.kind)
 	return res.kind
@@ -599,6 +665,107 @@ func (c *client) jobStatus(ctx context.Context, jobID int64) (status, lastError 
 		lastError = *j.LastError
 	}
 	return j.Status, lastError, nil
+}
+
+// submitAction submits the gate action for a person. The submission is applied
+// or rejected inside the request, so its answer is final: applied is ok, and
+// rejected is fail, since a rejected submission changes nothing. A conflict
+// means the transaction rolled back, so it is fail too.
+func (c *client) submitAction(ctx context.Context, person, note string) result {
+	body, err := json.Marshal(map[string]any{"json": map[string]any{
+		"key":    gateAction,
+		"params": map[string]string{"employee": person, "note": note},
+	}})
+	if err != nil {
+		return result{kind: schema.HistoryFail, err: "not sent: " + err.Error()}
+	}
+	resp, err := c.post(ctx, "/api/trpc/actions.submit", string(body))
+	if err != nil {
+		var de *dialError
+		if errors.As(err, &de) {
+			return result{kind: schema.HistoryFail, err: "not sent: " + de.Error()}
+		}
+		return result{kind: schema.HistoryInfo, err: "indeterminate: " + err.Error()}
+	}
+	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		var out struct {
+			Result struct {
+				Data struct {
+					JSON struct {
+						Submission struct {
+							ID     int64  `json:"id"`
+							Status string `json:"status"`
+						} `json:"submission"`
+						Problems []struct {
+							Message string `json:"message"`
+						} `json:"problems"`
+					} `json:"json"`
+				} `json:"data"`
+			} `json:"result"`
+		}
+		if readErr != nil || json.Unmarshal(payload, &out) != nil || out.Result.Data.JSON.Submission.ID <= 0 {
+			return result{kind: schema.HistoryInfo, err: "indeterminate: answered, but the submission could not be read"}
+		}
+		s := out.Result.Data.JSON
+		if s.Submission.Status == "applied" {
+			return result{kind: schema.HistoryOK, value: json.RawMessage(strconv.FormatInt(s.Submission.ID, 10))}
+		}
+		why := s.Submission.Status
+		if len(s.Problems) > 0 {
+			why += ": " + s.Problems[0].Message
+		}
+		return result{kind: schema.HistoryFail, err: fmt.Sprintf("submission %d %s", s.Submission.ID, why)}
+	case resp.StatusCode == http.StatusConflict:
+		return result{kind: schema.HistoryFail, err: "rolled back: " + trpcMessage(payload)}
+	case rejectedBeforeWork(resp.StatusCode):
+		return result{kind: schema.HistoryFail, err: fmt.Sprintf("rejected: HTTP %d %s", resp.StatusCode, trpcMessage(payload))}
+	default:
+		return result{kind: schema.HistoryInfo, err: fmt.Sprintf("indeterminate: HTTP %d %s", resp.StatusCode, trpcMessage(payload))}
+	}
+}
+
+// people lists the persons `action` may annotate: those under peoplePrefix.
+func (c *client) people(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	input := url.QueryEscape(fmt.Sprintf(`{"json":{"q":%q,"classIri":"hr:Person","limit":%d}}`, peoplePrefix, peopleLimit))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/trpc/graph.searchNodes?input="+input, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Cookie", c.cookie)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, trpcMessage(payload))
+	}
+	var list struct {
+		Result struct {
+			Data struct {
+				JSON []struct {
+					IRI string `json:"iri"`
+				} `json:"json"`
+			} `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &list); err != nil {
+		return nil, fmt.Errorf("decode people: %w", err)
+	}
+	out := make([]string, 0, len(list.Result.Data.JSON))
+	for _, n := range list.Result.Data.JSON {
+		out = append(out, n.IRI)
+	}
+	return out, nil
 }
 
 // rejectedBeforeWork lists the statuses runSync returns only before it has

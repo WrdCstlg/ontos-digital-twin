@@ -94,6 +94,8 @@ services:
       ADMIN_EMAIL: admin@acme-ontology.com
       OPEN_ONTOLOGIES_URL: http://engine-worker-a:8085
       SHACL_EXCHANGE_DIR: /exchange
+      # The gate's webhook receiver, `sink`, is on this stack's private network.
+      ACTION_WEBHOOK_ALLOW_PRIVATE: "true"
     volumes:
       - shacl-exchange-a:/exchange
     ports:
@@ -138,6 +140,7 @@ services:
       ADMIN_EMAIL: admin@acme-ontology.com
       OPEN_ONTOLOGIES_URL: http://engine-worker-b:8085
       SHACL_EXCHANGE_DIR: /exchange
+      ACTION_WEBHOOK_ALLOW_PRIVATE: "true"
     volumes:
       - shacl-exchange-b:/exchange
     ports:
@@ -168,6 +171,14 @@ services:
       - shacl-exchange-b:/exchange:ro
     ports:
       - "127.0.0.1:${ONTOS_GATE_ENGINE_WORKER_B_PORT:-18087}:8085"
+
+  # Receives the webhooks of the gate's action type and logs each request.
+  sink:
+    image: hashicorp/http-echo@sha256:fcb75f691c8b0414d670ae570240cbf95502cc18a9ba57e982ecac589760a186
+    restart: "no"
+    command: ["-listen=:8080", "-text=ok"]
+    ports:
+      - "127.0.0.1:${ONTOS_GATE_SINK_PORT:-18088}:8080"
 
 volumes:
   # Same shared in-memory directory as ../compose.yaml: the engine takes SHACL

@@ -74,6 +74,19 @@ jobs:
         working-directory: gate
         run: thesis run --profile workers --fault 'proc.pause(worker-a)@4000..40000'
 
+      # Pre-registration 6: action types, their record and their side effects.
+      - name: Actions
+        working-directory: gate
+        run: thesis run --profile actions
+
+      - name: App restarted mid-submission
+        working-directory: gate
+        run: thesis run --profile actions --fault 'proc.restart(app)@4000..10000'
+
+      - name: Database restarted under actions
+        working-directory: gate
+        run: thesis run --profile actions --fault 'proc.restart(db)@5000..12000'
+
       - name: Show verdicts, app and worker logs on failure
         if: failure()
         working-directory: gate

@@ -8,8 +8,9 @@
                          with the gate admin provisioned, produced by running
                          that same app image's bootstrap against a scratch
                          database and dumping the result, plus gate fixtures:
-                         three copies of the CSV mapping, and two bulk CSV
-                         mappings ("gate-bulk N") whose imports take seconds
+                         three copies of the CSV mapping, two bulk CSV
+                         mappings ("gate-bulk N") whose imports take seconds,
+                         and the gate-annotate action type
 
 .NOTES
   The credentials below exist only inside throwaway containers on a private
@@ -127,6 +128,31 @@ WHERE m.id = (SELECT MIN(x.id) FROM (SELECT mm.id FROM mappings mm JOIN connecto
   }
   finally {
     Remove-Item $bulkFile -ErrorAction SilentlyContinue
+  }
+
+  Write-Host "==> gate fixtures: the gate-annotate action type"
+  # An action whose every submission changes a person and posts to the stack's
+  # webhook receiver (`sink`), so a world can follow edits and side effects.
+  $actionSql = @'
+SET @def = '{"parameters":[{"name":"employee","label":"Employee","type":"object","classIri":"hr:Person","required":true},{"name":"note","label":"Note","type":"string","required":true,"maxLength":200}],"criteria":[],"rules":[{"kind":"modify_object","object":"employee","properties":{"gateNote":"{note}","gateNotedBy":"{actor}"}}],"validation":{"shacl":false},"sideEffects":[{"kind":"webhook","url":"http://sink:8080/ontos","description":"The gate stack webhook receiver"}]}';
+INSERT INTO action_types (workspaceId, moduleId, `key`, displayName, description, status, minRole, version, definitionJson, createdBy, updatedBy)
+SELECT m.workspaceId, m.id, 'gate-annotate', 'Gate: annotate a person',
+  'Gate fixture: writes a note on a person and posts the submission to the gate webhook receiver.',
+  'active', 'editor', 1, CAST(@def AS JSON), 'gate', 'gate'
+FROM ontology_modules m WHERE m.`key` = 'hr';
+INSERT INTO action_type_versions (actionTypeId, version, displayName, description, minRole, definitionJson, changedBy)
+SELECT id, 1, displayName, description, minRole, definitionJson, 'gate' FROM action_types WHERE `key` = 'gate-annotate';
+'@
+  $actionFile = Join-Path ([System.IO.Path]::GetTempPath()) "ontos-gate-action-$Tag.sql"
+  Set-Content -Path $actionFile -Value $actionSql -Encoding utf8NoBOM
+  try {
+    Invoke-Checked "copy action fixture" { docker cp $actionFile "${db}:/tmp/action.sql" }
+    Invoke-Checked "action fixture" {
+      docker exec -e "MYSQL_PWD=$dbPassword" $db sh -c "mysql -uroot ontos < /tmp/action.sql"
+    }
+  }
+  finally {
+    Remove-Item $actionFile -ErrorAction SilentlyContinue
   }
 
   Write-Host "==> dump"

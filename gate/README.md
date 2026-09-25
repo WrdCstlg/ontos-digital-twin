@@ -32,8 +32,9 @@ thesis run --profile smoke             # three worlds, no faults
 CI runs the same steps on every push and pull request
 ([`.github/workflows/gate.yml`](../.github/workflows/gate.yml)): verify the lock,
 build the images for the commit, then `smoke` and the pre-registered fault
-worlds: the app restarted mid-import, and a worker restarted or frozen under a
-backlog.
+worlds: the app restarted mid-import; a worker restarted or frozen under a
+backlog; and action submissions alone, with the app restarted, and with the
+database restarted.
 
 `build-images.ps1` builds the app image and then a MySQL image that already
 holds the demo workspace, migrated, seeded and with the gate admin provisioned,
@@ -44,16 +45,19 @@ CSV mapping, because imports of one mapping are deduplicated, so more mappings
 are what let both workers be busy at once. Two bulk mappings, `gate-bulk 1` and
 `gate-bulk 2`, over a generated 1000-row CSV (`-BulkRows`), each writing its own
 subjects: their imports take seconds rather than milliseconds, so a fault on a
-worker lands on a job it holds.
+worker lands on a job it holds. And the `gate-annotate` action type, which writes a
+note on a person and posts each applied submission to `sink`, the stack's webhook
+receiver.
 
 ## What is here
 
 | Path | What it is |
 |---|---|
-| `prothesis.yaml` | Nodes (`app`, `engine`, `db`, workers `worker-a` and `worker-b` with their engines), health probes, driver, fault policy, oracles, profiles |
+| `prothesis.yaml` | Nodes (`app`, `engine`, `db`, workers `worker-a` and `worker-b` with their engines, and `sink`, the receiver for action webhooks), health probes, driver, fault policy, oracles, profiles |
 | `compose.gate.yaml` | Images only, `restart: "no"`, every node on a `127.0.0.1` port |
-| `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, writes the history, honours the stdin drain |
+| `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, submits the gate-annotate action with `actions.submit`, writes the history, honours the stdin drain |
 | `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still be queued or running |
+| `cmd/oracle-actions` | Two oracles on action types. `actions.durable`: every acknowledged action is still applied, every submission has one audit entry, every edit traces to an applied submission, and each person's latest gate note is in place. `actions.delivered`: every side effect of an applied action is delivered |
 | `cmd/oracle-job-leases` | The `jobs.lease_lapse` oracle: a worker that recorded it was asked to stop never leaves its job to the lease; it finishes the job or hands it back. Lapses on workers that went silent (frozen, killed) are excused |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |

@@ -20,6 +20,9 @@ harness:
     - { id: worker-b, service: worker, compose_service: worker-b, port: 3001, port_env: ONTOS_GATE_WORKER_B_PORT }
     - { id: engine-worker-a, service: engine-worker, compose_service: engine-worker-a, port: 8085, port_env: ONTOS_GATE_ENGINE_WORKER_A_PORT }
     - { id: engine-worker-b, service: engine-worker, compose_service: engine-worker-b, port: 8085, port_env: ONTOS_GATE_ENGINE_WORKER_B_PORT }
+    # The webhook receiver for action side effects. A node so its log, one line
+    # per delivery, is kept; it has no health entry, like db.
+    - { id: sink, service: sink, port: 8080, port_env: ONTOS_GATE_SINK_PORT }
   health:
     - node: app
       probe: "http://{host}:{port}/health"
@@ -56,6 +59,10 @@ driver:
     # deduplicated, so there are at most two jobs, one per worker, and each
     # worker is holding one nearly all the time. See Pre-registration 3.
     backlog: { clients: 6, ops: 1000, mix: { sync_bulk: 1 } }
+    # `action` submits the gate-annotate action type: a note on a person, and a
+    # webhook to `sink` run by a worker. Imports alongside, so actions and
+    # imports write the audit log at the same time.
+    actions: { clients: 4, ops: 1000, mix: { action: 3, sync: 1 } }
 
 perturber:
   budget: { max_concurrent_faults: 1, max_faults_per_world: 2 }
@@ -80,6 +87,8 @@ profiles:
   stuckjob: { budget: 5m, worlds: 1, driver_profile: imports }
   # Faults on a worker under a full backlog, also from the command line.
   workers: { budget: 5m, worlds: 1, driver_profile: backlog }
+  # Action submissions, with or without a fault from the command line.
+  actions: { budget: 5m, worlds: 1, driver_profile: actions }
 
 artifacts:
   dir: .prothesis/runs

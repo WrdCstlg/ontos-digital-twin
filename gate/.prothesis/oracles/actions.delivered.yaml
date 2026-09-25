@@ -1,0 +1,6 @@
+version: prothesis.oracle_def/v1
+name: actions.delivered
+class: liveness
+valid_phases: [ASSERT]
+cmd: "./bin/oracle-actions --check delivered --node db --settle 60s"
+timeout: 120s

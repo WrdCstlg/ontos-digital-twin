@@ -335,3 +335,84 @@ As in pre-registration 4, with this definition:
 | App restart, `proc.restart(app)@3000..9000` | PASS; no lease lapses | PASS | not run |
 
 The table of other outcomes in pre-registration 4 applies unchanged.
+
+# Pre-registration 6: action types under the gate (increment 2)
+
+Written on 2026-09-25, before any of these worlds ran, and committed with the
+oracles and the fixture ahead of the lock. System under test: the images built
+from the commit that adds action types (increment 2) together with these gate
+changes.
+
+## What changes in the gate
+
+- Fixture: the `gate-annotate` action type (module hr, editor, active). It writes
+  a note on a person (`gateNote`, `gateNotedBy`) and has one webhook side effect,
+  to `sink`, a pinned `hashicorp/http-echo` that answers 200 and logs each request.
+  The workers may call it (`ACTION_WEBHOOK_ALLOW_PRIVATE=true` in the gate stack).
+- Driver: `action` submits `gate-annotate` for one of 100 people (E-0100 to
+  E-0199, outside the rows the gate's CSV imports rewrite) with a note unique to
+  the operation. ok: applied, with the submission id; fail: rejected, rolled
+  back on a conflict, or refused before any work; info: 5xx or no answer.
+- Profiles: the `actions` driver profile, four clients, three actions for every
+  import; the `actions` run profile, one world.
+- Oracles, both from `cmd/oracle-actions`:
+  - `actions.durable` (safety): every action the driver saw applied is still
+    applied; every submission, applied or rejected, has exactly one audit entry,
+    and no audit entry lacks its submission; every object or link that names a
+    submission as its source names an applied one; every applied gate-annotate
+    submission queued its webhook job; and each person's latest applied note is
+    on the person, unless an import rewrote the person since.
+  - `actions.delivered` (liveness): every webhook job of an applied submission has
+    succeeded within 60 s of ASSERT. In a world with no actions it says it judged
+    nothing; in a world whose actions all failed it is inconclusive.
+
+Checked before the lock on a scratch stack of the increment's images, labelled
+as the harness labels them. Clean data: `durable` ok. A history acknowledging a
+missing and a rejected submission: violated, two lost acknowledgements. One
+submission's audit entry deleted and an object sourced to a rejected
+submission: violated, `audit_count` and `edit_orphan`. No actions: `delivered`
+ok, not judged. Actions all failed: `delivered` inconclusive. The note check
+and a delivered webhook need the fixture, so the first world below is their
+first run.
+
+## The worlds and their predictions
+
+| World | Command | Prediction |
+|---|---|---|
+| Actions | `thesis run --profile actions` | PASS: every oracle ok, including both new ones |
+| App restarted mid-submission | `thesis run --profile actions --fault "proc.restart(app)@4000..10000"` | PASS: see below |
+| Database restarted | `thesis run --profile actions --fault "proc.restart(db)@5000..12000"` | PASS: see below |
+| Smoke, app restart, worker restart and freeze | as in pre-registrations 3 to 5 | PASS as before; `actions.durable` judges the seed's two submissions and is ok; `actions.delivered` is ok, not judged |
+
+**App restarted mid-submission.** A submission is one transaction, so one cut off
+by the app stopping is rolled back and its request ends info. Every submission
+the driver saw applied survives, with its audit entry and its webhook job, and
+the webhooks are delivered by the workers, which the fault does not touch.
+
+**Database restarted.** On this host MySQL is killed one second after SIGTERM
+(OBS-GATE-002) and recovers from its redo log when it starts. Predicted: every
+acknowledged action survives, since InnoDB flushes its log at each commit;
+requests during the outage end info; the app and the workers get new
+connections from their pools, so every node answers its health probe after
+HEAL; imports and webhooks that lost the database fail an attempt, are retried
+and settle. A lease that lapses while the database is away belongs to a worker
+still recorded as running, so `jobs.lease_lapse` excuses it.
+
+## Expected, and not judged by any oracle
+
+- Imports and actions both write the audit log, so they can deadlock in its
+  writer (OBS-GATE-001, finding 2). An action runs its whole transaction again,
+  up to three times; one that still loses answers 5xx and is recorded info. An
+  import retries through the queue.
+
+## What would make it come out differently
+
+| Outcome | What it would mean |
+|---|---|
+| `actions.durable` violated | An acknowledged action was lost, or a submission's edits, record, audit entry and webhook job did not commit together. A bug. |
+| `actions.delivered` violated | A webhook of an applied action was never delivered: a bug in the side-effect path or its retries. |
+| `availability_after_heal` violated in the database world | A process did not get its database back. A finding. |
+| `no_crash` violated in the database world | A process died when its database went away. A finding. |
+| `sync_jobs.settle` violated in the database world | An import that lost its database was not retried to an end. A finding. |
+| `actions.delivered` inconclusive | The world applied no action, so it did not test them. Not counted; the record says why. |
+| Exit 4 | The lock was not taken after this commit. |

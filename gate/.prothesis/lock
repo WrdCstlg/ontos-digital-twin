@@ -1,23 +1,37 @@
 {
   "schema": "prothesis.lock/v1",
-  "manifest_sha": "sha256:44f5b4f4e6e15ac7a7b88ee49c16bf1e34b87b189d7f7d0314db46c097f6f708",
-  "reason": "Pre-registration 5: jobs.lease_lapse judged from Ontos's workers table, since the harness writes the world file after the oracles run. A lease may not lapse on a worker that recorded it was asked to stop (--asked-to-stop stopping,stopped).",
-  "locked_at": "2026-09-25T03:32:34Z",
+  "manifest_sha": "sha256:9b4e95089063c90d1adca3003be067398f98562745deb219e9dc94292aa97d75",
+  "reason": "Increment 2, action types: actions.durable (acknowledged actions survive; one audit entry per submission; every edit traces to an applied submission) and actions.delivered (every webhook of an applied action is delivered); actions run profile over the gate-annotate fixture.",
+  "locked_at": "2026-09-25T04:30:23Z",
   "tool_version": "0.1.0-phase0",
   "builtin_options_fingerprint": "sha256:ca5cba3edb828e29bd4b1357c9ff2d86ae2e3eb6a6bd009a2430b076304064bf",
   "executables": [
     {
+      "oracle": "actions.delivered",
+      "cmd": "./bin/oracle-actions --check delivered --node db --settle 60s",
+      "resolved": "bin/oracle-actions.exe",
+      "sha256": "sha256:6598a436731d33807b8ef70f99f42dcea3aac86e200d446e71a94c1c6aefb431",
+      "size": 5104640
+    },
+    {
+      "oracle": "actions.durable",
+      "cmd": "./bin/oracle-actions --check durable --node db",
+      "resolved": "bin/oracle-actions.exe",
+      "sha256": "sha256:6598a436731d33807b8ef70f99f42dcea3aac86e200d446e71a94c1c6aefb431",
+      "size": 5104640
+    },
+    {
       "oracle": "jobs.lease_lapse",
       "cmd": "./bin/oracle-job-leases --node db --settle 60s --asked-to-stop stopping,stopped",
       "resolved": "bin/oracle-job-leases.exe",
-      "sha256": "sha256:a244656c545630567fbe7758c18cef81c9500bd9cfb547552b5519623e53574a",
+      "sha256": "sha256:e2e669c7d5d6f9ea9a9c7f434d12ec43e20410244d1c326b5ea6fd5c2f8a06d7",
       "size": 5068288
     },
     {
       "oracle": "sync_jobs.settle",
       "cmd": "./bin/oracle-sync-jobs --node db --settle 30s --unsettled queued,running",
       "resolved": "bin/oracle-sync-jobs.exe",
-      "sha256": "sha256:7f34cbe3fe4b839a7e7f6747d6d1c282338938b90d2944cc1a4cad0b2a64025b",
+      "sha256": "sha256:78b1ce65b9cf1ae99960297ba1925c13124562b649a2759eefac5afeabb4c428",
       "size": 5117952
     }
   ],
@@ -46,6 +60,16 @@
         "path": "README.md",
         "sha256": "sha256:d2e89299128f66585618ec6a850a7dc79651381c0998997185f0001ea3b43efb",
         "size": 4419
+      },
+      {
+        "path": "actions.delivered.yaml",
+        "sha256": "sha256:e5a83d5a3d799170f0d484fb9dddfd80d8933203ac3dbc2c49e0f3ff75e90c54",
+        "size": 179
+      },
+      {
+        "path": "actions.durable.yaml",
+        "sha256": "sha256:5fddeb8dbd4eaacaa87dad4989ac64cb6de367e9e74f4066d66fb11c11fbbef8",
+        "size": 160
       },
       {
         "path": "jobs.lease_lapse.yaml",
@@ -193,6 +217,21 @@
         "path": "perturber.budget.max_faults_per_world",
         "kind": "scalar",
         "value": "2"
+      },
+      {
+        "path": "profiles.actions.budget",
+        "kind": "scalar",
+        "value": "5m"
+      },
+      {
+        "path": "profiles.actions.driver_profile",
+        "kind": "scalar",
+        "value": "actions"
+      },
+      {
+        "path": "profiles.actions.worlds",
+        "kind": "scalar",
+        "value": "1"
       },
       {
         "path": "profiles.smoke.budget",
