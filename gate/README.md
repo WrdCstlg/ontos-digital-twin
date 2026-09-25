@@ -23,7 +23,7 @@ Docker with Linux containers and Compose v2. From this directory:
 
 ```powershell
 pwsh -File scripts/build-images.ps1    # ontos-app:<sha>, ontos-gate-db:<sha> for HEAD
-pwsh -File scripts/build-tools.ps1     # bin/ontosload, bin/oracle-sync-jobs
+pwsh -File scripts/build-tools.ps1     # bin/ontosload and the two oracle checkers
 thesis oracles verify                  # the lock matches the committed definitions
 $env:ONTOS_GATE_TAG = "<sha>"
 thesis run --profile smoke             # three worlds, no faults
@@ -54,6 +54,7 @@ worker lands on a job it holds.
 | `compose.gate.yaml` | Images only, `restart: "no"`, every node on a `127.0.0.1` port |
 | `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, writes the history, honours the stdin drain |
 | `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still be queued or running |
+| `cmd/oracle-job-leases` | The `jobs.lease_lapse` oracle: a job's lease lapses only on a worker the world froze or killed; a worker asked to stop, or left alone, finishes its job or hands it back |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |
 | `observations/` | What the worlds showed, against their pre-registration, with each run's `verdict.json` and world files |

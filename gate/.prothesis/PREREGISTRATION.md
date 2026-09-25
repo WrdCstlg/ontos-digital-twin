@@ -211,3 +211,79 @@ worker-a's logs, naming the same job.
 | `sync_jobs.settle` violated | A job stayed queued or running 30 s after the drain. A bug in reclaim or fencing, unless the witness shows an import simply still running on its first attempt; then the fixture is too slow for that runner, and the record says so. |
 | A node not healthy after HEAL | A finding about recovery. |
 | Exit 4 | Something lock-covered changed. Nothing in this commit should. |
+
+# Pre-registration 4: a worker asked to stop must finish or hand back its job
+
+Written on 2026-09-24, before any of these worlds ran, and committed with the
+oracle it describes, ahead of the lock and of the fix.
+
+## What this is about
+
+OBS-GATE-002, finding 1: on the build host `docker stop` kills a container one
+second after SIGTERM (`Config.StopTimeout` 1, this Docker Desktop's default),
+and Ontos's compose files set no `stop_grace_period`. So `proc.restart` of a
+worker holding an import kills it mid-import; its 5 s grace never runs, and
+the job waits out its lease and is imported again by another worker. The
+worker-restart world passed anyway, because no oracle asks how a job was
+recovered.
+
+## The oracle
+
+`jobs.lease_lapse` (`cmd/oracle-job-leases`): a job's lease lapses only on a
+worker the world froze or killed. It reads the realized faults from the world
+file. Every fault other than `proc.restart` excuses its nodes, and any fault on
+`db` excuses every worker. It attributes each lapse to a node by the lease
+owner's hostname, which is the worker container's id, after waiting up to 60 s
+for jobs to finish. It sees only each job's latest attempt reason, so a lapse
+followed by a failed retry goes unseen: it can miss, and it is right when it
+fires.
+
+Checked before the lock on a scratch stack of the `e3efc36` images labelled as
+the harness labels them. worker-a was stopped mid-import (exit 137 after
+1.6 s) and worker-b reclaimed its job. Against the restart world's file the
+oracle reported `violated`, naming job 1 and worker-a; against the pause
+world's file, `ok` (the lapse is on the node that world froze); against a
+no-fault world's file, `violated`.
+
+## The fix it will test
+
+`stop_grace_period: 15s` on the worker services in `compose.yaml` and
+`gate/compose.gate.yaml`: the worker's 5 s grace, closing its database pool,
+and room. It is a separate commit after this one. The images do not change,
+so every world below runs on the `e3efc36` images.
+
+## Fault windows
+
+Both worker faults now start at 4 s, not 3 s (OBS-GATE-002, finding 3). The
+first imports are queued between 0.1 s and 2 s, depending on how long sign-in
+takes, and a worker claims within its 1 s poll, so by 4 s worker-a is holding
+its first bulk import, which runs 4 to 6 s. The pause becomes `4000..40000`:
+the lease lapses by 19 s, and worker-b reaches it by about 26 s here and 32 s on
+a runner half as fast. The restart becomes `4000..10000`.
+
+## The worlds and their predictions
+
+| World | Command | Without the fix | With the fix | Fix reverted |
+|---|---|---|---|---|
+| Worker restart | `thesis run --profile workers --fault "proc.restart(worker-a)@4000..10000"` | **FAIL, exit 1**: `jobs.lease_lapse` violated on worker-a's job; every other oracle ok | PASS | FAIL, as without |
+| Worker frozen | `thesis run --profile workers --fault "proc.pause(worker-a)@4000..40000"` | PASS; `jobs.lease_lapse` ok, excusing worker-a's lapse | PASS | not run |
+| Smoke | `thesis run --profile smoke` | PASS, 3 of 3; no lease lapses | PASS | not run |
+| App restart | `thesis run --profile stuckjob --fault "proc.restart(app)@3000..9000"` | PASS; no lease lapses (the app runs no worker in the gate) | PASS | not run |
+
+With the fix, SIGTERM reaches a worker that has 15 s. It either finishes its
+import within its 5 s grace, or aborts it and returns it to the queue as
+`interrupted: worker stopping`, in which case the next claim logs `attempt 2
+of 3: interrupted: worker stopping`. Worker-a's container exits 0.
+
+The failure without the fix is specific to a host whose stop timeout is below
+about 6 s. On a stock Docker Engine (10 s), as on the CI runner, the old
+compose files would likely pass. The fix makes both hosts behave alike.
+
+## What would make it come out differently
+
+| Outcome | What it would mean |
+|---|---|
+| The restart world passes without the fix | worker-a was holding nothing at 4 s, so the world missed. Not a pass for the old code; the record says which. |
+| It fails with the fix | The grace did not run, or the worker does not hand back its job on SIGTERM: a bug in the worker's shutdown. |
+| `jobs.lease_lapse` inconclusive | It could not place a lapse on a node, or read the jobs table. A defect in the oracle, not a finding about Ontos. |
+| Exit 4 | The lock was not taken after this commit. |

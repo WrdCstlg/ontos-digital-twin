@@ -1,16 +1,23 @@
 {
   "schema": "prothesis.lock/v1",
-  "manifest_sha": "sha256:db7a96cdc53efaa82e2296a671d3b305116dc3bf16986cd0c70ea378cb7461fe",
-  "reason": "Increment 1, job queue and workers: sync_jobs.settle also counts queued jobs as unsettled; health probes for worker-a, worker-b and their engines; proc.pause allowed; workers profile for faults under a backlog.",
-  "locked_at": "2026-09-25T02:42:06Z",
+  "manifest_sha": "sha256:9009721e9afa1951c9e95041613a5a96a4cd9ccec3ba853bc485d767f1e006f2",
+  "reason": "OBS-GATE-002 follow-up: add jobs.lease_lapse. A job's lease may lapse only on a worker the world froze or killed, so a worker asked to stop must finish its job or hand it back.",
+  "locked_at": "2026-09-25T03:23:05Z",
   "tool_version": "0.1.0-phase0",
   "builtin_options_fingerprint": "sha256:ca5cba3edb828e29bd4b1357c9ff2d86ae2e3eb6a6bd009a2430b076304064bf",
   "executables": [
     {
+      "oracle": "jobs.lease_lapse",
+      "cmd": "./bin/oracle-job-leases --node db --settle 60s",
+      "resolved": "bin/oracle-job-leases.exe",
+      "sha256": "sha256:c8ca24b8caec1ee2ca1fd78074ad7438a4710812e1acb64b6b54c09af3482b77",
+      "size": 5205504
+    },
+    {
       "oracle": "sync_jobs.settle",
       "cmd": "./bin/oracle-sync-jobs --node db --settle 30s --unsettled queued,running",
       "resolved": "bin/oracle-sync-jobs.exe",
-      "sha256": "sha256:3cae36205c3b7f87750bbeb436ce8f262c55fde2948151f79e64cd337242e960",
+      "sha256": "sha256:d2411ca82cd7dd378300634dd84c699b2944e08912a8acf1e258c4fba65d30a5",
       "size": 5117952
     }
   ],
@@ -39,6 +46,11 @@
         "path": "README.md",
         "sha256": "sha256:d2e89299128f66585618ec6a850a7dc79651381c0998997185f0001ea3b43efb",
         "size": 4419
+      },
+      {
+        "path": "jobs.lease_lapse.yaml",
+        "sha256": "sha256:8de27dfd83cc01fff3dedd8bbb8981b47e539786d2693c61a8d728955427b6e5",
+        "size": 161
       },
       {
         "path": "sync_jobs.settle.yaml",

@@ -1,0 +1,6 @@
+version: prothesis.oracle_def/v1
+name: jobs.lease_lapse
+class: safety
+valid_phases: [ASSERT]
+cmd: "./bin/oracle-job-leases --node db --settle 60s"
+timeout: 120s

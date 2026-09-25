@@ -63,20 +63,23 @@ jobs:
         working-directory: gate
         run: thesis run --profile stuckjob --fault 'proc.restart(app)@3000..9000'
 
-      # Pre-registration 2: the job queue and its workers.
+      # Pre-registrations 2 to 4. Both worker faults start at 4 s, when worker-a
+      # is holding its first bulk import; the pause is long enough for worker-b
+      # to finish its own import and reach worker-a's lapsed lease.
       - name: Worker restarted under a backlog
         working-directory: gate
-        run: thesis run --profile workers --fault 'proc.restart(worker-a)@3000..9000'
+        run: thesis run --profile workers --fault 'proc.restart(worker-a)@4000..10000'
 
-      # Pre-registration 3: frozen long enough for worker-b to reach the lapsed
-      # lease after finishing the bulk import it holds.
       - name: Worker frozen past its lease
         working-directory: gate
-        run: thesis run --profile workers --fault 'proc.pause(worker-a)@3000..38000'
+        run: thesis run --profile workers --fault 'proc.pause(worker-a)@4000..40000'
 
-      - name: Show verdicts and app logs on failure
+      - name: Show verdicts, app and worker logs on failure
         if: failure()
         working-directory: gate
         run: |
           for v in .prothesis/runs/*/verdict.json; do echo "== $v"; cat "$v"; done
-          for l in .prothesis/runs/*/world-*/logs/app.log; do echo "== $l"; tail -n 80 "$l"; done
+          for l in .prothesis/runs/*/world-*/logs/app.log .prothesis/runs/*/world-*/logs/worker-*.log; do
+            [ -f "$l" ] || continue
+            echo "== $l"; tail -n 80 "$l"
+          done
