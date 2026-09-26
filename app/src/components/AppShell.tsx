@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router';
 import {
   Bell,
   BookCopy,
+  Braces,
   ChevronDown,
   Compass,
   DatabaseZap,
@@ -74,6 +75,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { label: 'Operations', to: '/app/operations', icon: ServerCog },
       { label: 'Actions', to: '/app/actions', icon: Zap },
+      { label: 'Developers', to: '/app/developers', icon: Braces },
       { label: 'Audit Log', to: '/app/admin#audit', icon: ScrollText },
       { label: 'Admin', to: '/app/admin', icon: ShieldCheck, end: true, requiredRole: 'admin' },
       { label: 'Decisions & Architecture', to: '/app/decisions', icon: Split },
@@ -94,6 +96,7 @@ const CRUMB_NAMES: Record<string, string> = {
   operations: 'Operations',
   actions: 'Actions',
   landscape: 'Landscape',
+  developers: 'Developers',
 };
 
 function initials(name?: string | null) {

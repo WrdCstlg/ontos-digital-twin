@@ -22,6 +22,7 @@ const Guide = lazy(() => import('./pages/Guide'))
 const Operations = lazy(() => import('./pages/Operations'))
 const Actions = lazy(() => import('./pages/Actions'))
 const Landscape = lazy(() => import('./pages/Landscape'))
+const Developers = lazy(() => import('./pages/Developers'))
 
 function PageFallback() {
   return (
@@ -157,6 +158,14 @@ export default function App() {
               element={
                 <Suspense fallback={<PageFallback />}>
                   <Landscape />
+                </Suspense>
+              }
+            />
+            <Route
+              path="developers"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <Developers />
                 </Suspense>
               }
             />
