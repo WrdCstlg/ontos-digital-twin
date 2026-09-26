@@ -89,11 +89,50 @@ export async function authenticateRequest(headers: Headers): Promise<User> {
     });
   }
 
-  const user = await findUserById(claim.userId);
+  let user: User | null = null;
+  try {
+    user = (await findUserById(claim.userId)) ?? null;
+  } catch (err) {
+    if (claim.email && isDemoPersona(claim.email)) {
+      // Honoured without the database only while persona login is allowed: once
+      // it is switched off in production, a persona session never is.
+      if (env.isProduction && !env.allowDemoLogin) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Session expired or invalid. Please re-authenticate.",
+        });
+      }
+      const role = (claim.role ?? "admin") as DemoRole;
+      const persona = DEMO_PERSONAS[role];
+      return {
+        id: claim.userId,
+        email: claim.email,
+        name: persona?.name ?? "Demo User",
+        role,
+        avatar: null,
+        passwordHash: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastSignInAt: new Date(),
+      };
+    }
+    throw err;
+  }
+
   if (!user) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "User not found. Please re-login.",
+    });
+  }
+
+  // A token names the account it was issued for. One whose id now belongs to a
+  // different account, such as a persona sign-in made while the database was
+  // down (which could not look the account up), is no session for that account.
+  if (user.email && claim.email && user.email.trim().toLowerCase() !== claim.email.trim().toLowerCase()) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Session expired or invalid. Please re-authenticate.",
     });
   }
 
@@ -244,31 +283,44 @@ export async function loginDemoUser(role: DemoRole): Promise<{ user: User; token
     });
   }
 
-  // Re-asserting the role and a null hash on every login also repairs persona
-  // rows that earlier builds created with a password.
-  await upsertUser({
-    email: persona.email,
-    name: persona.name,
-    role,
-    passwordHash: null,
-    lastSignInAt: new Date(),
-  });
-
-  const user = await findUserByEmail(persona.email);
-  if (!user) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Demo user creation failed.",
+  let user: User | null = null;
+  try {
+    // Re-asserting the role and a null hash on every login also repairs persona
+    // rows that earlier builds created with a password.
+    await upsertUser({
+      email: persona.email,
+      name: persona.name,
+      role,
+      passwordHash: null,
+      lastSignInAt: new Date(),
     });
-  }
 
-  // Workspace-scoped queries refuse non-admins who are not members, so the
-  // persona joins the demo workspace in its own role.
-  const workspace = await getDemoWorkspace();
-  await getDb()
-    .insert(workspaceMembers)
-    .values({ workspaceId: workspace.id, userId: user.id, role })
-    .onDuplicateKeyUpdate({ set: { role } });
+    user = (await findUserByEmail(persona.email)) ?? null;
+    if (!user) {
+      throw new Error("Demo user creation failed.");
+    }
+
+    // Workspace-scoped queries refuse non-admins who are not members, so the
+    // persona joins the demo workspace in its own role.
+    const workspace = await getDemoWorkspace();
+    await getDb()
+      .insert(workspaceMembers)
+      .values({ workspaceId: workspace.id, userId: user.id, role })
+      .onDuplicateKeyUpdate({ set: { role } });
+  } catch (err) {
+    console.warn("[auth] Database offline or unavailable during demo login, using fallback in-memory persona:", err instanceof Error ? err.message : String(err));
+    user = {
+      id: role === "admin" ? 1 : role === "ontologist" ? 2 : role === "editor" ? 3 : 4,
+      email: persona.email,
+      name: persona.name,
+      role,
+      avatar: null,
+      passwordHash: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSignInAt: new Date(),
+    };
+  }
 
   const token = await signSessionToken({
     userId: user.id,
