@@ -43,6 +43,13 @@
       "when": 1790308255712,
       "tag": "0005_action_types",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1790313135161,
+      "tag": "0006_api_tokens",
+      "breakpoints": true
     }
   ]
 }

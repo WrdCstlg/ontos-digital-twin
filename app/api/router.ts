@@ -12,6 +12,7 @@ import { iotRouter } from "./iotRouter";
 import { operationsRouter } from "./operationsRouter";
 import { actionsRouter } from "./actionsRouter";
 import { searchRouter } from "./searchRouter";
+import { developerRouter } from "./developerRouter";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
@@ -28,6 +29,7 @@ export const appRouter = createRouter({
   operations: operationsRouter,
   actions: actionsRouter,
   search: searchRouter,
+  developer: developerRouter,
 });
 
 export type AppRouter = typeof appRouter;

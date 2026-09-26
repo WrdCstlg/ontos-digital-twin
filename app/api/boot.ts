@@ -18,6 +18,7 @@ import { sessionUser } from "./auth/service";
 import { sparqlRateLimiter } from "./lib/rateLimit";
 import { isReadOnlySparql, MAX_SPARQL_LENGTH } from "./lib/sparqlGuard";
 import { resolveUserWorkspace } from "./services/workspaceGuard";
+import { publicApi } from "./publicApiRoutes";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -302,6 +303,8 @@ app.use("/api/trpc/*", async (c) => {
     createContext,
   });
 });
+// The public Ontology API: API tokens, and sessions for reads (publicApiRoutes.ts).
+app.route("/api/v1", publicApi);
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 // Initialize background IoT broker connectors if configured

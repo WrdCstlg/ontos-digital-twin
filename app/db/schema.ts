@@ -367,6 +367,43 @@ export const actionSubmissions = mysqlTable(
 );
 export type ActionSubmission = typeof actionSubmissions.$inferSelect;
 
+/* ─────────────────────────────────────────────────────────────
+ * API tokens for the public Ontology API (/api/v1). A token acts
+ * in one workspace with a role no higher than its creator's, and
+ * optionally a module scope. Only a hash is stored; the token is
+ * shown once, when it is created.
+ * ───────────────────────────────────────────────────────────── */
+export const apiTokens = mysqlTable(
+  "api_tokens",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 128 }).notNull(),
+    // The token's first characters, shown so people can tell tokens apart.
+    prefix: varchar("prefix", { length: 32 }).notNull(),
+    tokenHash: varchar("tokenHash", { length: 64 }).notNull(),
+    role: mysqlEnum("role", ["viewer", "editor", "ontologist", "admin"]).notNull().default("viewer"),
+    // "read" and/or "actions".
+    scopes: json("scopes").notNull(),
+    moduleScope: json("moduleScope"),
+    createdBy: varchar("createdBy", { length: 255 }).notNull(),
+    createdByUserId: bigint("createdByUserId", { mode: "number", unsigned: true }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    expiresAt: timestamp("expiresAt"),
+    lastUsedAt: timestamp("lastUsedAt"),
+    revokedAt: timestamp("revokedAt"),
+  },
+  (table) => [
+    uniqueIndex("api_tokens_hash").on(table.tokenHash),
+    index("api_tokens_ws").on(table.workspaceId, table.id),
+  ],
+);
+export type ApiToken = typeof apiTokens.$inferSelect;
+
 export const kgNodes = mysqlTable(
   "kg_nodes",
   {
