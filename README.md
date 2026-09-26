@@ -42,8 +42,10 @@ from working software, and the defects that passed every automated gate.
 - **Insight engine** — 12 deterministic anomaly rules over the graph (no LLM involved).
 - **Digital twins** — twin registry, live telemetry time series, topology subgraphs, and
   Azure DTDL v3 JSON export.
-- **Data mapping** — CSV → ontology class/property mapping with pre-commit SHACL checks,
-  imported by a background worker.
+- **Data mapping** — CSV files and PostgreSQL or MySQL tables mapped to ontology classes
+  and properties, with pre-commit SHACL checks, imported by a background worker.
+- **Global search** — ⌘K / Ctrl+K searches instances, classes, properties, insights,
+  action types and connectors in the current workspace.
 - **Background jobs** — a durable queue in MySQL with leases and retries; any number of
   worker processes; a worker that dies mid-job has its job reclaimed. The Operations
   page shows the queue and the workers.
@@ -585,6 +587,13 @@ These are tracked, known behaviours rather than surprises:
   same object. The object's provenance then shows the import, not the action.
 - **An action checked against SHACL is refused while the engine is offline**, rather than
   applied unchecked.
+- **SQL connector credentials are stored in the database.** They live in the connector's
+  configuration, are used only by the server, and are never sent to a client; there is no
+  secrets vault yet. TLS to a SQL source checks the server's certificate against the
+  system's trusted authorities, so a server with a self-signed certificate is refused.
+- **Persona sessions outlive a database outage.** While the database is down, the server
+  answers a persona session from its token, unless persona login is off in production, so
+  the web app's three-minute grace period does not sign a persona user out.
 - **Webhook addresses are checked when the job runs.** A host whose DNS answer changes
   between that check and the request is not caught.
 - **Some state still lives in the API process.** Background jobs are safe to spread
