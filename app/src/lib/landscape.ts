@@ -8,7 +8,7 @@
  * reading of that documentation, not a benchmark.
  */
 
-export const LANDSCAPE_AS_OF = "2026-09-25";
+export const LANDSCAPE_AS_OF = "2026-09-26";
 
 /* ── architecture ────────────────────────────────────────────── */
 
@@ -43,6 +43,7 @@ export const services: Service[] = [
     responsibilities: [
       "Authentication, workspace isolation, roles",
       "Ontology, graph, twin and insight APIs; SPARQL 1.1 endpoint",
+      "The public Ontology API (`/api/v1`) for other systems, with API tokens",
       "Action types: checks a submission, then applies it with its record and audit entry in one transaction",
       "Queues background work instead of running it in the request",
       "Still in this process: MQTT connections, reasoning runs, insight scans",
@@ -101,6 +102,14 @@ export const services: Service[] = [
     responsibilities: ["Questions to read-only SPARQL, checked before it runs"],
   },
   {
+    id: "systems",
+    name: "Other systems",
+    kind: "external",
+    runtime: "Any HTTP client, or the TypeScript client generated from the ontology",
+    responsibilities: ["Read objects by type and submit actions through `/api/v1`, with an API token"],
+    since: "Increment 3",
+  },
+  {
     id: "webhooks",
     name: "Webhook receivers",
     kind: "external",
@@ -119,6 +128,7 @@ export const links: Link[] = [
   { from: "worker", to: "engine-worker", label: "SHACL" },
   { from: "app", to: "llm", label: "NLQ" },
   { from: "worker", to: "webhooks", label: "action side effects" },
+  { from: "systems", to: "app", label: "REST /api/v1" },
 ];
 
 export type RoadmapStatus = "shipped" | "next" | "planned";
@@ -142,7 +152,7 @@ export const roadmap: { increment: number; title: string; status: RoadmapStatus;
   {
     increment: 3,
     title: "Ontology API and typed SDK",
-    status: "next",
+    status: "shipped",
     summary:
       "A versioned public API described by OpenAPI and generated from the ontology, with a typed TypeScript client: the contract other systems bind to.",
   },
@@ -198,8 +208,8 @@ export const capabilities: Capability[] = [
   {
     area: "Programmatic access",
     palantir: "Ontology SDK: client libraries generated from the ontology, typed per object type.",
-    ontos: "A tRPC API for its own web app and a read-only SPARQL 1.1 endpoint. No public, versioned API or generated SDK yet.",
-    status: "planned",
+    ontos: "A public, versioned REST API (`/api/v1`) described by an OpenAPI 3.1 document and a typed TypeScript client, both generated from the ontology, with API tokens that carry a role, scopes and module scopes. A read-only SPARQL 1.1 endpoint besides.",
+    status: "has",
     increment: 3,
   },
   {

@@ -124,15 +124,16 @@ is [`app/src/lib/landscape.ts`](app/src/lib/landscape.ts). In short:
 
 | Comparable | Partial | Gap or planned | Different by design |
 |---|---|---|---|
-| Semantic model, governed edits, validation, time series and twins, audit | Interfaces, exploration, data integration, background execution, change management, access control, applications, AI | A public API and SDK (increment 3), logic on the ontology, distributed scale | Open W3C standards end to end; the semantic layer only |
+| Semantic model, governed edits, validation, programmatic access (API and SDK), time series and twins, audit | Interfaces, exploration, data integration, background execution, change management, access control, applications, AI | Logic on the ontology, distributed scale | Open W3C standards end to end; the semantic layer only |
 
 The architecture is changing one increment at a time:
 
 1. **Worker service and job queue** (shipped): long-running work leaves the web process.
 2. **Action types** (shipped): named, parameterised edits with validation, permissions and
    an audited record of every submission; side effects run on the worker.
-3. **Ontology API and typed SDK** (next): a versioned public API generated from the
-   ontology, and a typed client for the systems that bind to it.
+3. **Ontology API and typed SDK** (shipped): a versioned public API generated from the
+   ontology, and a typed client for the systems that bind to it. See
+   [Ontology API](#ontology-api).
 
 ---
 
@@ -471,11 +472,13 @@ when inferred — to set them apart from property arrows.
 
 ## API surface
 
-Everything is exposed over tRPC at `/api/trpc/*` — see `api/router.ts` for the full
-router tree. Three plain HTTP routes exist alongside it:
+The web app talks to the server over tRPC at `/api/trpc/*` — see `api/router.ts` for the
+full router tree. Other systems use the [Ontology API](#ontology-api) at `/api/v1`. Three
+more plain HTTP routes exist alongside them:
 
 | Route | Auth | Description |
 |---|---|---|
+| `/api/v1/*` | API token; session for reads | The public Ontology API: objects by type, action submissions, OpenAPI document, TypeScript client |
 | `GET /health`, `GET /api/health` | none | Liveness: database and semantic engine status |
 | `POST /api/sparql` | session | Read-only SPARQL 1.1 query against the loaded graph |
 | `POST /api/iot/telemetry` | `x-iot-api-key` | IoT telemetry ingestion into the key's workspace; off until a key is set |
@@ -491,6 +494,53 @@ always answer from current data. Pass `x-auto-sync: false` to skip that re-sync 
 engine already holds your workspace (e.g. multiple queries in one batch). If it holds
 anything else, the endpoint syncs anyway: a skipped sync can return data as old as the
 last sync, but never another workspace's.
+
+### Ontology API
+
+`/api/v1` is the contract other systems bind to. It is generated from the workspace's
+ontology: every object type gets a list and a get, every active action type a preview and
+a submit. Reads return objects by type; writes go only through action types, so every
+change is checked, recorded and audited like one made in the app. The **Developers** page
+creates tokens, shows the endpoints, and downloads the client.
+
+| Endpoint | Scope | Description |
+|---|---|---|
+| `GET /ontology` | read | Modules, object types with their properties and links (inherited ones included), action types |
+| `GET /openapi.json` | read | The OpenAPI 3.1 document for this ontology |
+| `GET /sdk.ts` | read | A TypeScript client for this ontology: one file, no dependencies |
+| `GET /objects/{prefix}/{Type}` | read | Objects of a type and its subclasses: `limit` (1–200), `cursor`, `q`, `filter[property]=value` |
+| `GET /objects/{prefix}/{Type}/{id}` | read | The object `{prefix}:{Type}/{id}`, if it is of that type |
+| `GET /objects?iri=…` | read | Any object by its IRI |
+| `GET /actions` | read | Action types, with whether this token may submit each |
+| `POST /actions/{key}/preview` | actions | Every change a submission would make, and every reason it would be refused |
+| `POST /actions/{key}/submit` | actions | Applies the action, or records why not: a rejection is an answer, not an error |
+| `GET /submissions/{id}` | read | One submission |
+
+**Tokens.** Send `Authorization: Bearer ontos_…`. A token belongs to one workspace and
+carries a role, scopes (`read`, `actions`), an optional module scope and an optional expiry.
+It never acts above what its creator may do there now: the lower role wins, module scopes
+narrow each other, and a creator who loses access takes their tokens with them. As for
+members, a module scope limits which action types a token may submit; reads cover the
+workspace. Only a SHA-256 hash is stored; the token itself is shown once, when it is
+created. A signed-in
+session may use the read endpoints, which is how the Developers page reads them; writes
+need a token.
+
+**Answers.** Every response carries `x-ontos-ontology-version`, and the client warns once
+when it differs from the version the client was generated from. Errors are JSON,
+`{ "error": { "code", "message", "problems"? } }`, with a status that says what to do:
+400 fix the request, 401 get a valid token, 403 this token or role may not, 404 no such
+thing, 409 the objects changed meanwhile (submit again), 429 slow down (`retry-after`),
+503 retry shortly. A token that could not be checked, because the database is away, is
+answered 503, never 401. Each token may make 300 requests a minute.
+
+```ts
+import { OntosClient } from "./ontos-client"; // from GET /api/v1/sdk.ts
+
+const ontos = new OntosClient({ baseUrl: "https://ontos.example.com", token: process.env.ONTOS_TOKEN! });
+for await (const person of ontos.iterate("hr:Person")) console.log(person.label);
+const result = await ontos.actions.submit("renew-contract", { contract: "lgl:Contract/C-0042", newEndDate: "2027-06-30" });
+```
 
 ---
 
