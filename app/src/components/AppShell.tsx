@@ -29,6 +29,7 @@ import { trpc } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useNow } from '@/hooks/useNow';
+import { CommandPalette, useCommandPalette } from '@/components/CommandPalette';
 
 interface NavItem {
   label: string;
@@ -188,6 +189,7 @@ function ShellStatus() {
  */
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
+  const cmdPalette = useCommandPalette();
   const { user, isAuthenticated, isLoading, isReconnecting } = useAuth();
   const location = useLocation();
   const seg = location.pathname.split('/').filter(Boolean)[1];
@@ -431,9 +433,10 @@ export function AppShell() {
             <span className="truncate font-medium text-text-primary">{crumb}</span>
           </nav>
 
-          {/* ⌘K search placeholder */}
+          {/* ⌘K search trigger */}
           <button
             type="button"
+            onClick={() => cmdPalette.setOpen(true)}
             className="mx-auto hidden w-full max-w-md items-center gap-2 rounded-lg border border-border-hairline bg-bg-inset px-3 py-1.5 text-left transition-colors hover:border-border-glow sm:flex"
           >
             <Search className="size-3.5 text-text-muted" />
@@ -473,6 +476,9 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {/* Global ⌘K command palette */}
+      <CommandPalette open={cmdPalette.open} onOpenChange={cmdPalette.setOpen} />
     </div>
   );
 }

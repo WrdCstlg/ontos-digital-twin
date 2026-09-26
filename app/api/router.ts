@@ -11,6 +11,7 @@ import { twinRouter } from "./twinRouter";
 import { iotRouter } from "./iotRouter";
 import { operationsRouter } from "./operationsRouter";
 import { actionsRouter } from "./actionsRouter";
+import { searchRouter } from "./searchRouter";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
@@ -26,6 +27,8 @@ export const appRouter = createRouter({
   iot: iotRouter,
   operations: operationsRouter,
   actions: actionsRouter,
+  search: searchRouter,
 });
 
 export type AppRouter = typeof appRouter;
+
