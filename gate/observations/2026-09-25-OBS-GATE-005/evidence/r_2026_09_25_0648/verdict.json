@@ -1,0 +1,176 @@
+{
+  "schema": "prothesis.verdict/v1",
+  "run_id": "r_2026_09_25_0648",
+  "profile": "actions",
+  "commit": "a47caf6",
+  "verdict": "FAIL",
+  "budget": {
+    "wall_s": 300,
+    "used_s": 50,
+    "worlds_planned": 1,
+    "worlds_run": 1
+  },
+  "violations": [
+    {
+      "id": "v1",
+      "oracle": "session.honoured",
+      "class": "safety",
+      "severity": "high",
+      "phase": "DRIVE",
+      "first_seen_ms": 5390,
+      "explanation": "6 operation(s) of a signed-in client were refused as signed out (first at t+5390ms: rejected: HTTP 401 Authentication required). The session was valid throughout, so the server answered \"not signed in\" when it could not tell; the web app takes that answer as a sign-out. 213 operation(s) completed (action 164, sync 49).",
+      "witness": {
+        "first_seen_ms": 5390,
+        "key": "session",
+        "oracle_argv": [
+          "./bin/oracle-session"
+        ],
+        "oracle_definition": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\oracles\\session.honoured.yaml",
+        "phase": "DRIVE",
+        "refused_as_signed_out": [
+          {
+            "op_id": 82,
+            "f": "sync",
+            "t_ms": 5390,
+            "error": "rejected: HTTP 401 Authentication required"
+          },
+          {
+            "op_id": 83,
+            "f": "action",
+            "t_ms": 5595,
+            "error": "rejected: HTTP 401 Authentication required"
+          },
+          {
+            "op_id": 84,
+            "f": "action",
+            "t_ms": 5798,
+            "error": "rejected: HTTP 401 Authentication required"
+          },
+          {
+            "op_id": 85,
+            "f": "action",
+            "t_ms": 6002,
+            "error": "rejected: HTTP 401 Authentication required"
+          },
+          {
+            "op_id": 86,
+            "f": "sync",
+            "t_ms": 6220,
+            "error": "rejected: HTTP 401 Authentication required"
+          },
+          {
+            "op_id": 87,
+            "f": "action",
+            "t_ms": 6424,
+            "error": "rejected: HTTP 401 Authentication required"
+          }
+        ],
+        "stderr_path": "C:\\AI Projects\\Ontology + Digital Twin Build\\gate\\.prothesis\\runs\\r_2026_09_25_0648\\world-0001\\oracles\\session.honoured.stderr.log"
+      },
+      "minimal_repro": null,
+      "shrink": {
+        "attempted": false,
+        "faults_before": 0,
+        "faults_after": 0,
+        "ops_before": 0,
+        "ops_after": 0,
+        "surviving_faults": []
+      },
+      "causal_timeline": [
+        {
+          "t_ms": -22564,
+          "event": "phase",
+          "detail": "BOOT begins (window -22564..-1 ms)"
+        },
+        {
+          "t_ms": -1,
+          "event": "phase",
+          "detail": "SEED begins (window -1..0 ms)"
+        },
+        {
+          "t_ms": 0,
+          "event": "phase",
+          "detail": "DRIVE begins (window 0..12000 ms)"
+        },
+        {
+          "t_ms": 0,
+          "event": "phase",
+          "detail": "PERTURB begins (window 0..12000 ms)"
+        },
+        {
+          "t_ms": 5000,
+          "event": "fault",
+          "detail": "inject proc.restart(db)@5000..12000 -> db"
+        },
+        {
+          "t_ms": 5164,
+          "event": "log",
+          "node": "app",
+          "detail": "[server error] Error: Failed query: select `workspace_members`.`id`, `workspace_members`.`workspaceId`, `workspace_members`.`userId`, `workspace_members`.`role`, `workspace_members`.`moduleScope`, `workspace_members`.`createdAt`, `workspace…"
+        },
+        {
+          "t_ms": 5165,
+          "event": "log",
+          "node": "app",
+          "detail": "cause: Error: Server shutdown in progress"
+        },
+        {
+          "t_ms": 5169,
+          "event": "log",
+          "node": "app",
+          "detail": "[server error] Error: Failed query: rollback"
+        },
+        {
+          "t_ms": 5169,
+          "event": "log",
+          "node": "app",
+          "detail": "cause: Error: Connection lost: The server closed the connection."
+        },
+        {
+          "t_ms": 5169,
+          "event": "log",
+          "node": "app",
+          "detail": "fatal: true,"
+        },
+        {
+          "t_ms": 5390,
+          "event": "oracle",
+          "detail": "session.honoured (safety) reported a violation in DRIVE: 6 operation(s) of a signed-in client were refused as signed out (first at t+5390ms: rejected: HTTP 401 Authentication required). The session was valid throughout, so the server answer…"
+        },
+        {
+          "t_ms": 12000,
+          "event": "phase",
+          "detail": "HEAL begins (window 12000..18603 ms)"
+        },
+        {
+          "t_ms": 12000,
+          "event": "fault",
+          "detail": "withdraw proc.restart(db)@5000..12000 -> db"
+        },
+        {
+          "t_ms": 18603,
+          "event": "phase",
+          "detail": "QUIESCE begins (window 18603..20664 ms)"
+        },
+        {
+          "t_ms": 20664,
+          "event": "phase",
+          "detail": "ASSERT begins (window 20664..20664 ms)"
+        }
+      ],
+      "suspect": null
+    }
+  ],
+  "coverage": {
+    "new_templates": 0,
+    "cum_templates": 0,
+    "new_states": 0,
+    "cum_states": 0
+  },
+  "coverage_delta_vs_baseline": null,
+  "oracle_lock": {
+    "status": "ok",
+    "manifest_sha": "sha256:1483bfef0e310f75115566f770509cd238f04cdd0242025dcb4dfb15346d1e10"
+  },
+  "artifacts": ".prothesis/runs/r_2026_09_25_0648/"
+}

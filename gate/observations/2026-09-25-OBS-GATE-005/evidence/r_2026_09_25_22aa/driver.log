@@ -1,0 +1,6 @@
+2026-09-25T04:55:04.8756086Z start: profile=actions seed=16535565051189999694 app=http://127.0.0.1:13000 email=admin@acme-ontology.com
+2026-09-25T04:55:04.9385416Z runnable CSV mappings: sync [1 4 5 6], sync_bulk [7 8]
+2026-09-25T04:55:04.9563532Z people for action: 100
+2026-09-25T04:55:22.3287385Z drain: stop received
+2026-09-25T04:55:22.3467751Z profile run finished (stopped=true)
+2026-09-25T04:55:22.3467751Z done: ok=76 fail=7 info=4

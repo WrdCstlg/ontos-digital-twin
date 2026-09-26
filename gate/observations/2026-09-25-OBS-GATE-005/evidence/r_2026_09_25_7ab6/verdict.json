@@ -1,0 +1,26 @@
+{
+  "schema": "prothesis.verdict/v1",
+  "run_id": "r_2026_09_25_7ab6",
+  "profile": "actions",
+  "commit": "a47caf6",
+  "verdict": "PASS",
+  "budget": {
+    "wall_s": 300,
+    "used_s": 49,
+    "worlds_planned": 1,
+    "worlds_run": 1
+  },
+  "violations": [],
+  "coverage": {
+    "new_templates": 0,
+    "cum_templates": 0,
+    "new_states": 0,
+    "cum_states": 0
+  },
+  "coverage_delta_vs_baseline": null,
+  "oracle_lock": {
+    "status": "ok",
+    "manifest_sha": "sha256:1483bfef0e310f75115566f770509cd238f04cdd0242025dcb4dfb15346d1e10"
+  },
+  "artifacts": ".prothesis/runs/r_2026_09_25_7ab6/"
+}
