@@ -5,208 +5,283 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { trpc } from "@/providers/trpc";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
+import { announcePendingChange, outageClock, pendingSignOut, withSessionLock } from "@/lib/sessionGrace";
+import { ShieldCheck, PencilRuler, DatabaseZap, Waypoints, ArrowRight, Loader2 } from "lucide-react";
+
+/** A new session: the old one's sign-out and outage no longer apply. */
+function signedIn() {
+  pendingSignOut.clear();
+  outageClock.reset();
+  announcePendingChange();
+}
 
 const DEMO_PERSONAS = [
   {
     role: "admin" as const,
     name: "Elena Cortez",
     title: "Chief Data Officer",
-    description: "Full system access — ontology, twin, admin controls",
+    email: "demo-admin@acme-ontology.com",
+    description: "Full system governance, ontology lifecycle, twin operations & platform administration",
     color: "#FB7185",
+    badge: "Full Governance",
     initials: "EC",
+    icon: ShieldCheck,
+    path: "/app",
+    targetLabel: "System Dashboard",
   },
   {
     role: "ontologist" as const,
     name: "Dr. James Wei",
-    title: "Ontology Engineer",
-    description: "Class/property editing, version management, SHACL",
+    title: "Lead Ontology Engineer",
+    email: "demo-ontologist@acme-ontology.com",
+    description: "Schema modeling, SHACL constraints, OWL classes & semantic relationship validation",
     color: "#A78BFA",
+    badge: "Ontology Studio",
     initials: "JW",
+    icon: PencilRuler,
+    path: "/app/studio",
+    targetLabel: "Ontology Studio",
   },
   {
     role: "editor" as const,
     name: "Priya Sharma",
-    title: "Data Steward",
-    description: "Mapping, sync jobs, knowledge graph curation",
+    title: "Data Steward & Knowledge Engineer",
+    email: "demo-editor@acme-ontology.com",
+    description: "Data mapping, source synchronization, entity linking & knowledge curation",
     color: "#34D399",
+    badge: "Mapping & Sync",
     initials: "PS",
+    icon: DatabaseZap,
+    path: "/app/mapping",
+    targetLabel: "Mapping & Sync",
   },
   {
     role: "viewer" as const,
     name: "Alex Morgan",
-    title: "Compliance Analyst",
-    description: "Read-only — dashboards, insights, graph explorer",
+    title: "Compliance Analyst & Explorer",
+    email: "demo-viewer@acme-ontology.com",
+    description: "Read-only access — graph analytics, twin telemetry visualization & compliance dashboards",
     color: "#38BDF8",
+    badge: "Graph Explorer",
     initials: "AM",
+    icon: Waypoints,
+    path: "/app/explorer",
+    targetLabel: "Graph Explorer",
   },
 ];
 
 export default function Login() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const location = useLocation();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  
+  // Signed out because Ontos could not check the session for three minutes.
+  const [afterOutage] = useState(
+    () => (location.state as { signedOutBecause?: string } | null)?.signedOutBecause === "outage" || pendingSignOut.get(),
+  );
 
   const utils = trpc.useUtils();
 
-  const demoLoginMut = trpc.auth.demoLogin.useMutation({
-    onSuccess: async () => {
-      await utils.auth.me.invalidate();
-      navigate("/app");
-    },
-    onError: (err) => {
-      setError(err.message);
-      setLoading(null);
-    },
-  });
+  const demoLoginMut = trpc.auth.demoLogin.useMutation();
+  const loginMut = trpc.auth.login.useMutation();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
-  const loginMut = trpc.auth.login.useMutation({
-    onSuccess: async () => {
-      await utils.auth.me.invalidate();
-      navigate("/app");
-    },
-    onError: (err) => {
-      setError(err.message);
-      setLoading(null);
-    },
-  });
+  const fromPath = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
 
-  const handleDemoLogin = (role: "admin" | "ontologist" | "editor" | "viewer") => {
+  /**
+   * Signs in. The page opens once the server has set the session cookie, so its
+   * first requests are already signed in, and with the user the server
+   * returned. The old session's pending sign-out and outage are cleared only
+   * then, under the session lock (I5): a sign-in the server refuses, or cannot
+   * answer, leaves them as they were and says why.
+   */
+  const signIn = async (kind: string, request: () => ReturnType<typeof loginMut.mutateAsync>, destination: string) => {
     setError(null);
-    setLoading(role);
-    demoLoginMut.mutate({ role });
+    setLoading(kind);
+    try {
+      const user = await withSessionLock(async () => {
+        const accepted = await request();
+        signedIn();
+        return accepted;
+      });
+      try {
+        localStorage.setItem("ontos:active-persona", JSON.stringify(user));
+      } catch {
+        // Storage unavailable or disabled
+      }
+      utils.auth.me.setData(undefined, user);
+      navigate(destination);
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : "Sign-in failed. Please try again.");
+      setLoading(null);
+    }
   };
+
+  const handleDemoLogin = (p: (typeof DEMO_PERSONAS)[number]) =>
+    signIn(
+      p.role,
+      () => demoLoginMut.mutateAsync({ role: p.role }),
+      fromPath && fromPath !== "/login" && (fromPath !== "/app" || p.path === "/app") ? fromPath : p.path,
+    );
 
   const handleCredentialLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setLoading("credentials");
-    loginMut.mutate({ email, password });
+    void signIn(
+      "credentials",
+      () => loginMut.mutateAsync({ email, password }),
+      fromPath && fromPath !== "/login" ? fromPath : "/app",
+    );
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 relative overflow-hidden">
-      {/* Ambient background effects */}
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 relative overflow-hidden p-4">
+      {/* Ambient background glow effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/5 blur-[120px]" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[40%] h-[40%] rounded-full bg-teal-500/5 blur-[120px]" />
+        <div className="absolute top-[-15%] left-[-10%] w-[55%] h-[55%] rounded-full bg-indigo-500/10 blur-[140px]" />
+        <div className="absolute bottom-[-15%] right-[-10%] w-[50%] h-[50%] rounded-full bg-teal-500/10 blur-[140px]" />
+        <div className="absolute top-[35%] right-[20%] w-[30%] h-[30%] rounded-full bg-purple-500/5 blur-[120px]" />
       </div>
 
-      <div className="relative z-10 w-full max-w-lg px-4">
-        {/* Branding */}
+      <div className="relative z-10 w-full max-w-2xl">
+        {/* Platform Branding */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-teal-400 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <span className="text-white font-bold text-lg">O</span>
+          <div className="inline-flex items-center gap-3 mb-3">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-teal-400 flex items-center justify-center shadow-xl shadow-indigo-500/20 ring-1 ring-white/20">
+              <span className="text-white font-extrabold text-xl tracking-tight">O</span>
             </div>
-            <span className="text-2xl font-bold text-white tracking-tight">
+            <span className="text-3xl font-extrabold text-white tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-300 bg-clip-text">
               Ontos
             </span>
           </div>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm font-medium text-slate-400">
             Enterprise Ontology & Digital Twin Platform
           </p>
         </div>
 
-        <Card className="border-slate-800 bg-slate-900/80 backdrop-blur-xl shadow-2xl">
-          <CardHeader className="text-center pb-2">
-            <CardTitle className="text-lg font-semibold text-white">
+        {afterOutage && (
+          <div role="status" className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 shadow-lg backdrop-blur-md">
+            You were signed out because Ontos could not check your session for three minutes. Click a persona to resume immediately.
+          </div>
+        )}
+
+        <Card className="border-slate-800/80 bg-slate-900/75 backdrop-blur-2xl shadow-2xl shadow-black/60 ring-1 ring-white/5">
+          <CardHeader className="text-center pb-4 pt-6">
+            <CardTitle className="text-xl font-bold text-white tracking-tight">
               Select a Persona
             </CardTitle>
-            <p className="text-xs text-slate-400 mt-1">
-              Choose a role to explore the platform instantly
+            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+              Choose a role to enter its designated workspace immediately
             </p>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {/* Demo Personas Grid */}
-            <div className="grid grid-cols-2 gap-2">
-              {DEMO_PERSONAS.map((p) => (
-                <button
-                  key={p.role}
-                  onClick={() => handleDemoLogin(p.role)}
-                  disabled={!!loading}
-                  className="group relative p-3 rounded-lg border border-slate-700/50 bg-slate-800/50 hover:bg-slate-800 hover:border-slate-600 transition-all duration-200 text-left disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <div
-                      className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                      style={{ backgroundColor: p.color }}
-                    >
+          <CardContent className="space-y-4 px-6 pb-6">
+            {/* Personas 2x2 Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {DEMO_PERSONAS.map((p) => {
+                const IconComponent = p.icon;
+                return (
+                  <button
+                    key={p.role}
+                    onClick={() => void handleDemoLogin(p)}
+                    disabled={!!loading}
+                    aria-busy={loading === p.role}
+                    className="group relative p-4 rounded-xl border border-slate-800/90 bg-slate-850/60 hover:bg-slate-800/90 hover:border-slate-700/80 hover:shadow-xl hover:shadow-indigo-950/30 hover:-translate-y-0.5 transition-all duration-200 text-left disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold text-white shrink-0 shadow-md ring-1 ring-white/15"
+                          style={{
+                            backgroundColor: p.color,
+                            boxShadow: `0 4px 14px ${p.color}33`,
+                          }}
+                        >
+                          {p.initials}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-white group-hover:text-indigo-200 transition-colors">
+                            {p.name}
+                          </div>
+                          <div className="text-[11px] text-slate-400 font-medium truncate">
+                            {p.title}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-slate-700 bg-slate-800/80 text-slate-300">
+                        {p.badge}
+                      </span>
+                    </div>
+
+                    <p className="text-[11.5px] text-slate-400 leading-relaxed mb-3 line-clamp-2">
+                      {p.description}
+                    </p>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-[11px] font-medium text-slate-400 group-hover:text-indigo-300 transition-colors">
+                      <span className="flex items-center gap-1.5">
+                        <IconComponent className="size-3.5" />
+                        {p.targetLabel}
+                      </span>
                       {loading === p.role ? (
-                        <svg className="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
+                        <Loader2 className="size-3.5 animate-spin" aria-label="Signing in" />
                       ) : (
-                        p.initials
+                        <ArrowRight className="size-3.5 transform group-hover:translate-x-1 transition-transform" />
                       )}
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-white truncate">
-                        {p.name}
-                      </div>
-                      <div className="text-[10px] text-slate-400 uppercase tracking-wider">
-                        {p.title}
-                      </div>
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-slate-500 leading-tight">
-                    {p.description}
-                  </p>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Error */}
             {error && (
-              <div className="p-2 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 text-xs text-center">
+              <div role="alert" className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs text-center">
                 {error}
               </div>
             )}
 
-            <div className="relative">
-              <Separator className="bg-slate-700/50" />
+            {/* Credentials: the way in when persona login is off, as it is in production */}
+            <div className="relative py-1">
+              <Separator className="bg-slate-800/80" />
               <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-900 px-3 text-[10px] text-slate-500 uppercase tracking-widest">
                 or sign in
               </span>
             </div>
-
-            {/* Credentials Form */}
             <form onSubmit={handleCredentialLogin} className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="login-email" className="text-xs text-slate-400">
-                  Email
-                </Label>
-                <Input
-                  id="login-email"
-                  type="email"
-                  placeholder="you@company.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="h-9 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20"
-                  autoComplete="email"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="login-password" className="text-xs text-slate-400">
-                  Password
-                </Label>
-                <Input
-                  id="login-password"
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="h-9 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20"
-                  autoComplete="current-password"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="login-email" className="text-xs text-slate-400">
+                    Email
+                  </Label>
+                  <Input
+                    id="login-email"
+                    type="email"
+                    placeholder="you@company.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="h-9 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20"
+                    autoComplete="email"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="login-password" className="text-xs text-slate-400">
+                    Password
+                  </Label>
+                  <Input
+                    id="login-password"
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="h-9 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20"
+                    autoComplete="current-password"
+                  />
+                </div>
               </div>
               <Button
                 type="submit"
                 className="w-full h-9 bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
-                disabled={!!loading || !email}
+                disabled={!!loading || !email || !password}
               >
                 {loading === "credentials" ? "Signing in…" : "Sign In"}
               </Button>
@@ -214,7 +289,7 @@ export default function Login() {
           </CardContent>
         </Card>
 
-        <p className="text-center text-[11px] text-slate-600 mt-6">
+        <p className="text-center text-[11px] text-slate-600 mt-6 tracking-wide">
           Ontos v1.0 · Enterprise Ontology & Digital Twin Platform
         </p>
       </div>

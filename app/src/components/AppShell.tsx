@@ -188,7 +188,7 @@ function ShellStatus() {
  */
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
-  const { user, isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading, isReconnecting } = useAuth();
   const location = useLocation();
   const seg = location.pathname.split('/').filter(Boolean)[1];
   const crumb = seg ? (CRUMB_NAMES[seg] ?? seg) : 'Dashboard';
@@ -462,6 +462,12 @@ export function AppShell() {
             </span>
           </div>
         </header>
+
+        {isReconnecting && (
+          <div role="status" className="border-b border-warn/30 bg-warn/10 px-4 py-2 text-[12.5px] text-warn md:px-6 lg:px-8">
+            Ontos cannot check your session right now. You stay signed in while it retries, for up to three minutes.
+          </div>
+        )}
 
         <main className="min-w-0 flex-1 p-4 md:p-6 lg:p-8">
           <Outlet />

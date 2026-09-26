@@ -1,40 +1,202 @@
-import { createTRPCReact } from "@trpc/react-query";
-import { httpBatchLink } from "@trpc/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTRPCReact, getQueryKey } from "@trpc/react-query";
+import { httpBatchLink, httpLink, splitLink, type TRPCLink } from "@trpc/client";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "../../api/router";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import {
+  announcePendingChange,
+  isOutageError,
+  isSignedOutError,
+  monotonicNow,
+  outageClock,
+  pendingSignOut,
+  SESSION_CALL_TIMEOUT_MS,
+  SESSION_OUTAGE_RECHECK_MS,
+  SESSION_RECHECK_MS,
+  subscribePending,
+  withSessionLock,
+} from "@/lib/sessionGrace";
 
 export const trpc = createTRPCReact<AppRouter>();
 
-const queryClient = new QueryClient();
-const trpcClient = trpc.createClient({
-  links: [
-    httpBatchLink({
-      url: "/api/trpc",
-      transformer: superjson,
-      /**
-       * Batched queries travel as a GET query string, which counts toward the
-       * request-header budget. The Twins page fans out one getStateHistory call
-       * per twin and was producing ~21KB URLs, past Node's ~16KB header limit —
-       * the server answered 431 and the telemetry charts silently stayed empty.
-       * tRPC splits a batch that would exceed this into several requests.
-       */
-      maxURLLength: 8000,
-      fetch(input, init) {
-        return globalThis.fetch(input, {
-          ...(init ?? {}),
-          credentials: "include",
-        });
+export { SESSION_CALL_TIMEOUT_MS };
+
+function isAuthMe(key: readonly unknown[]): boolean {
+  return JSON.stringify(key[0]) === JSON.stringify(getQueryKey(trpc.auth.me)[0]);
+}
+
+/**
+ * The app's query client. A request that meets an outage (a 503, or no answer)
+ * or is told "not signed in" has the session checked again, at most every few
+ * seconds, so an open page notices either while its last check is fresh. A
+ * check already under way is left to finish rather than restarted. Once the
+ * outage clock is running, the session check's own 15 s cadence carries on and
+ * further outages elsewhere add no checks.
+ */
+export function createAppQueryClient(): QueryClient {
+  const authMeKey = getQueryKey(trpc.auth.me);
+  let lastRecheck = -Infinity;
+  let waitingForLock = false;
+  const recheck = (err: unknown) => {
+    if (!isOutageError(err) && !isSignedOutError(err)) return;
+    if (isOutageError(err) && outageClock.get() !== null) return;
+    const now = monotonicNow();
+    if (now - lastRecheck < SESSION_OUTAGE_RECHECK_MS) return;
+    lastRecheck = now;
+    const check = () => client.invalidateQueries({ queryKey: authMeKey }, { cancelRefetch: false });
+    if (!isSignedOutError(err)) return void check();
+    // "Not signed in" may only mean a sign-in has not set its cookie yet: check
+    // once any sign-in or sign-out in flight has finished (I5), one waiting at most.
+    if (waitingForLock) return;
+    waitingForLock = true;
+    void withSessionLock(check)
+      .catch(() => undefined)
+      .finally(() => {
+        waitingForLock = false;
+      });
+  };
+  const client: QueryClient = new QueryClient({
+    queryCache: new QueryCache({
+      onError: (err, query) => {
+        // The session check's own failures drive the outage clock directly.
+        if (isAuthMe(query.queryKey)) return;
+        recheck(err);
       },
     }),
-  ],
-});
+    mutationCache: new MutationCache({ onError: (err) => recheck(err) }),
+  });
+  return client;
+}
+
+/** A fetch that gives up after `ms`, as well as when the caller aborts. */
+export function fetchWithTimeout(ms: number): typeof fetch {
+  return (input, init) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException("The session check timed out", "TimeoutError")), ms);
+    const outer = init?.signal;
+    if (outer) {
+      if (outer.aborted) controller.abort(outer.reason);
+      else outer.addEventListener("abort", () => controller.abort(outer.reason), { once: true });
+    }
+    return globalThis
+      .fetch(input, { ...(init ?? {}), credentials: "include", signal: controller.signal })
+      .finally(() => clearTimeout(timer));
+  };
+}
+
+/**
+ * Session calls: checked often, and never left hanging, so a silent server
+ * counts as an outage and no sign-in or sign-out holds the session lock for
+ * long (lib/sessionGrace.ts, B3 and B4).
+ */
+export const SESSION_PATHS: ReadonlySet<string> = new Set(["auth.me", "auth.logout", "auth.login", "auth.demoLogin"]);
+
+export function createAppTrpcClient(links?: TRPCLink<AppRouter>[]) {
+  return trpc.createClient({
+    links: links ?? [
+      splitLink({
+        condition: (op) => SESSION_PATHS.has(op.path),
+        true: httpLink({ url: "/api/trpc", transformer: superjson, fetch: fetchWithTimeout(SESSION_CALL_TIMEOUT_MS) }),
+        false: httpBatchLink({
+          url: "/api/trpc",
+          transformer: superjson,
+          /**
+           * Batched queries travel as a GET query string, which counts toward the
+           * request-header budget. The Twins page fans out one getStateHistory call
+           * per twin and was producing ~21KB URLs, past Node's ~16KB header limit —
+           * the server answered 431 and the telemetry charts silently stayed empty.
+           * tRPC splits a batch that would exceed this into several requests.
+           */
+          maxURLLength: 8000,
+          fetch(input, init) {
+            return globalThis.fetch(input, {
+              ...(init ?? {}),
+              credentials: "include",
+            });
+          },
+        }),
+      }),
+    ],
+  });
+}
+
+const queryClient = createAppQueryClient();
+const trpcClient = createAppTrpcClient();
+
+/**
+ * Ends a sign-out that an outage started: once the server answers, it clears
+ * the session cookie. One attempt now and one every 15 seconds while the
+ * sign-out is pending, each under the session lock, so none can race a
+ * sign-in in any tab. "Not signed in" means the server already holds no
+ * session, which also ends it.
+ *
+ * Whenever the sign-out stops being pending, from this tab or another, the
+ * tab forgets the old session: its outage clock and its cached check, so
+ * neither can sign out a new session or show the old user as signed in.
+ */
+export function SessionSignOutCompleter() {
+  const pending = useSyncExternalStore(subscribePending, pendingSignOut.get, () => false);
+  const client = useQueryClient();
+  const logout = trpc.auth.logout.useMutation({ retry: false });
+  const mutateRef = useRef(logout.mutateAsync);
+  useEffect(() => {
+    mutateRef.current = logout.mutateAsync;
+  });
+
+  // Forget the old session the moment the sign-out stops being pending, in the
+  // store listener itself: every useAuth re-renders on the same change, and
+  // must find no cached check to show. The check is removed rather than reset,
+  // because a reset restores the state it was created with, which may hold the
+  // remembered persona; the next render builds a new one and checks afresh.
+  useEffect(() => {
+    let was = pendingSignOut.get();
+    return subscribePending(() => {
+      const now = pendingSignOut.get();
+      if (was && !now) {
+        outageClock.reset();
+        client.removeQueries({ queryKey: getQueryKey(trpc.auth.me) });
+      }
+      was = now;
+    });
+  }, [client]);
+
+  useEffect(() => {
+    if (!pending) return;
+    let stopped = false;
+    let attempting = false;
+    const attempt = () => {
+      if (stopped || attempting) return;
+      attempting = true;
+      void withSessionLock(async () => {
+        // A sign-in in another tab may have ended it while this waited.
+        if (stopped || !pendingSignOut.get()) return;
+        try {
+          await mutateRef.current();
+        } catch (err) {
+          if (!isSignedOutError(err)) return;
+        }
+        pendingSignOut.clear();
+        announcePendingChange();
+      }).finally(() => {
+        attempting = false;
+      });
+    };
+    attempt();
+    const id = setInterval(attempt, SESSION_RECHECK_MS);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [pending]);
+  return null;
+}
 
 export function TRPCProvider({ children }: { children: ReactNode }) {
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
+        <SessionSignOutCompleter />
         {children}
       </QueryClientProvider>
     </trpc.Provider>

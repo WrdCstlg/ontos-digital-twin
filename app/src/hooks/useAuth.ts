@@ -1,13 +1,36 @@
 import { trpc } from "@/providers/trpc";
-import { useCallback, useEffect, useMemo } from "react";
+import { focusManager } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router";
 import { LOGIN_PATH } from "@/const";
+import {
+  announcePendingChange,
+  claimOutageExpiry,
+  isSignedOutError,
+  monotonicNow,
+  outageClock,
+  pendingSignOut,
+  SESSION_GRACE_MS,
+  SESSION_HEALTHY_RECHECK_MS,
+  SESSION_RECHECK_MS,
+  sessionState,
+  subscribePending,
+  withSessionLock,
+} from "@/lib/sessionGrace";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
   redirectPath?: string;
 };
 
+/**
+ * Who is signed in. "Not signed in" from the server signs the user out at
+ * once. A session the server could not check (an outage) keeps the user
+ * signed in, checking again every 15 seconds; a check that still fails three
+ * minutes after the first failed one signs them out, and the app keeps them
+ * signed out until the server has ended the session or they sign in again
+ * (lib/sessionGrace.ts; SessionSignOutCompleter ends the server session).
+ */
 export function useAuth(options?: UseAuthOptions) {
   const { redirectOnUnauthenticated = false, redirectPath = LOGIN_PATH } =
     options ?? {};
@@ -16,46 +39,148 @@ export function useAuth(options?: UseAuthOptions) {
 
   const utils = trpc.useUtils();
 
-  const {
-    data: user,
-    isLoading,
-    error,
-    refetch,
-  } = trpc.auth.me.useQuery(undefined, {
-    staleTime: 1000 * 60 * 5,
-    // "Not signed in" ends the check at once. Anything else, such as a session
-    // the server could not check (503), is retried: the person may well be
-    // signed in, and redirecting them to the login page would be wrong.
-    retry: (failures, err) => err.data?.code !== "UNAUTHORIZED" && failures < 3,
+  const pending = useSyncExternalStore(subscribePending, pendingSignOut.get, () => false);
+
+  const query = trpc.auth.me.useQuery(undefined, {
+    initialData: () => {
+      try {
+        if (typeof window === "undefined") return undefined;
+        if (pendingSignOut.get()) return undefined;
+        const stored = window.localStorage.getItem("ontos:active-persona");
+        return stored ? JSON.parse(stored) : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    // The remembered persona opens the page at once, but it is only a guess:
+    // counting it as already stale has the session checked on load.
+    initialDataUpdatedAt: 0,
+    staleTime: SESSION_HEALTHY_RECHECK_MS,
+    // Count an unreachable server as a failed check rather than pausing.
+    networkMode: "always",
+    // "Not signed in" ends the check at once. A check that could not be made
+    // is retried, but only in a visible tab: react-query pauses retries in a
+    // hidden one, and a paused check is never counted as a failure.
+    retry: (failures, err) => !isSignedOutError(err) && failures < 2 && focusManager.isFocused(),
+    // While the session cannot be checked, check again every 15 s, in a
+    // background tab too; while it is healthy, once a minute, so a quiet page
+    // still notices an outage.
+    refetchInterval: (q) =>
+      q.state.status === "error"
+        ? isSignedOutError(q.state.error)
+          ? false
+          : SESSION_RECHECK_MS
+        : q.state.status === "success"
+          ? SESSION_HEALTHY_RECHECK_MS
+          : false,
+    refetchIntervalInBackground: true,
   });
+  const { data: user, error, refetch, errorUpdatedAt, dataUpdatedAt, status, fetchStatus } = query;
+
+  // Feed each settled check into the shared outage clock, at the moment it is seen.
+  useEffect(() => {
+    if (status === "success") outageClock.observe({ ok: true });
+    else if (status === "error") outageClock.observe({ ok: false, error }, monotonicNow());
+  }, [status, dataUpdatedAt, errorUpdatedAt, error]);
+
+  const outage = useSyncExternalStore(outageClock.subscribe, outageClock.get, outageClock.get);
+  const since = outage?.since ?? null;
+
+  // Check once more when the grace period runs out, so a still-failing check
+  // at that moment is the evidence. Armed once per outage, only while the
+  // deadline is ahead; after it the 15 s re-check carries on.
+  useEffect(() => {
+    if (since === null || pending) return;
+    const wait = since + SESSION_GRACE_MS - monotonicNow();
+    if (wait <= 0) return;
+    const timer = setTimeout(() => void refetch({ cancelRefetch: false }), wait + 250);
+    return () => clearTimeout(timer);
+  }, [since, pending, refetch]);
+
+  const state = pending
+    ? ({ kind: "signed-out", reason: "outage" } as const)
+    : sessionState({ status, hasUser: !!user, error, outage, paused: fetchStatus === "paused" });
+
+  // The grace period ran out: sign out in every tab, once per outage, and have
+  // the server end the session as soon as it answers (SessionSignOutCompleter).
+  const graceExpired = !pending && state.kind === "signed-out" && state.reason === "outage";
+  useEffect(() => {
+    if (!graceExpired || since === null || !claimOutageExpiry(since)) return;
+    // The remembered persona would otherwise come back as signed in once the
+    // sign-out is no longer pending.
+    try {
+      window.localStorage.removeItem("ontos:active-persona");
+    } catch {
+      // storage unavailable: nothing to forget
+    }
+    pendingSignOut.set();
+    announcePendingChange();
+  }, [graceExpired, since]);
 
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: async () => {
+      try {
+        window.localStorage.removeItem("ontos:active-persona");
+      } catch {
+        // storage unavailable: nothing to forget
+      }
+      pendingSignOut.clear();
+      outageClock.reset();
+      announcePendingChange();
       await utils.invalidate();
       navigate(redirectPath);
     },
   });
 
-  const logout = useCallback(() => logoutMutation.mutate(), [logoutMutation]);
+  const logout = useCallback(() => {
+    try {
+      window.localStorage.removeItem("ontos:active-persona");
+    } catch {
+      // storage unavailable: nothing to forget
+    }
+    // Under the session lock, so a sign-in that follows cannot be undone by it.
+    void withSessionLock(() => logoutMutation.mutateAsync()).catch(() => undefined);
+  }, [logoutMutation]);
+
+  // The server says there is no session: the remembered persona is stale.
+  const noSession = state.kind === "signed-out" && state.reason === "no-session";
+  useEffect(() => {
+    if (!noSession) return;
+    try {
+      window.localStorage.removeItem("ontos:active-persona");
+    } catch {
+      // storage unavailable: nothing to forget
+    }
+  }, [noSession]);
+
+  const signedIn = state.kind === "signed-in";
+  const checking = state.kind === "checking";
+  const reconnecting = (state.kind === "signed-in" && state.degraded) || (state.kind === "checking" && state.unreachable);
+  const signedOutBecause = state.kind === "signed-out" ? state.reason : null;
 
   useEffect(() => {
-    if (redirectOnUnauthenticated && !isLoading && !user) {
+    if (redirectOnUnauthenticated && !checking && !signedIn) {
       const currentPath = window.location.pathname;
       if (currentPath !== redirectPath) {
         navigate(redirectPath);
       }
     }
-  }, [redirectOnUnauthenticated, isLoading, user, navigate, redirectPath]);
+  }, [redirectOnUnauthenticated, checking, signedIn, navigate, redirectPath]);
 
   return useMemo(
     () => ({
-      user: user ?? null,
-      isAuthenticated: !!user,
-      isLoading: isLoading || logoutMutation.isPending,
+      user: signedIn ? (user ?? null) : null,
+      isAuthenticated: signedIn,
+      /** Still finding out; true while a first check runs or cannot be made within the grace period. */
+      isLoading: checking || logoutMutation.isPending,
+      /** The session could not be checked just now; the user stays signed in for the grace period. */
+      isReconnecting: reconnecting,
+      /** Why the user is signed out, when they are. */
+      signedOutBecause,
       error,
       logout,
       refresh: refetch,
     }),
-    [user, isLoading, logoutMutation.isPending, error, logout, refetch],
+    [signedIn, user, checking, logoutMutation.isPending, reconnecting, signedOutBecause, error, logout, refetch],
   );
 }

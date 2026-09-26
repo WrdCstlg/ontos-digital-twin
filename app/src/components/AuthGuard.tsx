@@ -9,24 +9,29 @@ interface AuthGuardProps {
 }
 
 export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
-  const { user, isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading, isReconnecting, signedOutBecause } = useAuth();
   const location = useLocation();
 
   if (isLoading) {
     return (
       <div className="flex min-h-screen w-full items-center justify-center bg-bg-base text-text-primary">
-        <div className="flex flex-col items-center gap-4 text-center">
+        <div className="flex max-w-sm flex-col items-center gap-4 px-6 text-center" role="status">
           <div className="size-10 animate-spin rounded-full border-2 border-iris/20 border-t-iris" />
           <div className="font-mono text-xs text-text-muted tracking-wider uppercase">
-            Verifying Session Security…
+            {isReconnecting ? 'Reconnecting to Ontos…' : 'Verifying Session Security…'}
           </div>
+          {isReconnecting && (
+            <p className="text-sm text-text-secondary">
+              Ontos cannot check your session right now. You stay signed in while it retries, for up to three minutes.
+            </p>
+          )}
         </div>
       </div>
     );
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    return <Navigate to="/login" state={{ from: location, signedOutBecause }} replace />;
   }
 
   if (allowedRoles && user && !allowedRoles.includes(user.role)) {
