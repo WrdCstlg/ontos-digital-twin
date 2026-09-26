@@ -20,6 +20,12 @@ import { buildPrefixMap, knowledgeGraphToTurtle, shaclJsonToTurtle } from "./rdf
 import { explainShaclReport, type ExplainedShaclReport } from "./explainableShacl";
 import { enqueueJob } from "./jobs/queue";
 import { PermanentJobError, type JobHandler } from "./jobs/worker";
+import {
+  parseSqlConfig,
+  fetchRows as fetchSqlRows,
+  type SqlConnectorConfig,
+} from "./sqlConnector";
+
 
 /**
  * CSV imports (`mapping.sync` jobs). The web app validates and enqueues; a
@@ -94,7 +100,9 @@ async function nextSnapshotLabel(workspaceId: number) {
 
 /* ── validation ──────────────────────────────────────────────── */
 
-export type RunnableMapping = { mapping: Mapping; connector: Connector; csvText: string; columnMap: ColumnMap };
+export type RunnableCsvMapping = { kind: "csv"; mapping: Mapping; connector: Connector; csvText: string; columnMap: ColumnMap };
+export type RunnableSqlMapping = { kind: "sql"; mapping: Mapping; connector: Connector; sqlConfig: SqlConnectorConfig; columnMap: ColumnMap };
+export type RunnableMapping = RunnableCsvMapping | RunnableSqlMapping;
 
 export type MappingCheck =
   | { ok: true; value: RunnableMapping }
@@ -109,18 +117,37 @@ export async function checkRunnableMapping(workspaceId: number, mappingId: numbe
     .where(and(eq(mappings.id, mappingId), eq(connectors.workspaceId, workspaceId)))
     .limit(1);
   if (!record) return { ok: false, code: "NOT_FOUND", message: `Mapping ${mappingId} not found` };
-  const cfg = (record.connector.configJson ?? {}) as Record<string, unknown>;
-  if (record.connector.type !== "csv" || typeof cfg.csvText !== "string") {
-    return {
-      ok: false,
-      code: "BAD_REQUEST",
-      message: "runSync currently materializes CSV connectors with inline data (demo simulator)",
-    };
-  }
+
   const columnMap = record.mapping.columnMapJson as ColumnMap | null;
   if (!columnMap?.subject) return { ok: false, code: "BAD_REQUEST", message: "Mapping has no column map" };
-  return { ok: true, value: { ...record, csvText: cfg.csvText, columnMap } };
+
+  if (record.connector.type === "csv") {
+    const cfg = (record.connector.configJson ?? {}) as Record<string, unknown>;
+    if (typeof cfg.csvText !== "string") {
+      return { ok: false, code: "BAD_REQUEST", message: "CSV connector has no inline data — upload a file first" };
+    }
+    return { ok: true, value: { kind: "csv", ...record, csvText: cfg.csvText, columnMap } };
+  }
+
+  if (record.connector.type === "sql") {
+    const sqlConfig = parseSqlConfig(record.connector.configJson);
+    if (!sqlConfig) {
+      return {
+        ok: false,
+        code: "BAD_REQUEST",
+        message: "SQL connector has incomplete configuration — provide driver, host, and database",
+      };
+    }
+    return { ok: true, value: { kind: "sql", ...record, sqlConfig, columnMap } };
+  }
+
+  return {
+    ok: false,
+    code: "BAD_REQUEST",
+    message: `Connector type '${record.connector.type}' is not yet supported for sync`,
+  };
 }
+
 
 /* ── enqueue ─────────────────────────────────────────────────── */
 
@@ -201,14 +228,30 @@ export async function runMappingSync(
   const db = getDb();
   const check = await checkRunnableMapping(workspaceId, payload.mappingId);
   if (!check.ok) throw new PermanentJobError(check.message);
-  const { mapping: m, csvText, columnMap } = check.value;
+  const { mapping: m, columnMap } = check.value;
 
   await db
     .update(syncJobs)
     .set({ status: "running", startedAt: sql`now()`, error: null })
     .where(eq(syncJobs.id, payload.syncJobId));
 
-  const { rows } = parseCsv(csvText);
+  // Resolve rows: CSV inline data or live SQL fetch
+  let rows: Record<string, string>[];
+  if (check.value.kind === "csv") {
+    rows = parseCsv(check.value.csvText).rows;
+  } else {
+    // SQL connector: fetch all rows from the source table
+    const result = await fetchSqlRows(check.value.sqlConfig, m.sourceTable, 50_000, 0);
+    // Coerce all values to strings (the graph stores string properties)
+    rows = result.rows.map((row) => {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(row)) {
+        out[k] = v == null ? "" : String(v);
+      }
+      return out;
+    });
+  }
+
   const moduleKey =
     (await db.select().from(ontologyModules).where(eq(ontologyModules.id, m.moduleId)).limit(1))[0]?.key ?? "custom";
 

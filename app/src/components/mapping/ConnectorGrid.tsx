@@ -121,7 +121,10 @@ export function ConnectorGrid({
           .map((j) => j.rowsProcessed);
         const dot = conn.status === 'connected' ? 'ok' : conn.status === 'error' ? 'risk' : 'warn';
         const cfg = (conn.configJson ?? {}) as Record<string, unknown>;
-        const runnable = conn.type === 'csv' && cfg.hasInlineData === true && mapping != null;
+        const runnable =
+          mapping != null &&
+          ((conn.type === 'csv' && cfg.hasInlineData === true) ||
+           (conn.type === 'sql' && conn.status === 'connected'));
         const running = mapping != null && activeMappingIds.has(mapping.id);
         const activeJob = mapping ? mine.find((j) => j.mappingId === mapping.id && isActiveSync(j.status)) : undefined;
 
@@ -176,7 +179,13 @@ export function ConnectorGrid({
                           ? 'Importing…'
                           : 'Queued…'
                         : 'Run now'
-                      : 'Run now (needs inline CSV data)'}
+                      : mapping == null
+                        ? 'Run now (create a mapping first)'
+                        : conn.type === 'csv'
+                          ? 'Run now (upload CSV data first)'
+                          : conn.type === 'sql'
+                            ? 'Run now (connect the database first)'
+                            : 'Run now (not yet supported)'}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

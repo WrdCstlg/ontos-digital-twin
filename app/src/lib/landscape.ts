@@ -205,13 +205,13 @@ export const capabilities: Capability[] = [
   {
     area: "Query and exploration",
     palantir: "Object sets, search and Object Explorer; graph exploration in Vertex.",
-    ontos: "Graph explorer and search, SPARQL 1.1, questions in plain language compiled to SPARQL, graph analytics. No saved, shareable object sets.",
+    ontos: "Graph explorer with ⌘K global search across instances, classes, properties, insights, actions, and connectors. SPARQL 1.1, natural language queries compiled to SPARQL, graph analytics. No saved, shareable object sets.",
     status: "partial",
   },
   {
     area: "Data integration",
     palantir: "Pipelines and connectors feed datasets that back object types, with lineage.",
-    ontos: "CSV connectors with column mappings (exportable as R2RML), imported by the worker with retries. SQL and REST connectors are modelled but not imported yet.",
+    ontos: "CSV and SQL connectors (PostgreSQL, MySQL) with column mappings (exportable as R2RML), imported by the worker with retries and SHACL pre-validation. REST connectors are modelled but not imported yet.",
     status: "partial",
   },
   {

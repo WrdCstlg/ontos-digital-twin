@@ -36,11 +36,16 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
   const [name, setName] = useState('');
   const [driver, setDriver] = useState('postgresql');
   const [host, setHost] = useState('');
+  const [port, setPort] = useState('');
   const [database, setDatabase] = useState('');
+  const [dbUser, setDbUser] = useState('');
+  const [dbPassword, setDbPassword] = useState('');
+  const [useSsl, setUseSsl] = useState(false);
   const [baseUrl, setBaseUrl] = useState('');
   const [auth, setAuth] = useState('oauth2-client-credentials');
   const [csv, setCsv] = useState<{ filename: string; text: string } | null>(null);
   const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [testInfo, setTestInfo] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -67,10 +72,15 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
     setType(initialType ?? 'csv');
     setName('');
     setHost('');
+    setPort('');
     setDatabase('');
+    setDbUser('');
+    setDbPassword('');
+    setUseSsl(false);
     setBaseUrl('');
     setCsv(null);
     setTestState('idle');
+    setTestInfo(null);
     setSuggestions([]);
   } else if (prevOpen && !open) {
     setPrevOpen(open);
@@ -80,14 +90,47 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
     name.trim().length > 0 &&
     (type === 'csv' ? csv != null : type === 'sql' ? host.trim().length > 0 && database.trim().length > 0 : baseUrl.trim().length > 0);
 
-  const runTest = () => {
+  const testSqlMutation = trpc.mapping.testSqlConnection.useMutation();
+
+  const runTest = async () => {
     if (!valid) {
       setTestState('fail');
+      setTestInfo('missing required fields');
       return;
     }
     setTestState('testing');
-    // demo simulator: validate inputs client-side, pulse, then report
-    setTimeout(() => setTestState(valid ? 'ok' : 'fail'), 900);
+    setTestInfo(null);
+
+    if (type === 'sql') {
+      try {
+        const result = await testSqlMutation.mutateAsync({
+          driver: driver as 'postgresql' | 'mysql' | 'sqlserver',
+          host: host.trim(),
+          port: port ? parseInt(port, 10) : undefined,
+          database: database.trim(),
+          user: dbUser.trim() || undefined,
+          password: dbPassword || undefined,
+          ssl: useSsl || undefined,
+        });
+        if (result.ok) {
+          setTestState('ok');
+          setTestInfo(`${result.serverVersion} · ${result.latencyMs}ms`);
+        } else {
+          setTestState('fail');
+          setTestInfo(result.error ?? 'connection refused');
+        }
+      } catch (err) {
+        setTestState('fail');
+        setTestInfo(err instanceof Error ? err.message : 'connection test failed');
+      }
+    } else if (type === 'csv') {
+      // CSV: validate inline — no server call needed
+      setTestState(csv ? 'ok' : 'fail');
+      setTestInfo(csv ? `${csv.filename} loaded` : 'no file selected');
+    } else {
+      // REST: client-side validation for now
+      setTimeout(() => setTestState(valid ? 'ok' : 'fail'), 900);
+    }
   };
 
   const toStep3 = () => {
@@ -113,7 +156,16 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
       type === 'csv'
         ? { filename: csv!.filename, rows: parseCsvHead(csv!.text, 1_000_000).rows.length, csvText: csv!.text }
         : type === 'sql'
-          ? { driver, host, database, mode: 'poll' }
+          ? {
+              driver,
+              host: host.trim(),
+              port: port ? parseInt(port, 10) : undefined,
+              database: database.trim(),
+              user: dbUser.trim() || undefined,
+              password: dbPassword || undefined,
+              ssl: useSsl || undefined,
+              mode: 'poll',
+            }
           : { baseUrl, auth };
     createMutation.mutate({ name: name.trim(), type, config, status: testState === 'ok' ? 'connected' : 'draft' });
   };
@@ -244,16 +296,34 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
                       <option value="sqlserver">SQL Server</option>
                     </select>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="grid gap-1.5">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2 grid gap-1.5">
                       <Label htmlFor="nc-host" className="text-text-secondary">Host</Label>
                       <Input id="nc-host" value={host} onChange={(e) => setHost(e.target.value)} placeholder="db.acme.corp" className="border-border-hairline bg-bg-inset font-mono text-[12.5px]" />
                     </div>
                     <div className="grid gap-1.5">
-                      <Label htmlFor="nc-db" className="text-text-secondary">Database</Label>
-                      <Input id="nc-db" value={database} onChange={(e) => setDatabase(e.target.value)} placeholder="contracts" className="border-border-hairline bg-bg-inset font-mono text-[12.5px]" />
+                      <Label htmlFor="nc-port" className="text-text-secondary">Port</Label>
+                      <Input id="nc-port" value={port} onChange={(e) => setPort(e.target.value)} placeholder={driver === 'postgresql' ? '5432' : driver === 'mysql' ? '3306' : '1433'} className="border-border-hairline bg-bg-inset font-mono text-[12.5px]" />
                     </div>
                   </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="nc-db" className="text-text-secondary">Database</Label>
+                    <Input id="nc-db" value={database} onChange={(e) => setDatabase(e.target.value)} placeholder="contracts" className="border-border-hairline bg-bg-inset font-mono text-[12.5px]" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="nc-user" className="text-text-secondary">User</Label>
+                      <Input id="nc-user" value={dbUser} onChange={(e) => setDbUser(e.target.value)} placeholder={driver === 'postgresql' ? 'postgres' : 'root'} className="border-border-hairline bg-bg-inset font-mono text-[12.5px]" />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="nc-password" className="text-text-secondary">Password</Label>
+                      <Input id="nc-password" type="password" value={dbPassword} onChange={(e) => setDbPassword(e.target.value)} placeholder="••••••••" className="border-border-hairline bg-bg-inset font-mono text-[12.5px]" />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 text-[12.5px] text-text-secondary">
+                    <input type="checkbox" checked={useSsl} onChange={(e) => setUseSsl(e.target.checked)} className="rounded border-border-hairline" />
+                    Use SSL / TLS
+                  </label>
                 </>
               )}
 
@@ -293,12 +363,12 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
                 <AnimatePresence>
                   {testState === 'ok' && (
                     <motion.span initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="inline-flex items-center gap-1.5 font-mono text-[11.5px] text-ok">
-                      <Check className="size-3.5" /> reachable · credentials accepted
+                      <Check className="size-3.5" /> {testInfo ?? 'reachable · credentials accepted'}
                     </motion.span>
                   )}
                   {testState === 'fail' && (
-                    <motion.span initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="font-mono text-[11.5px] text-risk">
-                      missing required fields
+                    <motion.span initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="max-w-xs truncate font-mono text-[11.5px] text-risk" title={testInfo ?? undefined}>
+                      {testInfo ?? 'connection failed'}
                     </motion.span>
                   )}
                 </AnimatePresence>
@@ -342,8 +412,17 @@ export function NewConnectorDialog({ open, onOpenChange, initialType, onCreated,
                 </>
               ) : (
                 <p className="rounded-lg border border-border-hairline bg-bg-inset px-3.5 py-3 text-[12.5px] text-text-muted">
-                  Schema discovery for {type.toUpperCase()} sources runs on first sync in this demo build. Create the connector,
-                  then declare the mapping in the editor.
+                  {type === 'sql' ? (
+                    <>
+                      After creating this connector, open the mapping editor to <span className="text-text-primary font-medium">discover tables</span> and
+                      map columns to ontology properties. Schema discovery queries your database live.
+                    </>
+                  ) : (
+                    <>
+                      Schema discovery for {type.toUpperCase()} sources runs on first sync. Create the connector,
+                      then declare the mapping in the editor.
+                    </>
+                  )}
                 </p>
               )}
             </motion.div>

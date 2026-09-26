@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { connectors, jobs, mappings, ontologyModules, syncJobs } from "@db/schema";
+import { connectors, jobs, mappings, ontologyModules, syncJobs, type Connector } from "@db/schema";
 import {
   createRouter,
   workspaceQuery,
   workspaceAdminMutation,
   workspaceOntologistMutation,
+  workspaceOntologistQuery,
 } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
@@ -18,9 +19,34 @@ import {
   type ColumnMap,
   type MappingSyncResult,
 } from "./services/mappingSync";
+import {
+  parseSqlConfig,
+  testConnection as testSqlConn,
+  listTables as listSqlTablesFromDb,
+  listColumns as listSqlColumnsFromDb,
+  fetchRows as fetchSqlRowsFromDb,
+} from "./services/sqlConnector";
 
 // The CSV helpers live with the import in services/mappingSync.ts.
 export { parseCsv, type ColumnMap };
+
+/**
+ * A connector as clients see it: without an inline CSV payload, and never with
+ * a stored password, which only the server uses to connect. Every workspace
+ * member can list connectors.
+ */
+function publicConnector(c: Connector) {
+  const cfg = (c.configJson ?? {}) as Record<string, unknown>;
+  const { csvText, password, ...rest } = cfg;
+  return {
+    ...c,
+    configJson: {
+      ...rest,
+      hasInlineData: typeof csvText === "string",
+      hasPassword: typeof password === "string" && password.length > 0,
+    },
+  };
+}
 
 /* ── router ──────────────────────────────────────────────────── */
 
@@ -33,15 +59,7 @@ export const mappingRouter = createRouter({
       .from(connectors)
       .where(eq(connectors.workspaceId, ws.id))
       .orderBy(asc(connectors.id));
-    // strip embedded csv payloads from list responses
-    return rows.map((c) => {
-      const cfg = (c.configJson ?? {}) as Record<string, unknown>;
-      const { csvText: _omit, ...rest } = cfg;
-      return {
-        ...c,
-        configJson: { ...rest, hasInlineData: typeof _omit === "string" },
-      };
-    });
+    return rows.map(publicConnector);
   }),
 
   createConnector: workspaceAdminMutation
@@ -75,7 +93,7 @@ export const mappingRouter = createRouter({
         payload: { name: input.name, type: input.type, status: input.status },
       });
       const [row] = await db.select().from(connectors).where(eq(connectors.id, id));
-      return row;
+      return publicConnector(row);
     }),
 
   listMappings: workspaceQuery.query(async ({ ctx }) => {
@@ -267,7 +285,7 @@ export const mappingRouter = createRouter({
       .select({ mapping: mappings })
       .from(mappings)
       .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
-      .where(and(eq(connectors.workspaceId, ws.id), eq(connectors.type, "csv")))
+      .where(and(eq(connectors.workspaceId, ws.id), inArray(connectors.type, ["csv", "sql"])))
       .orderBy(asc(mappings.id));
     let queued = 0;
     let alreadyActive = 0;
@@ -330,5 +348,129 @@ export const mappingRouter = createRouter({
           connector: m ? (connById.get(m.connectorId) ?? null) : null,
         };
       });
+    }),
+
+  /* ── SQL connector endpoints ────────────────────────────────── */
+
+  /**
+   * Tests connectivity to an external SQL database.
+   * Accepts raw connection params (no connector ID required — useful during
+   * the "new connector" wizard before anything is persisted).
+   */
+  testSqlConnection: workspaceAdminMutation
+    .input(
+      z.object({
+        driver: z.enum(["postgresql", "mysql", "sqlserver"]),
+        host: z.string().min(1),
+        port: z.number().int().positive().optional(),
+        database: z.string().min(1),
+        user: z.string().optional(),
+        password: z.string().optional(),
+        ssl: z.boolean().optional(),
+        schema: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      return testSqlConn(input);
+    }),
+
+  /**
+   * Lists tables in an external SQL database identified by connector ID.
+   * The connector's configJson must have driver/host/database.
+   */
+  listSqlTables: workspaceOntologistQuery
+    .input(z.object({ connectorId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
+      const db = getDb();
+      const [conn] = await db
+        .select()
+        .from(connectors)
+        .where(and(eq(connectors.id, input.connectorId), eq(connectors.workspaceId, ws.id)))
+        .limit(1);
+      if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connector not found" });
+      if (conn.type !== "sql")
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Connector is not a SQL type" });
+      const cfg = parseSqlConfig(conn.configJson);
+      if (!cfg)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Connector has incomplete SQL configuration — edit it and provide host, database, and driver",
+        });
+      try {
+        return await listSqlTablesFromDb(cfg);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to list tables: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }),
+
+  /**
+   * Lists columns of a specific table in an external SQL database.
+   */
+  listSqlColumns: workspaceOntologistQuery
+    .input(
+      z.object({
+        connectorId: z.number().int().positive(),
+        table: z.string().min(1).max(255),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
+      const db = getDb();
+      const [conn] = await db
+        .select()
+        .from(connectors)
+        .where(and(eq(connectors.id, input.connectorId), eq(connectors.workspaceId, ws.id)))
+        .limit(1);
+      if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connector not found" });
+      const cfg = parseSqlConfig(conn.configJson);
+      if (!cfg)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Connector has incomplete SQL configuration" });
+      try {
+        return await listSqlColumnsFromDb(cfg, input.table);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to list columns: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }),
+
+  /**
+   * Fetches sample rows from a table in an external SQL database.
+   * Used for preview before mapping.
+   */
+  previewSqlRows: workspaceOntologistQuery
+    .input(
+      z.object({
+        connectorId: z.number().int().positive(),
+        table: z.string().min(1).max(255),
+        limit: z.number().int().min(1).max(200).default(10),
+        offset: z.number().int().min(0).default(0),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
+      const db = getDb();
+      const [conn] = await db
+        .select()
+        .from(connectors)
+        .where(and(eq(connectors.id, input.connectorId), eq(connectors.workspaceId, ws.id)))
+        .limit(1);
+      if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connector not found" });
+      const cfg = parseSqlConfig(conn.configJson);
+      if (!cfg)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Connector has incomplete SQL configuration" });
+      try {
+        return await fetchSqlRowsFromDb(cfg, input.table, input.limit, input.offset);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to fetch rows: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
     }),
 });
