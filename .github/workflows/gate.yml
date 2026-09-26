@@ -50,6 +50,10 @@ jobs:
           echo "ONTOS_GATE_TAG=$tag" >> "$GITHUB_ENV"
           pwsh -NoProfile -File gate/scripts/build-images.ps1 -Tag "$tag"
 
+      - name: Test the driver and oracles
+        working-directory: gate
+        run: go test ./...
+
       - name: Build the driver and oracle
         run: pwsh -NoProfile -File gate/scripts/build-tools.ps1
 
@@ -92,6 +96,21 @@ jobs:
       - name: Signed-in clients across a database restart
         working-directory: gate
         run: thesis run --profile sessions --fault 'proc.restart(db)@5000..12000'
+
+      # Pre-registration 9 (increment 3): every action submission acknowledged
+      # through the Ontology API is visible, as applied, to the client's next
+      # read of its objects through the API.
+      - name: Ontology API
+        working-directory: gate
+        run: thesis run --profile api
+
+      - name: App restarted under the Ontology API
+        working-directory: gate
+        run: thesis run --profile api --fault 'proc.restart(app)@4000..10000'
+
+      - name: Database restarted under the Ontology API
+        working-directory: gate
+        run: thesis run --profile api --fault 'proc.restart(db)@5000..12000'
 
       - name: Show verdicts, app and worker logs on failure
         if: failure()

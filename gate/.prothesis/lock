@@ -1,8 +1,8 @@
 {
   "schema": "prothesis.lock/v1",
-  "manifest_sha": "sha256:5761c37be485f1b4ca4d03c4f29f76f2dfb76110589aa9d8c0af58eb81a5dff5",
-  "reason": "Pre-registration 8: sessions run profile, eight clients of mostly action submissions, so a database restart always meets requests in flight and session.honoured is exercised in every run.",
-  "locked_at": "2026-09-25T15:29:03Z",
+  "manifest_sha": "sha256:dbf08316a1156b4d9855022619f03be0cccdf84c6270c8fb9c90aad4a01397c4",
+  "reason": "api.read_your_writes: every action submission acknowledged through /api/v1 is visible, as applied, to the next read of its objects through /api/v1.",
+  "locked_at": "2026-09-26T22:18:24Z",
   "tool_version": "0.1.0-phase0",
   "builtin_options_fingerprint": "sha256:ca5cba3edb828e29bd4b1357c9ff2d86ae2e3eb6a6bd009a2430b076304064bf",
   "executables": [
@@ -10,35 +10,42 @@
       "oracle": "actions.delivered",
       "cmd": "./bin/oracle-actions --check delivered --node db --settle 60s",
       "resolved": "bin/oracle-actions.exe",
-      "sha256": "sha256:44a02de494f2a40115cb7cc2bf1f2530d606eb76137fe982d2600c6b8069687c",
+      "sha256": "sha256:c46d6aac228fb510f332eb35e4dbf31b9cc97e1b82608011ffa10f8520cb03d0",
       "size": 5104640
     },
     {
       "oracle": "actions.durable",
       "cmd": "./bin/oracle-actions --check durable --node db",
       "resolved": "bin/oracle-actions.exe",
-      "sha256": "sha256:44a02de494f2a40115cb7cc2bf1f2530d606eb76137fe982d2600c6b8069687c",
+      "sha256": "sha256:c46d6aac228fb510f332eb35e4dbf31b9cc97e1b82608011ffa10f8520cb03d0",
       "size": 5104640
+    },
+    {
+      "oracle": "api.read_your_writes",
+      "cmd": "./bin/oracle-api",
+      "resolved": "bin/oracle-api.exe",
+      "sha256": "sha256:524b24a090e7b71b4b8703d1590959da55b1bb3f92d12ff6fb66fa7aac58025e",
+      "size": 4729344
     },
     {
       "oracle": "jobs.lease_lapse",
       "cmd": "./bin/oracle-job-leases --node db --settle 60s --asked-to-stop stopping,stopped",
       "resolved": "bin/oracle-job-leases.exe",
-      "sha256": "sha256:f6d75ef85ecc87c31b646a972db5d51eec2b1ad3293eb316a8d4eb53f409d081",
+      "sha256": "sha256:df75abce007d7ce8255d1327cf60597994d593ba88ba138cee675fb448918a2e",
       "size": 5068288
     },
     {
       "oracle": "session.honoured",
       "cmd": "./bin/oracle-session",
       "resolved": "bin/oracle-session.exe",
-      "sha256": "sha256:b939ff5e8f90555780cd3955b4b3592a5a2250c6be9c12a655e72e336348637c",
+      "sha256": "sha256:688803e7c31744cc64a61ce4d507a2608cdd0167e011f7e445d54ab6a72848da",
       "size": 4770816
     },
     {
       "oracle": "sync_jobs.settle",
       "cmd": "./bin/oracle-sync-jobs --node db --settle 30s --unsettled queued,running",
       "resolved": "bin/oracle-sync-jobs.exe",
-      "sha256": "sha256:5c4673c66761a0d31c77f270be51ca69ed1fcbdcf9e4af01775fc0f7607f91c9",
+      "sha256": "sha256:400242bbed76283118d8e7975fef2882170b875809c2abe9eebb95efa10f000a",
       "size": 5117952
     }
   ],
@@ -77,6 +84,11 @@
         "path": "actions.durable.yaml",
         "sha256": "sha256:5fddeb8dbd4eaacaa87dad4989ac64cb6de367e9e74f4066d66fb11c11fbbef8",
         "size": 160
+      },
+      {
+        "path": "api.read_your_writes.yaml",
+        "sha256": "sha256:1d21b34a54885c62314f175102815cae293d9d8622396a418f6c860e82d50a99",
+        "size": 139
       },
       {
         "path": "jobs.lease_lapse.yaml",
@@ -242,6 +254,21 @@
       },
       {
         "path": "profiles.actions.worlds",
+        "kind": "scalar",
+        "value": "1"
+      },
+      {
+        "path": "profiles.api.budget",
+        "kind": "scalar",
+        "value": "5m"
+      },
+      {
+        "path": "profiles.api.driver_profile",
+        "kind": "scalar",
+        "value": "api"
+      },
+      {
+        "path": "profiles.api.worlds",
         "kind": "scalar",
         "value": "1"
       },

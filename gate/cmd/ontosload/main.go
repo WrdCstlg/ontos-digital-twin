@@ -28,6 +28,15 @@
 //	      means it was applied; fail means it certainly was not (rejected and
 //	      recorded, a conflict that rolled back, or refused before any work).
 //
+//	api_action  the same submission through the Ontology API (/api/v1) with an
+//	      API token, one per client, created at start. key "person/<iri>"; the
+//	      ok value is {"submission": id, "note": the note it wrote}. An
+//	      acknowledged one is followed at once, by the same client, by:
+//
+//	api_read  the person read through the API. key "person/<iri>"; ok for any
+//	      definite answer, with {"found", "submissionId" (the submission its
+//	      source names as its last change), "gateNote"}.
+//
 // At QUIESCE the harness writes {"cmd":"stop"} on stdin and closes it. The
 // driver then stops issuing operations, ends the ones still following a job as
 // info, flushes the history and exits, well inside the drain deadline.
@@ -165,12 +174,18 @@ func run() int {
 	}
 	log.printf("runnable CSV mappings: sync %v, sync_bulk %v", pools[opSync], pools[opSyncBulk])
 	var people []string
-	if planUses(pl, opAction) {
+	if usesPeople(pl) {
 		if people, err = c.people(ctx); err != nil {
 			log.printf("refusing: cannot list people for %s: %v", opAction, err)
 			return exitRefuse
 		}
 		log.printf("people for %s: %d", opAction, len(people))
+	}
+	if planUses(pl, opAPIAction) || planUses(pl, opAPIRead) {
+		if err := c.createTokens(ctx, clientsFor(pl), log); err != nil {
+			log.printf("refusing: cannot create API tokens: %v", err)
+			return exitRefuse
+		}
 	}
 
 	var counts outcomeCounts
@@ -311,7 +326,7 @@ func loadPlan(p params) (*plan, error) {
 			return nil, fmt.Errorf("plan operation %d has op_id %d; op_ids must be positive and strictly ascending", i, op.OpID)
 		}
 		check := func(key *string) error { _, err := mappingFromKey(key); return err }
-		if op.F == opAction {
+		if op.F == opAction || isAPIOp(op.F) {
 			check = func(key *string) error { _, err := personFromKey(key); return err }
 		}
 		if err := check(op.Key); err != nil {
@@ -321,7 +336,9 @@ func loadPlan(p params) (*plan, error) {
 	return &pl, nil
 }
 
-func supportedOp(op string) bool { return op == opSync || op == opSyncBulk || op == opAction }
+func supportedOp(op string) bool {
+	return op == opSync || op == opSyncBulk || op == opAction || isAPIOp(op)
+}
 
 // planUses reports whether the mix weights op or a replayed operation is op.
 func planUses(pl *plan, op string) bool {
@@ -393,10 +410,11 @@ func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]i
 		if m.WeightPPM <= 0 {
 			continue
 		}
-		if m.Op == opAction && len(people) == 0 {
+		annotates := m.Op == opAction || isAPIOp(m.Op)
+		if annotates && len(people) == 0 {
 			return fmt.Errorf("the plan needs %s, but Ontos has no person to annotate", m.Op)
 		}
-		if m.Op != opAction && len(pools[m.Op]) == 0 {
+		if !annotates && len(pools[m.Op]) == 0 {
 			return fmt.Errorf("the plan needs %s, but Ontos has no runnable CSV mapping for it", m.Op)
 		}
 	}
@@ -414,6 +432,12 @@ func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]i
 					person := people[rng.Intn(len(people))]
 					note := fmt.Sprintf("gate %d/%d/%d", seed, proc, n)
 					kind = doOp(h, counts, proc, 0, opAction, "person/"+person, func() result { return c.submitAction(ctx, person, note) })
+				} else if isAPIOp(op) {
+					// An api_read in the mix is a submission and its read too:
+					// a read alone would have nothing to judge.
+					person := people[rng.Intn(len(people))]
+					note := fmt.Sprintf("gate api %d/%d/%d", seed, proc, n)
+					kind = apiOp(ctx, h, counts, c, stop, proc, person, note)
 				} else {
 					pool := pools[op]
 					mapping := pool[rng.Intn(len(pool))]
@@ -445,7 +469,7 @@ func runOperations(ctx context.Context, pl *plan, mappings []int64, c *client,
 	}
 	byProc := map[int64][]planOp{}
 	for _, op := range pl.Operations {
-		if op.F != opAction {
+		if op.F != opAction && !isAPIOp(op.F) {
 			id, _ := mappingFromKey(op.Key)
 			if !runnable[id] {
 				return fmt.Errorf("plan op_id %d targets mapping %d, which is not a runnable CSV mapping here", op.OpID, id)
@@ -470,11 +494,21 @@ func runOperations(ctx context.Context, pl *plan, mappings []int64, c *client,
 						return
 					}
 				}
-				if op.F == opAction {
+				// A replay runs each recorded operation as recorded: a recorded
+				// api_read is its own operation, not one api_action adds.
+				switch op.F {
+				case opAction:
 					person, _ := personFromKey(op.Key)
 					note := fmt.Sprintf("replay %d", op.OpID)
 					doOp(h, counts, proc, op.OpID, op.F, *op.Key, func() result { return c.submitAction(ctx, person, note) })
-				} else {
+				case opAPIAction:
+					person, _ := personFromKey(op.Key)
+					note := fmt.Sprintf("replay api %d", op.OpID)
+					doOp(h, counts, proc, op.OpID, op.F, *op.Key, func() result { return c.apiSubmit(ctx, proc, person, note) })
+				case opAPIRead:
+					person, _ := personFromKey(op.Key)
+					doOp(h, counts, proc, op.OpID, op.F, *op.Key, func() result { return c.apiRead(ctx, proc, person) })
+				default:
 					id, _ := mappingFromKey(op.Key)
 					doOp(h, counts, proc, op.OpID, op.F, *op.Key, func() result { return c.sync(ctx, id, stop) })
 				}
@@ -531,6 +565,8 @@ type client struct {
 	base   string
 	http   *http.Client
 	cookie string
+	// tokens are the Ontology API tokens, one per client (createTokens).
+	tokens []string
 }
 
 func newClient(base string, conns int) *client {

@@ -514,3 +514,106 @@ driver is not the web app, so no world judges that; its tests do.
 | With the fix, `session.honoured` violated | Some path still answers 401 when it cannot check the session. A finding. |
 | `actions.durable` or `actions.delivered` violated | Submissions during the outage broke atomicity or delivery. A finding. |
 | Exit 4 | The lock was not taken after this commit. |
+
+# Pre-registration 9: the Ontology API reads back what it acknowledged (increment 3)
+
+Written on 2026-09-26, before any of these worlds ran, and committed with the
+oracle and the driver's new operations ahead of the lock. System under test:
+the images built from this commit, which hold the Ontology API (`/api/v1`,
+90a540c). The lock reason is the maintainer's.
+
+## What changes in the gate
+
+- Driver: `api_action` submits gate-annotate through
+  `POST /api/v1/actions/gate-annotate/submit` with an API token, as another
+  system would. ok: applied, with `{"submission", "note"}`; fail: rejected,
+  rolled back on a conflict, or refused before any work (400, 401, 403, 404,
+  429); info: 5xx or no answer. After an acknowledged one, and unless the drain
+  has begun, the same client reads the person back through
+  `GET /api/v1/objects?iri=…` as `api_read`: ok for any definite answer, not
+  found included, with `{"found", "submissionId", "gateNote"}`, where
+  `submissionId` is the submission the object's source names as its last
+  change.
+- Tokens: at start the driver creates one API token per client through
+  `developer.createToken`, with the session it signed in with: role editor
+  (gate-annotate's minimum), scopes read and actions, expiring in a day. A
+  client makes at most one API operation (two requests) every 500 ms, so at most
+  240 requests a minute, under the API's 300 per token.
+- Profiles: the `api` driver profile, six clients, `api_action` 12 to `action`
+  4 to `sync` 1. `action` writes to the same 100 people through the app, so a
+  read can find a later write than its own; the imports keep
+  `sync_jobs.settle` judging. The `api` run profile, one world.
+- CI runs the gate's Go tests (`go test ./...`) before it builds the tools.
+
+## The oracle
+
+`api.read_your_writes` (`cmd/oracle-api`, consistency): every action submission
+acknowledged through `/api/v1` is visible, as applied, to the next read of its
+objects through `/api/v1`. It reads only the history. Submissions to one person
+commit in the order of their ids: each locks the person, and one that finds it
+changed since it planned plans again under a new id. So for an acknowledged
+submission S and the same client's next read of that person:
+
+| The read shows | Verdict |
+|---|---|
+| no such object | violated, `not_visible` |
+| no submission as the last change, or one before S | violated, `stale_read` |
+| S, with a note other than the one S wrote | violated, `wrong_value` |
+| a later submission | another write came between: its note is checked when the history holds it (an acknowledged `api_action`), and excused otherwise |
+
+A read that did not answer, or was not made, judges nothing. A world with no
+`api_action` judges nothing and says so (ok), as `actions.delivered` does in a
+world without actions; a world whose `api_action`s none were judged is
+inconclusive.
+
+Checked before the lock over synthetic histories (`cmd/oracle-api` tests): its
+own write read back, ok; an earlier or no submission, `stale_read`; not found,
+`not_visible`; its submission with another note, `wrong_value`; a later write
+in between, ok when its note matches and `wrong_value` when it does not; a later
+write the history does not name, excused; reads paired by client and person; an
+unacknowledged submission in between excusing nothing; unanswered reads judging
+nothing. Every deliberate break of those rules made a test fail. The driver's
+new operations are tested against a fake of the API's answers. The build host
+has had no Docker since 2026-09-25, so the oracle has not run on a stack: the
+first world below is its first run, in CI.
+
+## The worlds and their predictions
+
+| World | Command | Prediction |
+|---|---|---|
+| Ontology API | `thesis run --profile api` | PASS: `api.read_your_writes` ok, judging at least one read; every other oracle ok |
+| App restarted | `thesis run --profile api --fault "proc.restart(app)@4000..10000"` | PASS: see below |
+| Database restarted | `thesis run --profile api --fault "proc.restart(db)@5000..12000"` | PASS: see below |
+| Every earlier world | as in pre-registrations 1 to 8 | unchanged; `api.read_your_writes` ok, judging nothing |
+
+**App restarted.** Requests while the app is down are refused at once (fail,
+not sent) or cut off (info). A submission is one transaction, so one cut off is
+rolled back. Every submission acknowledged before or after the restart is read
+back.
+
+**Database restarted.** A token that cannot be checked is answered 503, never
+401, so the driver records `api_action` and `api_read` during the outage as info
+and `session.honoured` stays ok. Every read that answers after the outage shows
+the client's acknowledged write, or a later one.
+
+A run counts only if `api.read_your_writes` judged at least one read; its
+explanation says how many. The database world counts for the outage only if the
+driver recorded an API request answered during it (a 503 or a 401).
+
+When the build host has Docker again, the oracle must also be shown able to
+fail on a stack: the `api` world on images built from a scratch worktree of
+this commit in which `GET /api/v1/objects` answers from a copy of each object
+kept for 30 s, reverted afterwards. Prediction: **FAIL, exit 1**,
+`api.read_your_writes` violated with `stale_read`, since a client reads a person
+it or another client read less than 30 s before.
+
+## What would make it come out differently
+
+| Outcome | What it would mean |
+|---|---|
+| `api.read_your_writes` violated | A client did not read back a write the API had acknowledged: a bug in the API, the action engine or the database. |
+| `api.read_your_writes` inconclusive | No acknowledged API write was followed by an answered read, so the world did not test the API. Not counted; the record says why. |
+| The driver refuses at start (exit 2) | It could not create its tokens, or list the people. A finding in the image or the driver. |
+| `session.honoured` violated in the database world | The API answered 401 when it could not check a token. A bug in its principal resolution. |
+| Many `api_action`s fail with HTTP 429 | The pacing does not keep a client under the per-token limit. A finding in the driver. |
+| Exit 4 | The lock was not taken after this commit. |

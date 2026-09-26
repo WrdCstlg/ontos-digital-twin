@@ -31,10 +31,12 @@ thesis run --profile smoke             # three worlds, no faults
 
 CI runs the same steps on every push and pull request
 ([`.github/workflows/gate.yml`](../.github/workflows/gate.yml)): verify the lock,
-build the images for the commit, then `smoke` and the pre-registered fault
-worlds: the app restarted mid-import; a worker restarted or frozen under a
-backlog; and action submissions alone, with the app restarted, and with the
-database restarted.
+test the driver and oracles, build the images for the commit, then `smoke` and
+the pre-registered fault worlds: the app restarted mid-import; a worker
+restarted or frozen under a backlog; action submissions alone, with the app
+restarted, and with the database restarted; signed-in clients across a
+database restart; and other systems on the Ontology API, alone, with the app
+restarted, and with the database restarted.
 
 `build-images.ps1` builds the app image and then a MySQL image that already
 holds the demo workspace, migrated, seeded and with the gate admin provisioned,
@@ -55,10 +57,11 @@ receiver.
 |---|---|
 | `prothesis.yaml` | Nodes (`app`, `engine`, `db`, workers `worker-a` and `worker-b` with their engines, and `sink`, the receiver for action webhooks), health probes, driver, fault policy, oracles, profiles |
 | `compose.gate.yaml` | Images only, `restart: "no"`, every node on a `127.0.0.1` port |
-| `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, submits the gate-annotate action with `actions.submit`, writes the history, honours the stdin drain |
+| `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, submits the gate-annotate action with `actions.submit`, or through the Ontology API with an API token per client and reads the person back, writes the history, honours the stdin drain |
 | `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still be queued or running |
 | `cmd/oracle-actions` | Two oracles on action types. `actions.durable`: every acknowledged action is still applied, every submission has one audit entry, every edit traces to an applied submission, and each person's latest gate note is in place. `actions.delivered`: every side effect of an applied action is delivered |
 | `cmd/oracle-session` | The `session.honoured` oracle: the driver's session is valid all world, so no operation may be refused as signed out (HTTP 401) |
+| `cmd/oracle-api` | The `api.read_your_writes` oracle: every action submission acknowledged through the Ontology API is visible, as applied, to the client's next read of its objects through the API. It reads only the history: `ontosload`'s `api_action` and the `api_read` that follows it |
 | `cmd/oracle-job-leases` | The `jobs.lease_lapse` oracle: a worker that recorded it was asked to stop never leaves its job to the lease; it finishes the job or hands it back. Lapses on workers that went silent (frozen, killed) are excused |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |

@@ -67,6 +67,12 @@ driver:
     # database goes away: a client following an import waits it out instead.
     # One import in twenty keeps sync_jobs.settle judging. Pre-registration 8.
     sessions: { clients: 8, ops: 4000, mix: { action: 19, sync: 1 } }
+    # `api_action` submits gate-annotate through the Ontology API (/api/v1)
+    # with an API token, one per client, and reads the person back through it
+    # (`api_read`). `action` writes to the same people through the app, so a
+    # read can see a later write; imports keep sync_jobs.settle judging.
+    # Pre-registration 9.
+    api: { clients: 6, ops: 4000, mix: { api_action: 12, action: 4, sync: 1 } }
 
 perturber:
   budget: { max_concurrent_faults: 1, max_faults_per_world: 2 }
@@ -96,6 +102,9 @@ profiles:
   # Signed-in clients across a database outage, with the fault from the
   # command line.
   sessions: { budget: 5m, worlds: 1, driver_profile: sessions }
+  # Other systems on the Ontology API, with or without a fault from the
+  # command line.
+  api: { budget: 5m, worlds: 1, driver_profile: api }
 
 artifacts:
   dir: .prothesis/runs
