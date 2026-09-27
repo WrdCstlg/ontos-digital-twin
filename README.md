@@ -199,13 +199,14 @@ required; `docker compose` refuses to start without them.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `APP_SECRET` | **yes** | Signs session tokens. 32+ random characters. |
+| `APP_SECRET` | **yes** | Signs session tokens. 32+ random characters; the app refuses to start with fewer. |
 | `MYSQL_PASSWORD` | **yes** | Password for the `ontos` database user. Use hex — it is embedded in a URL. |
 | `MYSQL_ROOT_PASSWORD` | **yes** | MySQL root password. |
 | `ADMIN_PASSWORD` | **yes** | Password for the admin account. Re-applied whenever the bootstrap runs, so change it and run `docker compose up -d` to rotate it. `docker compose restart` does not re-run the bootstrap. |
 | `ADMIN_EMAIL` | no | Admin account address. Default `admin@acme-ontology.com`. |
 | `ONTOS_PORT` | no | Host port for the app. Default `3000`. |
-| `SECRETS_KEY` | no | Seals connector credentials in the database; 64 hex characters (`openssl rand -hex 32`). Unset, a key derived from `APP_SECRET` is used, so changing `APP_SECRET` makes stored credentials unreadable. |
+| `SECRETS_KEY` | no | Seals connector credentials in the database; 64 hex characters (`openssl rand -hex 32`). Unset, a key derived from `APP_SECRET` is used, so changing `APP_SECRET` alone makes stored credentials unreadable. Setting it later is safe: the next start re-seals under it. |
+| `SECRETS_KEY_PREVIOUS` | no | When rotating `SECRETS_KEY`, the old key: the next start re-seals what it sealed under the new one. Remove it afterwards. |
 | `ALLOW_DEMO_LOGIN` | no | `true` re-enables persona login. Local demos only — see [Signing in](#signing-in). |
 | `ALLOWED_ORIGINS` | no | Cross-origin allowlist. The bundled client is same-origin and needs nothing here. |
 
@@ -216,8 +217,9 @@ required; `docker compose` refuses to start without them.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `APP_SECRET` | **yes** | — | HS256 signing key for session JWTs. Use 32+ random chars. |
-| `SECRETS_KEY` | no | derived from `APP_SECRET` | AES-256-GCM key that seals connector credentials: 32 bytes as 64 hex characters or base64. A malformed key stops the server and the bootstrap at start. |
+| `APP_SECRET` | **yes** | — | HS256 signing key for session JWTs. Use 32+ random chars; production refuses fewer. |
+| `SECRETS_KEY` | no | derived from `APP_SECRET` | AES-256-GCM key that seals connector credentials: 32 bytes as 64 hex characters, or as base64 with its `=` padding (`openssl rand -base64 32`). A malformed key stops the server, the worker and the bootstrap at start. |
+| `SECRETS_KEY_PREVIOUS` | no | — | The key `SECRETS_KEY` replaced, while `db:bootstrap` re-seals what it sealed. |
 | `DATABASE_URL` | **yes** | — | MySQL connection string, e.g. `mysql://root:@localhost:3306/ontos` |
 | `APP_ID` | no | `ontos` | Application identifier |
 | `ADMIN_EMAIL` | no | `admin@acme-ontology.com` | This address is auto-promoted to the `admin` role |
@@ -633,12 +635,18 @@ These are tracked, known behaviours rather than surprises:
 - **An action checked against SHACL is refused while the engine is offline**, rather than
   applied unchecked.
 - **Connector credentials are sealed in the database, not held in a vault.** SQL and broker
-  passwords and client keys are encrypted with AES-256-GCM, each bound to its workspace and
-  field, and opened only when the server connects; they are never sent to a client. The key
-  comes from `SECRETS_KEY`, or from `APP_SECRET` when that is unset, and lives with the
-  server, so anyone who holds both the database and the key can read them. Changing the key
-  makes stored credentials unreadable: the server says so, and they must be entered again.
-  The bootstrap seals any credential an earlier build stored as plain text. TLS to a SQL
+  passwords and client keys are encrypted with AES-256-GCM, each bound to its workspace,
+  field and endpoint, and opened only when the server connects; they are never sent to a
+  client. A sealed value copied onto another connector, or a row whose host is changed in
+  the database, opens nothing. The key comes from `SECRETS_KEY`, or from `APP_SECRET` when
+  that is unset, and lives with the server, so anyone who holds both the database and the
+  key can read them. Setting `SECRETS_KEY` later, or rotating it with `SECRETS_KEY_PREVIOUS`,
+  loses nothing: the bootstrap re-seals under the new key, and seals any credential an
+  earlier build stored as plain text. A credential sealed under a key the server no longer
+  has cannot be read: the server says so, a workspace admin enters a SQL connector's
+  password again with **Update password**, and a broker connector is deleted and added
+  again. A build from before sealing would send sealed values as passwords, so do not roll
+  back past it without restoring a database backup from before the upgrade. TLS to a SQL
   source checks the server's certificate against the system's trusted authorities, so a
   server with a self-signed certificate is refused.
 - **Webhook addresses are checked when the job runs.** A host whose DNS answer changes

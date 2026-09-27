@@ -21,6 +21,7 @@ x-app-env: &app-env
   DATABASE_URL: mysql://ontos:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@db:3306/ontos
   APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env (32+ random characters)}
   SECRETS_KEY: ${SECRETS_KEY:-}
+  SECRETS_KEY_PREVIOUS: ${SECRETS_KEY_PREVIOUS:-}
   ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@acme-ontology.com}
   ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env (12+ characters)}
   ALLOW_DEMO_LOGIN: ${ALLOW_DEMO_LOGIN:-false}
