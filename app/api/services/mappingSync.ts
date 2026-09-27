@@ -23,8 +23,10 @@ import { PermanentJobError, type JobHandler } from "./jobs/worker";
 import {
   parseSqlConfig,
   fetchRows as fetchSqlRows,
+  unreadablePasswordMessage,
   type SqlConnectorConfig,
 } from "./sqlConnector";
+import { SecretUnreadableError } from "../lib/secretBox";
 
 
 /**
@@ -130,7 +132,13 @@ export async function checkRunnableMapping(workspaceId: number, mappingId: numbe
   }
 
   if (record.connector.type === "sql") {
-    const sqlConfig = parseSqlConfig(record.connector.configJson);
+    let sqlConfig: SqlConnectorConfig | null;
+    try {
+      sqlConfig = parseSqlConfig(record.connector.configJson, record.connector.workspaceId);
+    } catch (err) {
+      if (!(err instanceof SecretUnreadableError)) throw err;
+      return { ok: false, code: "BAD_REQUEST", message: unreadablePasswordMessage(err) };
+    }
     if (!sqlConfig) {
       return {
         ok: false,

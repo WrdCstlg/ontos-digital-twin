@@ -21,6 +21,7 @@ import { getDb } from "../api/queries/connection";
 import { hashPassword } from "../api/lib/password";
 import { env } from "../api/lib/env";
 import { demoPersonaEmails } from "../api/auth/service";
+import { sealStoredSecrets } from "../api/services/secretSealing";
 
 const MIN_ADMIN_PASSWORD_LENGTH = 12;
 
@@ -146,6 +147,23 @@ async function clearPersonaPasswords() {
   }
 }
 
+/**
+ * Connector credentials are sealed at rest (api/lib/secretBox.ts). Earlier
+ * builds stored them as plain text, so every start seals any that remain, and
+ * says how many cannot be read because the key has changed. A malformed
+ * SECRETS_KEY fails the bootstrap here, so the app never starts without a key.
+ */
+async function sealCredentials() {
+  const { sealed, otherKey } = await sealStoredSecrets();
+  if (sealed > 0) log(`sealed ${sealed} connector credential(s) an earlier build stored as plain text`);
+  if (otherKey > 0) {
+    log(
+      `WARNING: ${otherKey} connector credential(s) were sealed under a different key and cannot be read ` +
+        "(SECRETS_KEY or APP_SECRET has changed). Enter them again, or restore the key.",
+    );
+  }
+}
+
 async function main() {
   const migrationsFolder = process.env.MIGRATIONS_DIR ?? path.resolve(process.cwd(), "db/migrations");
   log(`applying migrations from ${migrationsFolder}`);
@@ -171,6 +189,7 @@ async function main() {
   }
 
   await clearPersonaPasswords();
+  await sealCredentials();
   await provisionAdmin();
   log("done");
 }

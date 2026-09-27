@@ -5,6 +5,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
+import { secretKey } from "./lib/secretBox";
 
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { secureHeaders } from "hono/secure-headers";
@@ -341,6 +342,16 @@ if (env.isProduction && env.allowDemoLogin) {
   console.warn(
     "[security] ALLOW_DEMO_LOGIN is on: anyone who can reach this server can sign in as any role, " +
       "including admin, without a password. Use it for local demos only.",
+  );
+}
+
+// The key that seals connector credentials (lib/secretBox.ts): a malformed
+// SECRETS_KEY stops the server here, not at the first connection it makes.
+secretKey();
+if (env.isProduction && !env.secretsKey) {
+  console.log(
+    "[secrets] SECRETS_KEY is not set: connector credentials are sealed with a key derived from APP_SECRET, " +
+      "so changing APP_SECRET makes them unreadable. Set SECRETS_KEY to keep the two apart.",
   );
 }
 

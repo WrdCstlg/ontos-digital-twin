@@ -41,11 +41,11 @@ afterEach(() => {
 
 describe("parseSqlConfig", () => {
   it("needs a known driver, a host and a database", () => {
-    expect(parseSqlConfig(null)).toBeNull();
-    expect(parseSqlConfig({ host: "h", database: "d" })).toBeNull();
-    expect(parseSqlConfig({ driver: "oracle", host: "h", database: "d" })).toBeNull();
-    expect(parseSqlConfig({ driver: "mysql", database: "d" })).toBeNull();
-    expect(parseSqlConfig({ driver: "mysql", host: "h", database: "d", port: "3306", ssl: "yes" })).toEqual({
+    expect(parseSqlConfig(null, 1)).toBeNull();
+    expect(parseSqlConfig({ host: "h", database: "d" }, 1)).toBeNull();
+    expect(parseSqlConfig({ driver: "oracle", host: "h", database: "d" }, 1)).toBeNull();
+    expect(parseSqlConfig({ driver: "mysql", database: "d" }, 1)).toBeNull();
+    expect(parseSqlConfig({ driver: "mysql", host: "h", database: "d", port: "3306", ssl: "yes" }, 1)).toEqual({
       driver: "mysql",
       host: "h",
       database: "d",

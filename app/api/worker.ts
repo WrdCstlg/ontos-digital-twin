@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { sql } from "drizzle-orm";
 import { closeDb, getDb } from "./queries/connection";
+import { secretKey } from "./lib/secretBox";
 import { jobHandlers } from "./services/jobs/handlers";
 import { JobWorker } from "./services/jobs/worker";
 
@@ -16,6 +17,10 @@ import { JobWorker } from "./services/jobs/worker";
  */
 
 const POLL_MS = 1000;
+
+// SQL imports open the source's sealed password (lib/secretBox.ts): a
+// malformed SECRETS_KEY stops the worker here, before it takes any job.
+secretKey();
 
 const worker = new JobWorker({
   handlers: jobHandlers,
