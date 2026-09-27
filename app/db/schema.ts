@@ -198,6 +198,12 @@ export const mappings = mysqlTable("mappings", {
   status: mysqlEnum("status", ["draft", "active", "paused"])
     .notNull()
     .default("draft"),
+  /**
+   * What an import does when the mapped rows fail the class's SHACL shapes:
+   * `warn` imports them and records the violations; `block` imports nothing,
+   * and nothing unchecked either (services/mappingSync.ts).
+   */
+  shaclMode: mysqlEnum("shaclMode", ["warn", "block"]).notNull().default("warn"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Mapping = typeof mappings.$inferSelect;

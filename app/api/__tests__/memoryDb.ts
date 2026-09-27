@@ -206,8 +206,12 @@ export function memoryDb(tables: Tables) {
             rows.push(row);
             return row;
           });
-          return awaitable(() => [{ insertId: added[0]?.id, affectedRows: added.length }], {
+          const result = () => [{ insertId: added[0]?.id, affectedRows: added.length }];
+          return awaitable(result, {
             $returningId: () => Promise.resolve(added.map((r) => ({ id: r.id }))),
+            // Rows are added as given: it does not detect duplicates, so a test
+            // that relies on an upsert updating a row must not start with one.
+            onDuplicateKeyUpdate: () => awaitable(result),
           });
         },
       };

@@ -270,7 +270,10 @@ export async function runMappingSync(
     .where(and(eq(ontologyClasses.moduleId, m.moduleId), eq(ontologyClasses.iri, m.classIri)))
     .limit(1);
   let shaclReport: ExplainedShaclReport | null = null;
-  if (targetClass?.shaclJson && (await semanticEngine.ensureEngineRunning())) {
+  // The class has shapes, but they could not be checked (engine away, or the check failed).
+  let shaclUnchecked = false;
+  if (targetClass?.shaclJson && !(await semanticEngine.ensureEngineRunning())) shaclUnchecked = true;
+  else if (targetClass?.shaclJson) {
     try {
       const prefixMap = buildPrefixMap();
       const shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);
@@ -309,6 +312,35 @@ export async function runMappingSync(
       }
     } catch (shaclErr) {
       console.warn("[mappingSync] SHACL pre-validation encountered error:", shaclErr);
+      shaclUnchecked = true;
+    }
+  }
+
+  // A mapping set to block imports nothing its class's shapes reject, and
+  // nothing unchecked: without the engine the import waits, as an action
+  // checked against SHACL does. Warn (the default) imports and records.
+  if (m.shaclMode === "block") {
+    if (shaclUnchecked) {
+      throw new Error(
+        `mapping '${m.name}' blocks imports its class's SHACL shapes have not checked, and they could not be checked just now (is the semantic engine running?)`,
+      );
+    }
+    if (shaclReport && !shaclReport.conforms) {
+      const worst = shaclReport.signatureSummary
+        .slice(0, 3)
+        .map((g) => `${g.humanExplanation} (${g.count}×, e.g. ${g.sampleFocusNodes[0] ?? "?"})`)
+        .join("; ");
+      await writeAudit({
+        workspaceId,
+        actor,
+        action: `Sync '${m.name}' refused: ${shaclReport.violationCount} SHACL violation(s), and the mapping blocks imports that do not conform`,
+        entityType: "sync_job",
+        entityId: payload.syncJobId,
+        payload: { mappingId: m.id, refused: true, shaclReport },
+      });
+      throw new PermanentJobError(
+        `SHACL: ${shaclReport.violationCount} violation(s) in the mapped rows, and this mapping blocks imports that do not conform. ${worst}`,
+      );
     }
   }
 
