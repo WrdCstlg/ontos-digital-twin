@@ -14,6 +14,7 @@ import {
   sessionEpoch,
   SESSION_CALL_TIMEOUT_MS,
   SESSION_GRACE_MS,
+  SESSION_RECHECK_MS,
   SESSION_LOCK_MAX_HOLD_MS,
   sessionState,
   subscribePending,
@@ -175,7 +176,7 @@ describe("the outage clock counts only evidence it saw at the checking pace", ()
     expect(clock.get()).toEqual({ since: T0 + 15_000, last: T0 + 15_000 });
   });
 
-  it("U3: a reload resumes the run the tab was in, crediting the span it had recorded", () => {
+  it("U3: a reload resumes the run the tab was in, crediting its span and the reload's own gap", () => {
     const before = createOutageClock();
     before.observe(fail, T0);
     pass(30_000);
@@ -184,7 +185,7 @@ describe("the outage clock counts only evidence it saw at the checking pace", ()
     // The page reloads: a new clock, a new monotonic origin.
     const after = createOutageClock();
     after.observe(fail, 50);
-    expect(after.get()).toEqual({ since: 50 - 30_000, last: 50 });
+    expect(after.get()).toEqual({ since: 50 - 30_000 - 5_000, last: 50 });
     // A success ends it, and a later reload starts afresh.
     after.observe({ ok: true }, 60);
     const again = createOutageClock();
@@ -192,18 +193,18 @@ describe("the outage clock counts only evidence it saw at the checking pace", ()
     expect(again.get()).toEqual({ since: 5, last: 5 });
   });
 
-  it("U3: a clock stepped forward across a reload does not shorten the grace period", () => {
+  it("U3: a clock stepped forward across a reload shortens the grace period by at most one checking interval", () => {
     const before = createOutageClock();
     for (let t = 0; t <= 105_000; t += 15_000) {
       if (t > 0) pass(15_000);
       before.observe(fail, t);
     }
     // The system clock steps 80 s forward, and the page reloads a moment later:
-    // the run had lasted 105 s, and the step adds nothing to it.
+    // the run had lasted 105 s, and the step adds at most one checking interval.
     pass(80_000 + 1_000);
     const after = createOutageClock();
     after.observe(fail, 50);
-    expect(after.get()).toEqual({ since: 50 - 105_000, last: 50 });
+    expect(after.get()).toEqual({ since: 50 - 105_000 - SESSION_RECHECK_MS, last: 50 });
   });
 
   it("U3: a reload just after a new run began resumes that run, not the one before it", () => {
@@ -220,11 +221,21 @@ describe("the outage clock counts only evidence it saw at the checking pace", ()
     pass(1_000);
     const after = createOutageClock();
     after.observe(fail, 50);
-    expect(after.get()).toEqual({ since: 50, last: 50 });
+    expect(after.get()).toEqual({ since: 50 - 1_000, last: 50 });
   });
 
-  it("U3: a run remembered from too long ago, or from the future, is not resumed", () => {
-    createOutageClock().observe(fail, T0);
+  it("U3: a user reloading faster than the checks still gathers evidence, one reload's gap at a time", () => {
+    let spanReached = 0;
+    for (let reload = 0; reload < 30 && spanReached < SESSION_GRACE_MS; reload++) {
+      const page = createOutageClock();
+      page.observe(fail, 1_000);
+      spanReached = page.get()!.last - page.get()!.since;
+      pass(10_000);
+    }
+    expect(spanReached).toBeGreaterThanOrEqual(SESSION_GRACE_MS);
+  });
+
+  it("U3: a run remembered from too long ago, or from the future, is not resumed", () => {    createOutageClock().observe(fail, T0);
     pass(SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS + 1);
     const stale = createOutageClock();
     stale.observe(fail, 7);
@@ -302,8 +313,21 @@ describe("the outage clock counts only evidence it saw at the checking pace", ()
       pass(30_000);
       before.observe(fail, 30_000);
       pass(10_000);
-      expect(reloaded()).toEqual({ since: 11 - 30_000, last: 11 });
+      expect(reloaded()).toEqual({ since: 11 - 30_000 - 10_000, last: 11 });
     });
+  });
+});
+
+describe("the session epoch", () => {
+  it("tells a tab of a sign-in in another tab once, and never of its own", () => {
+    window.localStorage.removeItem(SESSION_EPOCH_KEY);
+    sessionEpoch.takeChange(); // where the tab starts
+    expect(sessionEpoch.takeChange()).toBe(false);
+    sessionEpoch.bump(); // this tab signs in
+    expect(sessionEpoch.takeChange()).toBe(false);
+    window.localStorage.setItem(SESSION_EPOCH_KEY, "another-tab-signed-in");
+    expect(sessionEpoch.takeChange()).toBe(true);
+    expect(sessionEpoch.takeChange()).toBe(false);
   });
 });
 

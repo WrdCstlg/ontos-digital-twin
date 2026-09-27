@@ -5,8 +5,9 @@
  * all) is an outage, not a sign-out: the user stays signed in. The user is
  * signed out only on evidence that the outage has lasted SESSION_GRACE_MS: a
  * check that still fails that long after the first failed one, measured on a
- * monotonic clock so a change to the system clock cannot shorten it. A tab
- * that stops checking therefore never signs anyone out on its own.
+ * monotonic clock so a change to the system clock cannot shorten it (across a
+ * reload, by at most one checking interval). A tab that stops checking
+ * therefore never signs anyone out on its own.
  *
  * The outage clock is shared by every caller of useAuth, so the whole app
  * agrees on when the outage began.
@@ -20,8 +21,9 @@
  *      settles, whether or not the page is showing the session; no two more
  *      than SESSION_MAX_CHECK_GAP_MS apart by either the monotonic or the
  *      wall clock; within one session epoch. A reload resumes the run the tab
- *      was in, crediting only the span it recorded. The remembered persona
- *      that opens a page is a guess, not an answer: it ends no run.
+ *      was in, crediting the span it recorded and the reload's own gap up to
+ *      one checking interval. The remembered persona that opens a page is a
+ *      guess, not an answer: it ends no run.
  *  I3  An outage signs the user out at most once, in any tab.
  *  I4  Once an outage sign-out is pending, no user is shown as signed in
  *      until the server has ended the session or the user signs in again;
@@ -37,7 +39,8 @@
  *      per outage, one when a part of the page that shows the session
  *      mounts on a stale check, and at most one re-check per 5 s per tab
  *      prompted by other requests' failures (none for their outages once
- *      the clock is running). Focus and reconnect add none.
+ *      the clock is running), and one when a sign-in in another tab has
+ *      changed the session. Focus and reconnect add none of their own.
  *  B2  Server sign-outs: at most one per 15 s per tab, never overlapping.
  *  B3  Every session call (auth.me, sign-in, sign-out) gives up after
  *      SESSION_CALL_TIMEOUT_MS, body included.
@@ -136,6 +139,8 @@ export function sessionState(input: {
  * outage one session saw is no evidence against the next one.
  */
 export const SESSION_EPOCH_KEY = "ontos:session-epoch";
+/** The epoch this tab last acted on: its own sign-ins, and changes it has followed. */
+let seenEpoch: string | null = null;
 export const sessionEpoch = {
   get(): string {
     try {
@@ -146,10 +151,25 @@ export const sessionEpoch = {
   },
   bump(): void {
     try {
-      window.localStorage.setItem(SESSION_EPOCH_KEY, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+      const next = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      window.localStorage.setItem(SESSION_EPOCH_KEY, next);
+      // This tab's own sign-in: nothing for it to follow (no storage event
+      // reaches the tab that wrote the value, so it must say so itself).
+      seenEpoch = next;
     } catch {
       // storage refused: tabs cannot tell sessions apart, and the other rules still hold
     }
+  },
+  /**
+   * Whether a sign-in in another tab has changed the session since this tab
+   * last looked; the change is then counted as seen. The first call only
+   * records where the tab starts.
+   */
+  takeChange(): boolean {
+    const now = sessionEpoch.get();
+    const changed = seenEpoch !== null && now !== seenEpoch;
+    seenEpoch = now;
+    return changed;
   },
 };
 
@@ -174,9 +194,11 @@ function remember(v: Remembered | null): void {
 /**
  * How long the run this tab remembers had lasted, if it may be resumed: one
  * checked recently, by a wall clock that has not gone backwards, and no longer
- * than the grace period and a gap. Only the span it recorded is credited: the
- * reload itself checked nothing, and a clock stepped forward across it adds
- * nothing to the run.
+ * than the grace period and a gap. Credited: the span it recorded, and the
+ * reload's own gap, which only the wall clock measures, up to one checking
+ * interval. So reloading faster than the checks still gathers evidence, and a
+ * clock stepped forward across a reload shortens the grace period by at most
+ * that one interval.
  */
 function resumable(epoch: string): number | null {
   try {
@@ -187,7 +209,7 @@ function resumable(epoch: string): number | null {
     const sinceLast = Date.now() - v.wallLast;
     if (sinceLast < 0 || sinceLast > SESSION_MAX_CHECK_GAP_MS) return null;
     if (v.span < 0 || v.span > SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS) return null;
-    return v.span;
+    return v.span + Math.min(sinceLast, SESSION_RECHECK_MS);
   } catch {
     return null;
   }
