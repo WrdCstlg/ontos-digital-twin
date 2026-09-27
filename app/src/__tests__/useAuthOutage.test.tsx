@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { focusManager, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, onlineManager, QueryClientProvider } from "@tanstack/react-query";
 import { TRPCClientError, type TRPCLink } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from "react-router";
@@ -17,6 +17,7 @@ import type { AppRouter } from "../../api/router";
 import { AuthGuard } from "@/components/AuthGuard";
 import { useAuth } from "@/hooks/useAuth";
 import {
+  createOutageClock,
   outageClock,
   pendingSignOut,
   resetOutageExpiry,
@@ -25,6 +26,7 @@ import {
   SESSION_LOCK_MAX_HOLD_MS,
   SESSION_RECHECK_MS,
   withSessionLock,
+  announcePendingChange as announcePendingChangeForTest,
 } from "@/lib/sessionGrace";
 import Login from "@/pages/Login";
 import { createAppQueryClient, createAppTrpcClient, SessionSignOutCompleter, trpc } from "@/providers/trpc";
@@ -84,7 +86,8 @@ const seen: {
   watcher: ReturnType<typeof useAuth> | null;
   navigate: NavigateFunction | null;
   appMounts: number;
-} = { auth: null, watcher: null, navigate: null, appMounts: 0 };
+  queryClient: ReturnType<typeof createAppQueryClient> | null;
+} = { auth: null, watcher: null, navigate: null, appMounts: 0, queryClient: null };
 const paths: string[] = [];
 
 function Probe() {
@@ -132,6 +135,7 @@ function Where() {
 
 function renderApp({ start = "/app", watcher = false, realLinks = false } = {}) {
   const queryClient = createAppQueryClient();
+  seen.queryClient = queryClient;
   const client = createAppTrpcClient(realLinks ? undefined : [fakeLink]);
   return render(
     <trpc.Provider client={client} queryClient={queryClient}>
@@ -166,7 +170,9 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
   Object.assign(server, { down: false, session: true, latencyMs: 0, slow: {}, logoutDown: false, refuseSignIn: null, calls: [] });
   paths.length = 0;
-  Object.assign(seen, { auth: null, watcher: null, navigate: null, appMounts: 0 });
+  Object.assign(seen, { auth: null, watcher: null, navigate: null, appMounts: 0, queryClient: null });
+  onlineManager.setOnline(true);
+  window.sessionStorage.clear();
   outageClock.reset();
   resetOutageExpiry();
   pendingSignOut.clear();
@@ -584,5 +590,175 @@ describe("signing in again", () => {
     await advance(10_000);
     expect(paths).toEqual(["/app", "/login", "/app"]);
     expect(seen.auth?.isAuthenticated).toBe(true);
+  });
+});
+
+describe("round 3: checks keep their pace, and nothing waits to act later", () => {
+  it("session calls made while the browser is offline fail at once; none waits to run later, outside the lock", async () => {
+    renderApp();
+    await advance(100);
+    pendingSignOut.set();
+    announcePendingChangeForTest();
+    server.down = true;
+    onlineManager.setOnline(false);
+    await advance(100);
+    // The sign-out attempt went out and failed; nothing is parked until the browser is back online.
+    expect(count("auth.logout")).toBeGreaterThanOrEqual(1);
+    const paused = seen.queryClient!.getMutationCache().getAll().filter((m) => m.state.isPaused);
+    expect(paused).toHaveLength(0);
+  });
+
+  it("B5: an ordinary sign-out made while offline fails at once, and holds the session lock no longer", async () => {
+    renderApp();
+    await advance(100);
+    server.down = true;
+    onlineManager.setOnline(false);
+    act(() => seen.auth?.logout());
+    await advance(100);
+    expect(count("auth.logout")).toBe(1);
+    expect(seen.queryClient!.getMutationCache().getAll().filter((m) => m.state.isPaused)).toHaveLength(0);
+    let ran = false;
+    void withSessionLock(async () => void (ran = true));
+    await advance(100);
+    expect(ran).toBe(true);
+  });
+
+  it("B5: sign-ins made while offline, by persona or by password, fail at once with their reason", async () => {
+    server.session = false;
+    renderApp({ start: "/login" });
+    await advance(100);
+    server.down = true;
+    onlineManager.setOnline(false);
+    fireEvent.click(screen.getByText("Elena Cortez"));
+    await advance(100);
+    expect(count("auth.demoLogin")).toBe(1);
+    expect(screen.getByRole("alert").textContent).toBe("Your session could not be checked just now.");
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "admin@acme-ontology.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a-long-admin-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+    await advance(100);
+    expect(count("auth.login")).toBe(1);
+    expect(seen.queryClient!.getMutationCache().getAll().filter((m) => m.state.isPaused)).toHaveLength(0);
+    expect(paths).toEqual(["/login"]);
+  });
+
+  it("B1: with no user known, a page loaded during an outage checks every 5 s, and gets in within 5 s of the server's return", async () => {
+    server.down = true;
+    renderApp({ start: "/quiet" });
+    await advance(60_000);
+    const checks = count("auth.me");
+    expect(checks).toBeGreaterThanOrEqual(11);
+    expect(checks).toBeLessThanOrEqual(14);
+    server.down = false;
+    await advance(5_500);
+    expect(seen.auth?.isAuthenticated).toBe(true);
+    expect(paths).toEqual(["/quiet"]);
+  });
+
+  it("U2: a tab hidden just after a failed check keeps checking, and signs out after three minutes", async () => {
+    renderApp();
+    await advance(100);
+    server.down = true;
+    // The outage is noticed through the page's own requests while the tab is visible.
+    await advance(5_500);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    focusManager.setFocused(false);
+    try {
+      await advance(SESSION_GRACE_MS + 30_000);
+      expect(pendingSignOut.get()).toBe(true);
+      expect(paths).toEqual(["/app", "/login"]);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).visibilityState;
+    }
+  });
+
+  it("U4: the tab regaining focus, or the network coming back, adds no session check", async () => {
+    renderApp({ start: "/quiet" });
+    await advance(100);
+    server.down = true;
+    // Past the healthy check that notices the outage, and any retry of it.
+    await advance(SESSION_HEALTHY_RECHECK_MS + 5_000);
+    const before = count("auth.me");
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        onlineManager.setOnline(false);
+        onlineManager.setOnline(true);
+      });
+    }
+    await advance(1_000);
+    expect(count("auth.me") - before).toBe(0);
+  });
+
+  it("U3: a page reloaded two minutes into an outage, with the persona remembered, signs out a minute later, not three", async () => {
+    // Before the reload: signed in, and the server down for two minutes, checked every 15 s.
+    const outage = { data: { code: "SERVICE_UNAVAILABLE" } };
+    window.localStorage.setItem(PERSONA_KEY, JSON.stringify(USER));
+    const before = createOutageClock();
+    for (let t = 0; t <= 120_000; t += SESSION_RECHECK_MS) {
+      before.observe({ ok: false, error: outage }, t, t + 1);
+      if (t < 120_000) await advance(SESSION_RECHECK_MS);
+    }
+    // The reload, the server still down: the remembered persona opens the page,
+    // and is a guess, not an answer that would end the outage.
+    server.down = true;
+    renderApp();
+    await advance(45_000);
+    expect(seen.auth?.isAuthenticated).toBe(true);
+    expect(seen.auth?.isReconnecting).toBe(true);
+    expect(pendingSignOut.get()).toBe(false);
+    await advance(30_000);
+    expect(pendingSignOut.get()).toBe(true);
+    expect(paths).toEqual(["/app", "/login"]);
+  });
+
+  it("U1: a page that opens past the three minutes, seeing a check that failed earlier, adds no evidence", async () => {
+    renderApp();
+    await advance(100);
+    server.down = true;
+    await advance(10_000);
+    const since = outageClock.get()!.since;
+    // Ten seconds before the three minutes, the server is back but slow: no check settles for 30 s.
+    await advance(since + SESSION_GRACE_MS - 10_000 - performance.now());
+    Object.assign(server, { down: false, latencyMs: 30_000 });
+    // Past the three minutes, another page opens, and sees the last check that failed.
+    await advance(15_000);
+    await go("/quiet");
+    await advance(1_000);
+    expect(pendingSignOut.get()).toBe(false);
+    // The slow check answers: the session held throughout.
+    await advance(30_000);
+    expect(seen.auth?.isAuthenticated).toBe(true);
+    expect(seen.auth?.isReconnecting).toBe(false);
+    expect(pendingSignOut.get()).toBe(false);
+    expect(paths).toEqual(["/app", "/quiet"]);
+  });
+
+  it("U6: a sign-in here starts another tab's outage afresh, so its old evidence cannot sign the new session out", async () => {
+    const outage = { data: { code: "SERVICE_UNAVAILABLE" } };
+    const otherTab = createOutageClock();
+    otherTab.observe({ ok: false, error: outage }, 0, 1);
+    otherTab.observe({ ok: false, error: outage }, 15_000, 2);
+    server.session = false;
+    renderApp({ start: "/login" });
+    await advance(100);
+    fireEvent.click(screen.getByText("Elena Cortez"));
+    await advance(1_000);
+    expect(paths).toEqual(["/login", "/app"]);
+    otherTab.observe({ ok: false, error: outage }, 30_000, 3);
+    expect(otherTab.get()).toEqual({ since: 30_000, last: 30_000 });
+  });
+
+  it("U7: an ordinary sign-out lets go of the session lock once the server has answered, not when every page has refreshed", async () => {
+    renderApp();
+    await advance(100);
+    server.slow = { "graph.stats": 20_000 };
+    act(() => seen.auth?.logout());
+    await advance(1_000);
+    let ran = false;
+    void withSessionLock(async () => void (ran = true));
+    await advance(1_000);
+    expect(ran).toBe(true);
   });
 });

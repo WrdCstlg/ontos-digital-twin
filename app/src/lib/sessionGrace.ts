@@ -16,6 +16,10 @@
  *  I1  A 401 from the session check signs the user out at once.
  *  I2  No outage sign-out without a failed check SESSION_GRACE_MS or more,
  *      on the monotonic clock, after the first failed check of the outage.
+ *      An outage is a run of failed checks, each counted once, no two more
+ *      than SESSION_MAX_CHECK_GAP_MS apart, within one session epoch; a
+ *      reload resumes the run the tab was in, and the remembered persona that
+ *      opens the page is a guess, not an answer: it ends no run.
  *  I3  An outage signs the user out at most once, in any tab.
  *  I4  Once an outage sign-out is pending, no user is shown as signed in
  *      until the server has ended the session or the user signs in again;
@@ -26,16 +30,23 @@
  *      has accepted it, and a re-check prompted by "not signed in" waits for
  *      any sign-in or sign-out in flight.
  * Bounds:
- *  B1  Session checks: one per 15 s while failing (plus two retries in a
- *      visible tab), one per 60 s while healthy, one deadline check per
- *      outage, and at most one re-check per 5 s per tab prompted by other
- *      requests' failures; none for their outages once the clock is running.
+ *  B1  Session checks, no retries: one per 15 s while failing (5 s while no
+ *      user is known yet), one per 60 s while healthy, one deadline check
+ *      per outage, one when a part of the page that shows the session
+ *      mounts on a stale check, and at most one re-check per 5 s per tab
+ *      prompted by other requests' failures (none for their outages once
+ *      the clock is running). Focus and reconnect add none.
  *  B2  Server sign-outs: at most one per 15 s per tab, never overlapping.
  *  B3  Every session call (auth.me, sign-in, sign-out) gives up after
- *      SESSION_CALL_TIMEOUT_MS.
- *  B4  The session lock is held at most SESSION_LOCK_MAX_HOLD_MS.
+ *      SESSION_CALL_TIMEOUT_MS, body included.
+ *  B4  The session lock is held at most SESSION_LOCK_MAX_HOLD_MS, and a
+ *      sign-in or sign-out holds it only for its request.
+ *  B5  No session call waits for the browser to come online: made offline,
+ *      it fails at once, so none can run later outside the lock.
  * Degradation: the pending flag falls back from localStorage to a cookie to
- * memory; with none, the sign-out lasts until the page is reloaded.
+ * memory; with none, the sign-out lasts until the page is reloaded. Without
+ * sessionStorage a reload restarts the outage; without localStorage tabs
+ * cannot tell sessions apart, and the other rules still hold.
  */
 
 export const SESSION_GRACE_MS = 3 * 60_000;
@@ -45,6 +56,14 @@ export const SESSION_RECHECK_MS = 15_000;
 export const SESSION_HEALTHY_RECHECK_MS = 60_000;
 /** The least time between session checks prompted by other requests' failures. */
 export const SESSION_OUTAGE_RECHECK_MS = 5_000;
+/** How often to check again when no user is known yet (a page loaded during an outage). */
+export const SESSION_FIRST_RECHECK_MS = 5_000;
+/**
+ * The longest gap between two failed checks of one outage: past it, nothing
+ * was checked in between (a laptop asleep, a tab frozen), so a new outage
+ * begins. Above a background tab's throttled pace of one timer a minute.
+ */
+export const SESSION_MAX_CHECK_GAP_MS = 90_000;
 /** How long a session call (check, sign-in or sign-out) may take before it counts as unanswered. */
 export const SESSION_CALL_TIMEOUT_MS = 10_000;
 /** The longest the session lock is held, well past one session call's timeout. */
@@ -107,25 +126,113 @@ export function sessionState(input: {
   return { kind: "checking", unreachable: outage !== null || paused };
 }
 
-/** The shared outage clock. Each settled check is observed: a failure extends the run, anything else ends it. */
+/**
+ * Which session the tabs are in: changed by every sign-in, in any tab. An
+ * outage one session saw is no evidence against the next one.
+ */
+export const SESSION_EPOCH_KEY = "ontos:session-epoch";
+export const sessionEpoch = {
+  get(): string {
+    try {
+      return window.localStorage.getItem(SESSION_EPOCH_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  },
+  bump(): void {
+    try {
+      window.localStorage.setItem(SESSION_EPOCH_KEY, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+    } catch {
+      // storage refused: tabs cannot tell sessions apart, and the other rules still hold
+    }
+  },
+};
+
+/** Where a tab remembers its outage across a reload (sessionStorage: this tab only). */
+export const SESSION_OUTAGE_KEY = "ontos:outage";
+type Remembered = { epoch: string; wallSince: number; wallLast: number };
+
+function remember(v: Remembered | null): void {
+  try {
+    if (v) window.sessionStorage.setItem(SESSION_OUTAGE_KEY, JSON.stringify(v));
+    else window.sessionStorage.removeItem(SESSION_OUTAGE_KEY);
+  } catch {
+    // storage refused: a reload restarts the outage, the documented degradation
+  }
+}
+
+/** How long ago the outage this tab remembers began, if it may be resumed. */
+function resumable(epoch: string): number | null {
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_OUTAGE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<Remembered>;
+    const now = Date.now();
+    if (v.epoch !== epoch || typeof v.wallSince !== "number" || typeof v.wallLast !== "number") return null;
+    const sinceLast = now - v.wallLast;
+    const age = now - v.wallSince;
+    // Only an outage checked recently, and no longer than the grace period and
+    // one gap ago; a clock that went backwards resumes nothing.
+    if (sinceLast < 0 || sinceLast > SESSION_MAX_CHECK_GAP_MS || age < 0 || age > SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS) return null;
+    return age;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The shared outage clock. Each settled check is observed: a failure extends
+ * the run, anything else ends it. Evidence counts only as the checks made it:
+ * - a failure is counted once, by `stamp` (the check's own time), however many
+ *   parts of the page see it, and whenever they mount;
+ * - a gap longer than SESSION_MAX_CHECK_GAP_MS since the last failure (a
+ *   laptop asleep, a tab frozen) starts a new outage, since nothing was checked;
+ * - a sign-in since the outage began (sessionEpoch) starts a new one;
+ * - a reload resumes the outage the tab was in (see `resumable`). Only the
+ *   page's first outage may: within a page the monotonic clock alone decides,
+ *   since the wall clock can be set back.
+ */
 export function createOutageClock() {
   let current: Outage | null = null;
+  let lastStamp: number | undefined;
+  let epoch = "";
+  let firstOutage = true;
   const listeners = new Set<() => void>();
   const set = (v: Outage | null) => {
     current = v;
     for (const l of listeners) l();
   };
+  const end = () => {
+    lastStamp = undefined;
+    remember(null);
+    if (current !== null) set(null);
+  };
   return {
     get: (): Outage | null => current,
-    observe(result: { ok: true } | { ok: false; error: unknown }, at = monotonicNow()) {
+    observe(result: { ok: true } | { ok: false; error: unknown }, at = monotonicNow(), stamp?: number) {
       // Success, or "not signed in", is an answer: the outage, if any, is over.
-      if (result.ok || isSignedOutError(result.error)) {
-        if (current !== null) set(null);
-      } else if (current === null) set({ since: at, last: at });
-      else if (at > current.last) set({ since: current.since, last: at });
+      if (result.ok || isSignedOutError(result.error)) return end();
+      if (stamp !== undefined && stamp === lastStamp) return;
+      lastStamp = stamp;
+      const now = sessionEpoch.get();
+      if (current !== null && now === epoch && at - current.last <= SESSION_MAX_CHECK_GAP_MS) {
+        if (at > current.last) {
+          set({ since: current.since, last: at });
+          remember({ epoch, wallSince: Date.now() - (at - current.since), wallLast: Date.now() });
+        }
+        return;
+      }
+      epoch = now;
+      const age = firstOutage ? resumable(epoch) : null;
+      firstOutage = false;
+      const since = age !== null ? at - age : at;
+      set({ since, last: at });
+      remember({ epoch, wallSince: Date.now() - (at - since), wallLast: Date.now() });
     },
+    /** Forgets the outage, the tab's stored copy too: the clock is as on a page just loaded. */
     reset() {
-      if (current !== null) set(null);
+      firstOutage = true;
+      end();
     },
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -160,24 +267,45 @@ function storage(): Storage | null {
   }
 }
 
-function cookieFlag(): boolean {
+function currentProtocol(): string {
   try {
-    return document.cookie.split(";").some((c) => c.trim() === `${PENDING_COOKIE}=1`);
+    return window.location.protocol;
   } catch {
-    return false;
+    return "http:";
   }
 }
 
-function setCookieFlag(on: boolean): void {
-  try {
-    const secure = window.location.protocol === "https:" ? "; Secure" : "";
-    document.cookie = on
-      ? `${PENDING_COOKIE}=1; Path=/; SameSite=Strict; Max-Age=604800${secure}`
-      : `${PENDING_COOKIE}=; Path=/; SameSite=Strict; Max-Age=0${secure}`;
-  } catch {
-    // cookies refused: localStorage or memory still carry it
-  }
-}
+/**
+ * The flag's cookie. Over https it is a __Host- cookie: Secure, for this host
+ * only, with no Domain, so a sibling subdomain cannot set one this app would
+ * read (a sign-out loop). Plain http cannot carry __Host- cookies, so there it
+ * keeps a plain name; that is localhost development.
+ */
+export const pendingCookie = {
+  name: (protocol: string): string => (protocol === "https:" ? `__Host-${PENDING_COOKIE}` : PENDING_COOKIE),
+  read(protocol: string = currentProtocol()): boolean {
+    try {
+      const name = pendingCookie.name(protocol);
+      return document.cookie.split(";").some((c) => c.trim() === `${name}=1`);
+    } catch {
+      return false;
+    }
+  },
+  write(on: boolean, protocol: string = currentProtocol()): void {
+    try {
+      const name = pendingCookie.name(protocol);
+      const secure = protocol === "https:" ? "; Secure" : "";
+      document.cookie = on
+        ? `${name}=1; Path=/; SameSite=Strict; Max-Age=604800${secure}`
+        : `${name}=; Path=/; SameSite=Strict; Max-Age=0${secure}`;
+    } catch {
+      // cookies refused: localStorage or memory still carry it
+    }
+  },
+};
+
+const cookieFlag = () => pendingCookie.read();
+const setCookieFlag = (on: boolean) => pendingCookie.write(on);
 
 /**
  * A sign-out the server has not confirmed yet. Set when an outage outlasts the

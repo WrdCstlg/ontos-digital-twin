@@ -154,6 +154,36 @@ describe("fetchWithTimeout", () => {
     expect(seen?.credentials).toBe("include");
   });
 
+  it("U5: gives up on a body that stalls after the headers arrive, not only on headers", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", async (_: unknown, init: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"result":'));
+          init.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const p = fetchWithTimeout(SESSION_CALL_TIMEOUT_MS)("/api/trpc/auth.me").then((r) => r.text());
+    const settled = expect(p).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.advanceTimersByTimeAsync(SESSION_CALL_TIMEOUT_MS);
+    await settled;
+  });
+
+  it("keeps the answer's status, headers and body once buffered, and gives an answer that may have no body none", async () => {
+    vi.stubGlobal("fetch", async (input: unknown) =>
+      String(input).includes("empty")
+        ? new Response(null, { status: 204, statusText: "No Content", headers: { "x-ontos": "1" } })
+        : new Response('{"error":"Please sign in"}', { status: 401, statusText: "Unauthorized", headers: { "content-type": "application/json" } }),
+    );
+    const refused = await fetchWithTimeout(1_000)("/api/trpc/auth.me");
+    expect([refused.status, refused.statusText, refused.headers.get("content-type")]).toEqual([401, "Unauthorized", "application/json"]);
+    await expect(refused.text()).resolves.toBe('{"error":"Please sign in"}');
+    const empty = await fetchWithTimeout(1_000)("/empty");
+    expect([empty.status, empty.headers.get("x-ontos"), empty.body]).toEqual([204, "1", null]);
+  });
+
   it("passes the caller's abort through, and answers normally when the server does", async () => {
     vi.stubGlobal("fetch", (_: unknown, init: RequestInit) =>
       new Promise((resolve, reject) => {

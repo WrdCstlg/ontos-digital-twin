@@ -69,9 +69,14 @@ export function createAppQueryClient(): QueryClient {
   return client;
 }
 
-/** A fetch that gives up after `ms`, as well as when the caller aborts. */
+/**
+ * A fetch that gives up after `ms`, as well as when the caller aborts. The
+ * body is read under the same deadline: headers that arrive with a body that
+ * never finishes are no answer (B3). Session answers are small, so buffering
+ * them costs nothing.
+ */
 export function fetchWithTimeout(ms: number): typeof fetch {
-  return (input, init) => {
+  return async (input, init) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new DOMException("The session check timed out", "TimeoutError")), ms);
     const outer = init?.signal;
@@ -79,9 +84,14 @@ export function fetchWithTimeout(ms: number): typeof fetch {
       if (outer.aborted) controller.abort(outer.reason);
       else outer.addEventListener("abort", () => controller.abort(outer.reason), { once: true });
     }
-    return globalThis
-      .fetch(input, { ...(init ?? {}), credentials: "include", signal: controller.signal })
-      .finally(() => clearTimeout(timer));
+    try {
+      const res = await globalThis.fetch(input, { ...(init ?? {}), credentials: "include", signal: controller.signal });
+      const body = await res.arrayBuffer();
+      const noBody = res.status === 204 || res.status === 205 || res.status === 304;
+      return new Response(noBody ? null : body, { status: res.status, statusText: res.statusText, headers: res.headers });
+    } finally {
+      clearTimeout(timer);
+    }
   };
 }
 
@@ -138,7 +148,8 @@ const trpcClient = createAppTrpcClient();
 export function SessionSignOutCompleter() {
   const pending = useSyncExternalStore(subscribePending, pendingSignOut.get, () => false);
   const client = useQueryClient();
-  const logout = trpc.auth.logout.useMutation({ retry: false });
+  // Offline, fail at once rather than wait to run later, outside the lock (B5).
+  const logout = trpc.auth.logout.useMutation({ retry: false, networkMode: "always" });
   const mutateRef = useRef(logout.mutateAsync);
   useEffect(() => {
     mutateRef.current = logout.mutateAsync;

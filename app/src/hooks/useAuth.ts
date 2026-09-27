@@ -1,5 +1,4 @@
 import { trpc } from "@/providers/trpc";
-import { focusManager } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router";
 import { LOGIN_PATH } from "@/const";
@@ -10,6 +9,7 @@ import {
   monotonicNow,
   outageClock,
   pendingSignOut,
+  SESSION_FIRST_RECHECK_MS,
   SESSION_GRACE_MS,
   SESSION_HEALTHY_RECHECK_MS,
   SESSION_RECHECK_MS,
@@ -58,29 +58,38 @@ export function useAuth(options?: UseAuthOptions) {
     staleTime: SESSION_HEALTHY_RECHECK_MS,
     // Count an unreachable server as a failed check rather than pausing.
     networkMode: "always",
-    // "Not signed in" ends the check at once. A check that could not be made
-    // is retried, but only in a visible tab: react-query pauses retries in a
-    // hidden one, and a paused check is never counted as a failure.
-    retry: (failures, err) => !isSignedOutError(err) && failures < 2 && focusManager.isFocused(),
-    // While the session cannot be checked, check again every 15 s, in a
-    // background tab too; while it is healthy, once a minute, so a quiet page
-    // still notices an outage.
+    // No retries: the regular re-check is the retry. react-query pauses a
+    // retry whose tab is hidden when its delay ends, and a paused check never
+    // settles, so a hidden tab would stop gathering evidence (B1).
+    retry: false,
+    // While the session cannot be checked, check again every 15 s (every 5 s
+    // while no user is known yet), in a background tab too; while it is
+    // healthy, once a minute, so a quiet page still notices an outage.
     refetchInterval: (q) =>
       q.state.status === "error"
         ? isSignedOutError(q.state.error)
           ? false
-          : SESSION_RECHECK_MS
+          : q.state.data === undefined
+            ? SESSION_FIRST_RECHECK_MS
+            : SESSION_RECHECK_MS
         : q.state.status === "success"
           ? SESSION_HEALTHY_RECHECK_MS
           : false,
     refetchIntervalInBackground: true,
+    // The cadence above is the whole budget (B1): focus and reconnect add none.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const { data: user, error, refetch, errorUpdatedAt, dataUpdatedAt, status, fetchStatus } = query;
 
-  // Feed each settled check into the shared outage clock, at the moment it is seen.
+  // Feed each settled check into the shared outage clock, at the moment it is
+  // first seen: the check's own time identifies it, so a part of the page that
+  // mounts later and sees the same failure adds no evidence. The remembered
+  // persona (updated at 0) is a guess, not an answer: it ends no outage, so a
+  // reload still resumes the one the tab was in.
   useEffect(() => {
-    if (status === "success") outageClock.observe({ ok: true });
-    else if (status === "error") outageClock.observe({ ok: false, error }, monotonicNow());
+    if (status === "success" && dataUpdatedAt > 0) outageClock.observe({ ok: true });
+    else if (status === "error") outageClock.observe({ ok: false, error }, monotonicNow(), errorUpdatedAt);
   }, [status, dataUpdatedAt, errorUpdatedAt, error]);
 
   const outage = useSyncExternalStore(outageClock.subscribe, outageClock.get, outageClock.get);
@@ -118,7 +127,9 @@ export function useAuth(options?: UseAuthOptions) {
   }, [graceExpired, since]);
 
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: async () => {
+    // Offline, fail at once rather than wait to run later, outside the lock (B5).
+    networkMode: "always",
+    onSuccess: () => {
       try {
         window.localStorage.removeItem("ontos:active-persona");
       } catch {
@@ -127,7 +138,9 @@ export function useAuth(options?: UseAuthOptions) {
       pendingSignOut.clear();
       outageClock.reset();
       announcePendingChange();
-      await utils.invalidate();
+      // Not awaited: the sign-out holds the session lock until this returns,
+      // and a page's queries refreshing is no reason to hold a sign-in back (B4).
+      void utils.invalidate();
       navigate(redirectPath);
     },
   });

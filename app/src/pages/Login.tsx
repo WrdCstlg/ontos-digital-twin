@@ -6,11 +6,12 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { trpc } from "@/providers/trpc";
 import { useLocation, useNavigate } from "react-router";
-import { announcePendingChange, outageClock, pendingSignOut, withSessionLock } from "@/lib/sessionGrace";
+import { announcePendingChange, outageClock, pendingSignOut, sessionEpoch, withSessionLock } from "@/lib/sessionGrace";
 import { ShieldCheck, PencilRuler, DatabaseZap, Waypoints, ArrowRight, Loader2 } from "lucide-react";
 
-/** A new session: the old one's sign-out and outage no longer apply. */
+/** A new session: the old one's sign-out and outage no longer apply, in any tab. */
 function signedIn() {
+  sessionEpoch.bump();
   pendingSignOut.clear();
   outageClock.reset();
   announcePendingChange();
@@ -84,8 +85,9 @@ export default function Login() {
 
   const utils = trpc.useUtils();
 
-  const demoLoginMut = trpc.auth.demoLogin.useMutation();
-  const loginMut = trpc.auth.login.useMutation();
+  // Offline, sign-ins fail at once rather than wait to run later, outside the lock (B5).
+  const demoLoginMut = trpc.auth.demoLogin.useMutation({ networkMode: "always" });
+  const loginMut = trpc.auth.login.useMutation({ networkMode: "always" });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
