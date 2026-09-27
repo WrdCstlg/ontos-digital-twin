@@ -163,7 +163,7 @@ export default function Login() {
 
         {afterOutage && (
           <div role="status" className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 shadow-lg backdrop-blur-md">
-            You were signed out because Ontos could not check your session for three minutes. Click a persona to resume immediately.
+            You were signed out because Ontos could not check your session for three minutes. Sign in again to continue.
           </div>
         )}
 
