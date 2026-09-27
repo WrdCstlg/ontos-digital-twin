@@ -21,6 +21,16 @@ import { isReadOnlySparql, MAX_SPARQL_LENGTH } from "./lib/sparqlGuard";
 import { resolveUserWorkspace } from "./services/workspaceGuard";
 import { publicApi } from "./publicApiRoutes";
 
+// The keys that seal connector credentials (lib/secretBox.ts), checked before
+// anything starts: a malformed SECRETS_KEY stops the server, with a failing
+// exit code, rather than at the first connection it makes.
+try {
+  secretKey();
+} catch (err) {
+  console.error(`[secrets] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+
 const app = new Hono<{ Bindings: HttpBindings }>();
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
@@ -345,13 +355,11 @@ if (env.isProduction && env.allowDemoLogin) {
   );
 }
 
-// The key that seals connector credentials (lib/secretBox.ts): a malformed
-// SECRETS_KEY stops the server here, not at the first connection it makes.
-secretKey();
 if (env.isProduction && !env.secretsKey) {
   console.log(
     "[secrets] SECRETS_KEY is not set: connector credentials are sealed with a key derived from APP_SECRET, " +
-      "so changing APP_SECRET makes them unreadable. Set SECRETS_KEY to keep the two apart.",
+      "so changing APP_SECRET makes them unreadable. Set SECRETS_KEY to keep the two apart; the bootstrap " +
+      "re-seals what the derived key sealed.",
   );
 }
 

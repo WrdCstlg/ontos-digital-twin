@@ -22,6 +22,7 @@ import { hashPassword } from "../api/lib/password";
 import { env } from "../api/lib/env";
 import { demoPersonaEmails } from "../api/auth/service";
 import { sealStoredSecrets } from "../api/services/secretSealing";
+import { secretKey } from "../api/lib/secretBox";
 
 const MIN_ADMIN_PASSWORD_LENGTH = 12;
 
@@ -148,23 +149,27 @@ async function clearPersonaPasswords() {
 }
 
 /**
- * Connector credentials are sealed at rest (api/lib/secretBox.ts). Earlier
- * builds stored them as plain text, so every start seals any that remain, and
- * says how many cannot be read because the key has changed. A malformed
- * SECRETS_KEY fails the bootstrap here, so the app never starts without a key.
+ * Connector credentials are sealed at rest (api/lib/secretBox.ts). Every start
+ * seals any an earlier build stored as plain text, re-seals any sealed under a
+ * key the current one replaced, and says how many cannot be read.
  */
 async function sealCredentials() {
-  const { sealed, otherKey } = await sealStoredSecrets();
+  const { sealed, resealed, unreadable } = await sealStoredSecrets();
   if (sealed > 0) log(`sealed ${sealed} connector credential(s) an earlier build stored as plain text`);
-  if (otherKey > 0) {
+  if (resealed > 0) log(`re-sealed ${resealed} connector credential(s) under the current key`);
+  if (unreadable > 0) {
     log(
-      `WARNING: ${otherKey} connector credential(s) were sealed under a different key and cannot be read ` +
-        "(SECRETS_KEY or APP_SECRET has changed). Enter them again, or restore the key.",
+      `WARNING: ${unreadable} connector credential(s) cannot be read: sealed under a key this server does not have ` +
+        "(SECRETS_KEY or APP_SECRET changed; set SECRETS_KEY_PREVIOUS to the old SECRETS_KEY), or damaged. " +
+        "Restore the key, or enter them again.",
     );
   }
 }
 
 async function main() {
+  // A malformed SECRETS_KEY or SECRETS_KEY_PREVIOUS fails the bootstrap before
+  // it changes anything, so the app and worker never start without a key.
+  secretKey();
   const migrationsFolder = process.env.MIGRATIONS_DIR ?? path.resolve(process.cwd(), "db/migrations");
   log(`applying migrations from ${migrationsFolder}`);
   await migrate(getDb(), { migrationsFolder });

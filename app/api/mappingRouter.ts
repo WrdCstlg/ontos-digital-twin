@@ -10,7 +10,14 @@ import {
   workspaceOntologistQuery,
 } from "./middleware";
 import { getDb } from "./queries/connection";
-import { sealCredentials, secretContext, SecretUnreadableError } from "./lib/secretBox";
+import {
+  connectorEndpoint,
+  credentialInputProblem,
+  sealCredentials,
+  sealSecret,
+  secretContext,
+  SecretUnreadableError,
+} from "./lib/secretBox";
 import { actorLabelFor, writeAudit } from "./services/audit";
 import { publicConnector } from "./services/connectorView";
 import {
@@ -75,14 +82,17 @@ export const mappingRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;
       const db = getDb();
+      const problem = credentialInputProblem(input.config);
+      if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
+      const endpoint = connectorEndpoint(input.config);
       const [{ id }] = await db
         .insert(connectors)
         .values({
           workspaceId: ws.id,
           name: input.name,
           type: input.type,
-          // Credentials are sealed before they are stored (lib/secretBox.ts).
-          configJson: sealCredentials(input.config, (field) => secretContext.connector(ws.id, field)),
+          // Credentials are sealed, for this workspace and endpoint, before they are stored (lib/secretBox.ts).
+          configJson: sealCredentials(input.config, (field) => secretContext.connector(ws.id, field, endpoint)),
           status: input.status,
         })
         .$returningId();
@@ -96,6 +106,46 @@ export const mappingRouter = createRouter({
       });
       const [row] = await db.select().from(connectors).where(eq(connectors.id, id));
       return publicConnector(row);
+    }),
+
+  /**
+   * Enters a SQL connector's password again: the way back when a stored
+   * password cannot be opened (the key changed), or when it changed at the
+   * source. The connector, its mappings and their history stay as they are.
+   */
+  setConnectorPassword: workspaceAdminMutation
+    .input(z.object({ connectorId: z.number().int().positive(), password: z.string().min(1).max(1024) }))
+    .mutation(async ({ ctx, input }) => {
+      const ws = ctx.workspace;
+      const db = getDb();
+      const [conn] = await db
+        .select()
+        .from(connectors)
+        .where(and(eq(connectors.id, input.connectorId), eq(connectors.workspaceId, ws.id)))
+        .limit(1);
+      // The query is scoped; the row is checked too, so a change to the query cannot hand over another workspace's connector.
+      if (!conn || conn.workspaceId !== ws.id) throw new TRPCError({ code: "NOT_FOUND", message: "Connector not found" });
+      if (conn.type !== "sql") throw new TRPCError({ code: "BAD_REQUEST", message: "Only a SQL connector holds a password" });
+      const problem = credentialInputProblem({ password: input.password });
+      if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
+      const cfg = (conn.configJson ?? {}) as Record<string, unknown>;
+      const configJson = {
+        ...cfg,
+        password: sealSecret(input.password, secretContext.connector(ws.id, "password", connectorEndpoint(cfg))),
+      };
+      await db
+        .update(connectors)
+        .set({ configJson })
+        .where(and(eq(connectors.id, conn.id), eq(connectors.workspaceId, ws.id)));
+      await writeAudit({
+        workspaceId: ws.id,
+        actor: actorLabelFor(ctx.user),
+        action: `Updated the password of connector '${conn.name}'`,
+        entityType: "connector",
+        entityId: conn.id,
+        payload: { name: conn.name },
+      });
+      return publicConnector({ ...conn, configJson });
     }),
 
   listMappings: workspaceQuery.query(async ({ ctx }) => {

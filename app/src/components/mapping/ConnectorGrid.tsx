@@ -4,6 +4,7 @@ import {
   Database,
   FileSpreadsheet,
   Globe,
+  KeyRound,
   Loader2,
   MoreHorizontal,
   Play,
@@ -86,6 +87,8 @@ export interface ConnectorGridProps {
   onNewConnector: () => void;
   onUploadCsv: (connectorId: number) => void;
   onRunNow: (mappingId: number) => void;
+  /** Enter a SQL connector's password again (workspace admins). */
+  onUpdatePassword?: (connectorId: number) => void;
   /** Mappings with an import being queued, waiting in the queue, or running. */
   activeMappingIds: ReadonlySet<number>;
 }
@@ -99,6 +102,7 @@ export function ConnectorGrid({
   onNewConnector,
   onUploadCsv,
   onRunNow,
+  onUpdatePassword,
   activeMappingIds,
 }: ConnectorGridProps) {
   const mappingByConnector = useMemo(() => {
@@ -169,6 +173,11 @@ export function ConnectorGrid({
                   {conn.type === 'csv' && (
                     <DropdownMenuItem onSelect={() => onUploadCsv(conn.id)}>
                       <Upload className="size-3.5" /> Upload CSV &amp; preview
+                    </DropdownMenuItem>
+                  )}
+                  {conn.type === 'sql' && onUpdatePassword && (
+                    <DropdownMenuItem onSelect={() => onUpdatePassword(conn.id)}>
+                      <KeyRound className="size-3.5" /> Update password
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem disabled={!runnable || running} onSelect={() => mapping && onRunNow(mapping.id)}>
