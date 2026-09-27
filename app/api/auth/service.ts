@@ -89,35 +89,22 @@ export async function authenticateRequest(headers: Headers): Promise<User> {
     });
   }
 
-  let user: User | null = null;
-  try {
-    user = (await findUserById(claim.userId)) ?? null;
-  } catch (err) {
-    if (claim.email && isDemoPersona(claim.email)) {
-      // Honoured without the database only while persona login is allowed: once
-      // it is switched off in production, a persona session never is.
-      if (env.isProduction && !env.allowDemoLogin) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Session expired or invalid. Please re-authenticate.",
-        });
-      }
-      const role = (claim.role ?? "admin") as DemoRole;
-      const persona = DEMO_PERSONAS[role];
-      return {
-        id: claim.userId,
-        email: claim.email,
-        name: persona?.name ?? "Demo User",
-        role,
-        avatar: null,
-        passwordHash: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        lastSignInAt: new Date(),
-      };
-    }
-    throw err;
+  // A persona session lives only while persona login is allowed. Once it is
+  // switched off in production, a still-unexpired persona token stops working,
+  // and saying so needs no database. Every token names its account's address
+  // (verifySessionToken), and the check below holds it to the account, so this
+  // covers the account as well as the token.
+  if (env.isProduction && !env.allowDemoLogin && isDemoPersona(claim.email)) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Session expired or invalid. Please re-authenticate.",
+    });
   }
+
+  // Every session, a persona's included, is checked against its account. A
+  // database that cannot be reached is thrown: the session could not be
+  // checked, which the caller answers with 503, never with a user it made up.
+  const user = (await findUserById(claim.userId)) ?? null;
 
   if (!user) {
     throw new TRPCError({
@@ -127,18 +114,10 @@ export async function authenticateRequest(headers: Headers): Promise<User> {
   }
 
   // A token names the account it was issued for. One whose id now belongs to a
-  // different account, such as a persona sign-in made while the database was
-  // down (which could not look the account up), is no session for that account.
+  // different account (a database since reset, or a persona sign-in an earlier
+  // build made while the database was down, for an id it guessed) is no
+  // session for that account.
   if (user.email && claim.email && user.email.trim().toLowerCase() !== claim.email.trim().toLowerCase()) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Session expired or invalid. Please re-authenticate.",
-    });
-  }
-
-  // A persona session lives only while persona login is allowed. Once it is
-  // switched off in production, a still-unexpired persona token stops working.
-  if (env.isProduction && !env.allowDemoLogin && isDemoPersona(user.email)) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Session expired or invalid. Please re-authenticate.",
@@ -150,7 +129,34 @@ export async function authenticateRequest(headers: Headers): Promise<User> {
 
 /* ─── Enterprise Login ───────────────────────────────────────── */
 
+/**
+ * A sign-in the server could not complete, its database unreachable, say: no
+ * verdict on the person signing in. It answers 503 with a reason, and never a
+ * session, since a session needs the account behind it. A refusal made on
+ * purpose (a TRPCError) passes through unchanged.
+ */
+function signInError(err: unknown): TRPCError {
+  if (err instanceof TRPCError) return err;
+  console.warn("[auth] sign-in could not be completed:", err instanceof Error ? err.message : String(err));
+  return new TRPCError({
+    code: "SERVICE_UNAVAILABLE",
+    message: "Ontos cannot sign you in just now. Try again in a moment.",
+    cause: err,
+  });
+}
+
 export async function loginWithCredentials(
+  email: string,
+  password: string,
+): Promise<{ user: User; token: string }> {
+  try {
+    return await checkCredentials(email, password);
+  } catch (err) {
+    throw signInError(err);
+  }
+}
+
+async function checkCredentials(
   email: string,
   password: string,
 ): Promise<{ user: User; token: string }> {
@@ -283,7 +289,9 @@ export async function loginDemoUser(role: DemoRole): Promise<{ user: User; token
     });
   }
 
-  let user: User | null = null;
+  // The session is issued only for the account itself: without the database
+  // there is no account to name, so the sign-in waits for it (503).
+  let user: User;
   try {
     // Re-asserting the role and a null hash on every login also repairs persona
     // rows that earlier builds created with a password.
@@ -295,10 +303,11 @@ export async function loginDemoUser(role: DemoRole): Promise<{ user: User; token
       lastSignInAt: new Date(),
     });
 
-    user = (await findUserByEmail(persona.email)) ?? null;
-    if (!user) {
+    const found = await findUserByEmail(persona.email);
+    if (!found) {
       throw new Error("Demo user creation failed.");
     }
+    user = found;
 
     // Workspace-scoped queries refuse non-admins who are not members, so the
     // persona joins the demo workspace in its own role.
@@ -308,18 +317,7 @@ export async function loginDemoUser(role: DemoRole): Promise<{ user: User; token
       .values({ workspaceId: workspace.id, userId: user.id, role })
       .onDuplicateKeyUpdate({ set: { role } });
   } catch (err) {
-    console.warn("[auth] Database offline or unavailable during demo login, using fallback in-memory persona:", err instanceof Error ? err.message : String(err));
-    user = {
-      id: role === "admin" ? 1 : role === "ontologist" ? 2 : role === "editor" ? 3 : 4,
-      email: persona.email,
-      name: persona.name,
-      role,
-      avatar: null,
-      passwordHash: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      lastSignInAt: new Date(),
-    };
+    throw signInError(err);
   }
 
   const token = await signSessionToken({
