@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { connectors, jobs, mappings, ontologyModules, syncJobs, type Connector } from "@db/schema";
+import { connectors, jobs, mappings, ontologyModules, syncJobs } from "@db/schema";
 import {
   createRouter,
   workspaceQuery,
@@ -11,6 +11,7 @@ import {
 } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
+import { publicConnector } from "./services/connectorView";
 import {
   checkRunnableMapping,
   enqueueMappingSync,
@@ -29,24 +30,6 @@ import {
 
 // The CSV helpers live with the import in services/mappingSync.ts.
 export { parseCsv, type ColumnMap };
-
-/**
- * A connector as clients see it: without an inline CSV payload, and never with
- * a stored password, which only the server uses to connect. Every workspace
- * member can list connectors.
- */
-function publicConnector(c: Connector) {
-  const cfg = (c.configJson ?? {}) as Record<string, unknown>;
-  const { csvText, password, ...rest } = cfg;
-  return {
-    ...c,
-    configJson: {
-      ...rest,
-      hasInlineData: typeof csvText === "string",
-      hasPassword: typeof password === "string" && password.length > 0,
-    },
-  };
-}
 
 /* ── router ──────────────────────────────────────────────────── */
 
@@ -109,7 +92,7 @@ export const mappingRouter = createRouter({
       .from(mappings)
       .where(inArray(mappings.connectorId, conns.map((c) => c.id)))
       .orderBy(asc(mappings.id));
-    const connById = new Map(conns.map((c) => [c.id, c]));
+    const connById = new Map(conns.map((c) => [c.id, publicConnector(c)]));
     const mods = await db
       .select()
       .from(ontologyModules)
@@ -334,7 +317,7 @@ export const mappingRouter = createRouter({
         : [];
       const queueById = new Map(queueRows.map((q) => [q.id, q]));
       const mapById = new Map(maps.map((m) => [m.id, m]));
-      const connById = new Map(conns.map((c) => [c.id, c]));
+      const connById = new Map(conns.map((c) => [c.id, publicConnector(c)]));
       return rows.map((j) => {
         const m = mapById.get(j.mappingId) ?? null;
         const q = j.jobId != null ? queueById.get(j.jobId) : undefined;
