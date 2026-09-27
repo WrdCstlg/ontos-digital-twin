@@ -50,6 +50,7 @@ interface EditorForm {
   fields: Record<string, string>;
   links: LinkEntry[];
   transforms: Record<string, string>;
+  shaclMode: 'warn' | 'block';
 }
 
 interface EdgeGeom {
@@ -89,6 +90,7 @@ function emptyForm(connector: ConnectorLike | null): EditorForm {
     fields: {},
     links: [],
     transforms: {},
+    shaclMode: 'warn',
   };
 }
 
@@ -108,6 +110,7 @@ function formFromMapping(m: MappingLike, moduleKey: string): EditorForm {
     fields: { ...(cm.fields ?? {}) },
     links: (cm.links ?? []).map((l) => ({ ...l })),
     transforms,
+    shaclMode: m.shaclMode ?? 'warn',
   };
 }
 
@@ -302,6 +305,7 @@ export function MappingEditor({
         classIri: form.classIri,
         columnMap: buildColumnMap(),
         status: activeMapping?.status ?? 'draft',
+        shaclMode: form.shaclMode,
       });
       await utils.mapping.listMappings.invalidate();
       setForm((f) => ({ ...f, mappingId: row.id }));
@@ -416,8 +420,23 @@ export function MappingEditor({
         >
           <Braces className="size-3.5" /> R2RML
         </button>
-        <div className="ml-auto flex items-center gap-2">
-          <button
+        <label
+          className={cn(
+            'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 font-mono text-[11.5px] transition-colors',
+            form.shaclMode === 'block' ? 'border-risk/50 bg-risk/10 text-risk' : 'border-border-hairline text-text-muted hover:text-text-primary',
+          )}
+          title="Block: an import whose rows fail the class's SHACL shapes imports nothing, and waits while the engine cannot check them. Warn: it imports and records the violations."
+        >
+          <input
+            type="checkbox"
+            className="size-3.5 accent-current"
+            checked={form.shaclMode === 'block'}
+            onChange={(e) => setForm((f) => ({ ...f, shaclMode: e.target.checked ? 'block' : 'warn' }))}
+            aria-label="Block imports that fail SHACL"
+          />
+          block on SHACL violations
+        </label>
+        <div className="ml-auto flex items-center gap-2">          <button
             type="button"
             onClick={onSaveClick}
             disabled={saving || !form.classIri || !form.subject}

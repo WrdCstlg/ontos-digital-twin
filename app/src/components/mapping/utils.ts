@@ -25,6 +25,8 @@ export interface MappingLike {
   sourceTable: string;
   classIri: string;
   status: 'draft' | 'active' | 'paused';
+  /** Whether an import whose rows fail the class's SHACL shapes is refused (block) or recorded (warn). */
+  shaclMode?: 'warn' | 'block';
   columnMapJson?: ColumnMapShape | null;
   module?: { key: string; prefix?: string; name?: string } | null;
   connector?: ConnectorLike | null;

@@ -1,0 +1,1 @@
+ALTER TABLE `mappings` ADD `shaclMode` enum('warn','block') DEFAULT 'warn' NOT NULL;

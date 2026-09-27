@@ -199,6 +199,8 @@ export const mappingRouter = createRouter({
             .optional(),
         }),
         status: z.enum(["draft", "active", "paused"]).default("draft"),
+        /** Whether imports that fail the class's SHACL shapes are refused; left as it is when absent. */
+        shaclMode: z.enum(["warn", "block"]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -245,6 +247,7 @@ export const mappingRouter = createRouter({
             classIri: input.classIri,
             columnMapJson: input.columnMap,
             status: input.status,
+            ...(input.shaclMode ? { shaclMode: input.shaclMode } : {}),
           })
           .where(eq(mappings.id, id));
       } else {
@@ -258,6 +261,7 @@ export const mappingRouter = createRouter({
             classIri: input.classIri,
             columnMapJson: input.columnMap,
             status: input.status,
+            shaclMode: input.shaclMode ?? "warn",
           })
           .$returningId();
         id = newId;
@@ -268,7 +272,7 @@ export const mappingRouter = createRouter({
         action: `${input.id ? "Updated" : "Created"} mapping '${input.name}'`,
         entityType: "mapping",
         entityId: id,
-        payload: { name: input.name, sourceTable: input.sourceTable, classIri: input.classIri, status: input.status },
+        payload: { name: input.name, sourceTable: input.sourceTable, classIri: input.classIri, status: input.status, shaclMode: input.shaclMode },
       });
       const [row] = await db.select().from(mappings).where(eq(mappings.id, id!));
       return row;
