@@ -7,11 +7,12 @@
  *   3. fetchRows       — pulls rows from a table (for the sync pipeline)
  *
  * Each call opens a short-lived connection pool, uses it, then tears it down.
- * The connector's configJson carries the connection parameters; credentials are
- * stored there for the demo build and would move to a vault in production.
+ * The connector's configJson carries the connection parameters, its password
+ * sealed (lib/secretBox.ts): it is opened here, only to connect.
  */
 
 import mysql from "mysql2/promise";
+import { readSecret, secretContext } from "../lib/secretBox";
 
 /* ── types ────────────────────────────────────────────────────── */
 
@@ -67,10 +68,11 @@ function defaultPort(driver: SqlDriver): number {
 }
 
 /**
- * Parse a configJson blob into typed SqlConnectorConfig.
- * Returns null if the config is missing required fields.
+ * Parse a stored connector's configJson into typed SqlConnectorConfig, its
+ * password opened for use. Returns null if the config is missing required
+ * fields; throws SecretUnreadableError if the password cannot be opened.
  */
-export function parseSqlConfig(raw: unknown): SqlConnectorConfig | null {
+export function parseSqlConfig(raw: unknown, workspaceId: number): SqlConnectorConfig | null {
   if (!raw || typeof raw !== "object") return null;
   const cfg = raw as Record<string, unknown>;
   const driver = cfg.driver as string | undefined;
@@ -84,10 +86,15 @@ export function parseSqlConfig(raw: unknown): SqlConnectorConfig | null {
     port: typeof cfg.port === "number" ? cfg.port : undefined,
     database,
     user: typeof cfg.user === "string" ? cfg.user : undefined,
-    password: typeof cfg.password === "string" ? cfg.password : undefined,
+    password: readSecret(cfg.password, secretContext.connector(workspaceId, "password")),
     ssl: cfg.ssl === true,
     schema: typeof cfg.schema === "string" ? cfg.schema : undefined,
   };
+}
+
+/** What to tell someone whose connector's stored password this server cannot open. */
+export function unreadablePasswordMessage(err: Error): string {
+  return `The connector's stored password cannot be read: ${err.message}. Create the connector again with its password.`;
 }
 
 /**

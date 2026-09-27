@@ -4,7 +4,8 @@ import { TRPCError } from "@trpc/server";
 import { iotConnectors } from "@db/schema";
 import { createRouter, workspaceQuery, workspaceMutation } from "./middleware";
 import { getDb } from "./queries/connection";
-import { iotBrokerManager } from "./services/iot/iotBrokerManager";
+import { brokerConfigFrom, iotBrokerManager, unreadableBrokerSecretMessage } from "./services/iot/iotBrokerManager";
+import { sealSecret, secretContext, SecretUnreadableError } from "./lib/secretBox";
 import { ingestTelemetry, sampleDeviceId, webhookWorkspaceId } from "./services/iot/iotIngestion";
 import { hasWorkspaceRole } from "./services/workspaceGuard";
 import type { IotBrokerConfig, RawTelemetryPoint } from "./services/iot/types";
@@ -67,12 +68,14 @@ export const iotRouter = createRouter({
       const ws = ctx.workspace;
       const db = getDb();
 
+      // The password and client key are sealed before they are stored
+      // (lib/secretBox.ts); the certificates are public.
       const configJson: Record<string, unknown> = {};
       if (input.username) configJson.username = input.username;
-      if (input.password) configJson.password = input.password;
+      if (input.password) configJson.password = sealSecret(input.password, secretContext.iotConnector(ws.id, "password"));
       if (input.caCert) configJson.caCert = input.caCert;
       if (input.clientCert) configJson.clientCert = input.clientCert;
-      if (input.clientKey) configJson.clientKey = input.clientKey;
+      if (input.clientKey) configJson.clientKey = sealSecret(input.clientKey, secretContext.iotConnector(ws.id, "clientKey"));
 
       let connectorId = input.id;
 
@@ -147,22 +150,13 @@ export const iotRouter = createRouter({
       }
 
       if (input.enable) {
-        const config = (connector.configJson ?? {}) as Record<string, unknown>;
-        const brokerConfig: IotBrokerConfig = {
-          id: connector.id,
-          workspaceId: connector.workspaceId,
-          name: connector.name,
-          brokerType: connector.brokerType,
-          endpointUrl: connector.endpointUrl,
-          topicPattern: connector.topicPattern ?? undefined,
-          clientId: connector.clientId ?? undefined,
-          authType: connector.authType,
-          username: config.username as string | undefined,
-          password: config.password as string | undefined,
-          caCert: config.caCert as string | undefined,
-          clientCert: config.clientCert as string | undefined,
-          clientKey: config.clientKey as string | undefined,
-        };
+        let brokerConfig: IotBrokerConfig;
+        try {
+          brokerConfig = brokerConfigFrom(connector);
+        } catch (err) {
+          if (!(err instanceof SecretUnreadableError)) throw err;
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: unreadableBrokerSecretMessage(err) });
+        }
         const connected = await iotBrokerManager.startBroker(brokerConfig);
         await db
           .update(iotConnectors)

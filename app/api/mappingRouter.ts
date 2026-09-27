@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { connectors, jobs, mappings, ontologyModules, syncJobs } from "@db/schema";
+import { connectors, jobs, mappings, ontologyModules, syncJobs, type Connector } from "@db/schema";
 import {
   createRouter,
   workspaceQuery,
@@ -10,6 +10,7 @@ import {
   workspaceOntologistQuery,
 } from "./middleware";
 import { getDb } from "./queries/connection";
+import { sealCredentials, secretContext, SecretUnreadableError } from "./lib/secretBox";
 import { actorLabelFor, writeAudit } from "./services/audit";
 import { publicConnector } from "./services/connectorView";
 import {
@@ -26,10 +27,27 @@ import {
   listTables as listSqlTablesFromDb,
   listColumns as listSqlColumnsFromDb,
   fetchRows as fetchSqlRowsFromDb,
+  unreadablePasswordMessage,
+  type SqlConnectorConfig,
 } from "./services/sqlConnector";
 
 // The CSV helpers live with the import in services/mappingSync.ts.
 export { parseCsv, type ColumnMap };
+
+/**
+ * A stored SQL connector's settings, its password opened for use. A password
+ * this server cannot open is a precondition to put right, not a server fault.
+ */
+function storedSqlConfig(conn: Connector): SqlConnectorConfig | null {
+  try {
+    return parseSqlConfig(conn.configJson, conn.workspaceId);
+  } catch (err) {
+    if (err instanceof SecretUnreadableError) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: unreadablePasswordMessage(err) });
+    }
+    throw err;
+  }
+}
 
 /* ── router ──────────────────────────────────────────────────── */
 
@@ -63,7 +81,8 @@ export const mappingRouter = createRouter({
           workspaceId: ws.id,
           name: input.name,
           type: input.type,
-          configJson: input.config,
+          // Credentials are sealed before they are stored (lib/secretBox.ts).
+          configJson: sealCredentials(input.config, (field) => secretContext.connector(ws.id, field)),
           status: input.status,
         })
         .$returningId();
@@ -374,7 +393,7 @@ export const mappingRouter = createRouter({
       if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connector not found" });
       if (conn.type !== "sql")
         throw new TRPCError({ code: "BAD_REQUEST", message: "Connector is not a SQL type" });
-      const cfg = parseSqlConfig(conn.configJson);
+      const cfg = storedSqlConfig(conn);
       if (!cfg)
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -409,7 +428,7 @@ export const mappingRouter = createRouter({
         .where(and(eq(connectors.id, input.connectorId), eq(connectors.workspaceId, ws.id)))
         .limit(1);
       if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connector not found" });
-      const cfg = parseSqlConfig(conn.configJson);
+      const cfg = storedSqlConfig(conn);
       if (!cfg)
         throw new TRPCError({ code: "BAD_REQUEST", message: "Connector has incomplete SQL configuration" });
       try {
@@ -444,7 +463,7 @@ export const mappingRouter = createRouter({
         .where(and(eq(connectors.id, input.connectorId), eq(connectors.workspaceId, ws.id)))
         .limit(1);
       if (!conn) throw new TRPCError({ code: "NOT_FOUND", message: "Connector not found" });
-      const cfg = parseSqlConfig(conn.configJson);
+      const cfg = storedSqlConfig(conn);
       if (!cfg)
         throw new TRPCError({ code: "BAD_REQUEST", message: "Connector has incomplete SQL configuration" });
       try {

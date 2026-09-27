@@ -15,6 +15,12 @@ export const env = {
     (process.env.NODE_ENV === "production"
       ? required("APP_SECRET")
       : "ontos-development-jwt-signing-secret-key-32b!"),
+  /**
+   * The key that seals stored connector credentials: 32 bytes, as 64 hex
+   * characters or base64. Unset, a key derived from APP_SECRET is used, so
+   * changing APP_SECRET then makes stored credentials unreadable.
+   */
+  secretsKey: process.env.SECRETS_KEY,
   isProduction: process.env.NODE_ENV === "production",
   databaseUrl: required("DATABASE_URL"),
   adminEmail: process.env.ADMIN_EMAIL ?? "admin@acme-ontology.com",
