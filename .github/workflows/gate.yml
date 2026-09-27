@@ -112,11 +112,13 @@ jobs:
         working-directory: gate
         run: thesis run --profile api --fault 'proc.restart(db)@5000..12000'
 
-      - name: Show verdicts, app and worker logs on failure
+      - name: Show verdicts, driver, app and worker logs on failure
         if: failure()
         working-directory: gate
         run: |
           for v in .prothesis/runs/*/verdict.json; do echo "== $v"; cat "$v"; done
+          # The driver's own account of each world: what it found, and its op counts.
+          for d in .prothesis/runs/*/world-*/driver.log; do [ -f "$d" ] || continue; echo "== $d"; tail -n 40 "$d"; done
           for l in .prothesis/runs/*/world-*/logs/app.log .prothesis/runs/*/world-*/logs/worker-*.log; do
             [ -f "$l" ] || continue
             echo "== $l"; tail -n 80 "$l"
