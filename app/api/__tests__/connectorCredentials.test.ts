@@ -8,12 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTableName } from "drizzle-orm";
 import { connectors, iotConnectors } from "@db/schema";
 import { env } from "../lib/env";
-import { isSealed, openSecret, sealSecret, secretContext } from "../lib/secretBox";
+import { connectorEndpoint, isSealed, openSecret, sealSecret, sealedUnderCurrentKey, secretContext } from "../lib/secretBox";
 import { appRouter } from "../router";
 import { checkRunnableMapping } from "../services/mappingSync";
 import { sealStoredSecrets } from "../services/secretSealing";
 import { iotBrokerManager } from "../services/iot/iotBrokerManager";
-import { createMockContext, mockAdminMembership, mockAdminUser, mockWorkspace } from "./testHarness";
+import { createMockContext, mockAdminMembership, mockAdminUser, mockViewerMembership, mockViewerUser, mockWorkspace } from "./testHarness";
 
 // Reads answer with the rows of the table read (or, for the import check's
 // join, the joined rows); inserts and updates are recorded.
@@ -78,22 +78,26 @@ vi.mock("mysql2/promise", () => ({
 const WS = mockWorkspace.id;
 const KEY_A = "a".repeat(64);
 const KEY_B = "b".repeat(64);
-const saved = { secretsKey: env.secretsKey };
+const saved = { secretsKey: env.secretsKey, secretsKeyPrevious: env.secretsKeyPrevious };
 const admin = () => appRouter.createCaller(createMockContext({ user: mockAdminUser, membership: mockAdminMembership, workspace: mockWorkspace }));
+const viewer = () => appRouter.createCaller(createMockContext({ user: mockViewerUser, membership: mockViewerMembership, workspace: mockWorkspace }));
+const SQL_CONFIG = { driver: "mysql", host: "db.acme.corp", database: "contracts", user: "reader" };
 const sqlRow = (password: unknown, extra: Record<string, unknown> = {}) => ({
   id: 7, workspaceId: WS, name: "Contracts DB", type: "sql", status: "connected", createdAt: new Date(0),
-  configJson: { driver: "mysql", host: "db.acme.corp", database: "contracts", user: "reader", password, ...extra },
+  configJson: { ...SQL_CONFIG, password, ...extra },
 });
+const BROKER_ENDPOINT = "mqtts://broker.acme.corp:8883";
 const brokerRow = (id: number, password: unknown, clientKey: unknown) => ({
-  id, workspaceId: WS, name: `Broker ${id}`, brokerType: "mqtt", endpointUrl: "mqtts://broker.acme.corp:8883", topicPattern: null,
+  id, workspaceId: WS, name: `Broker ${id}`, brokerType: "mqtt", endpointUrl: BROKER_ENDPOINT, topicPattern: null,
   clientId: null, authType: "tls_cert", status: "connected", lastConnectedAt: null, messageCount: 0, errorCount: 0, lastError: null,
   createdAt: new Date(0), configJson: { username: "ingest", password, caCert: "CA-PEM", clientCert: "CERT-PEM", clientKey },
 });
-const sqlContext = secretContext.connector(WS, "password");
-const iotContext = (field: string) => secretContext.iotConnector(WS, field);
+const sqlContext = secretContext.connector(WS, "password", connectorEndpoint(SQL_CONFIG));
+const iotContext = (field: string) => secretContext.iotConnector(WS, field, BROKER_ENDPOINT);
 
 beforeEach(() => {
   env.secretsKey = KEY_A;
+  env.secretsKeyPrevious = undefined;
 });
 afterEach(() => {
   Object.assign(env, saved);
@@ -106,16 +110,26 @@ afterEach(() => {
 });
 
 describe("a SQL connector's password is sealed at rest and opened only to connect", () => {
-  it("creating one stores the password sealed, bound to its workspace, and answers without it", async () => {
-    const created = await admin().mapping.createConnector({
-      name: "Contracts DB", type: "sql", config: { driver: "mysql", host: "db.acme.corp", database: "contracts", user: "reader", password: "s3cret-pw" },
-    });
+  it("creating one stores the password sealed, bound to its workspace and endpoint, and answers without it", async () => {
+    const created = await admin().mapping.createConnector({ name: "Contracts DB", type: "sql", config: { ...SQL_CONFIG, password: "s3cret-pw" } });
     const stored = db.inserts[0].values.configJson as Record<string, unknown>;
     expect(isSealed(stored.password)).toBe(true);
     expect(openSecret(stored.password as string, sqlContext)).toBe("s3cret-pw");
-    expect(stored).toMatchObject({ driver: "mysql", host: "db.acme.corp", database: "contracts", user: "reader" });
+    expect(stored).toMatchObject(SQL_CONFIG);
     expect(JSON.stringify(created)).not.toContain("s3cret-pw");
     expect(created.configJson.hasPassword).toBe(true);
+  });
+
+  it("creating one refuses a password that is a sealed value, or not text: one copied from a stored row is never kept", async () => {
+    const copied = sealSecret("s3cret-pw", sqlContext);
+    const attempts = [
+      { ...SQL_CONFIG, host: "attacker.example", password: copied },
+      { ...SQL_CONFIG, password: 12345678 },
+    ];
+    for (const config of attempts) {
+      await expect(admin().mapping.createConnector({ name: "Mine", type: "sql", config })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    expect(db.inserts).toEqual([]);
   });
 
   it("browsing opens it for the driver alone", async () => {
@@ -125,18 +139,24 @@ describe("a SQL connector's password is sealed at rest and opened only to connec
     expect(JSON.stringify(tables)).not.toContain("s3cret-pw");
   });
 
+  it("a row whose host was changed in the database opens nothing, and sends nothing there", async () => {
+    db.tables.set(getTableName(connectors), [sqlRow(sealSecret("s3cret-pw", sqlContext), { host: "attacker.example" })]);
+    await expect(admin().mapping.listSqlTables({ connectorId: 7 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(pools).toHaveLength(0);
+  });
+
   it("a password an earlier build stored as plain text still connects", async () => {
     db.tables.set(getTableName(connectors), [sqlRow("legacy-pw")]);
     await admin().mapping.listSqlTables({ connectorId: 7 });
     expect(pools.map((p) => p.password)).toEqual(["legacy-pw"]);
   });
 
-  it("one sealed under another key is refused with the reason, and no connection is tried", async () => {
+  it("one sealed under a key this server does not hold is refused with the reason, and no connection is tried", async () => {
     db.tables.set(getTableName(connectors), [sqlRow(sealSecret("s3cret-pw", sqlContext))]);
     env.secretsKey = KEY_B;
     await expect(admin().mapping.listSqlTables({ connectorId: 7 })).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
-      message: expect.stringMatching(/stored password cannot be read: it was sealed under a different key/),
+      message: expect.stringMatching(/stored password cannot be read: it was sealed under a key this server does not have.*Update password/),
     });
     await expect(admin().mapping.previewSqlRows({ connectorId: 7, table: "contracts" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expect(pools).toHaveLength(0);
@@ -148,15 +168,47 @@ describe("a SQL connector's password is sealed at rest and opened only to connec
     const ok = await checkRunnableMapping(WS, 70);
     expect(ok.ok && ok.value.kind === "sql" ? ok.value.sqlConfig.password : null).toBe("s3cret-pw");
     env.secretsKey = KEY_B;
-    expect(await checkRunnableMapping(WS, 70)).toMatchObject({ ok: false, code: "BAD_REQUEST", message: expect.stringMatching(/different key/) });
+    expect(await checkRunnableMapping(WS, 70)).toMatchObject({ ok: false, code: "BAD_REQUEST", message: expect.stringMatching(/does not have/) });
+  });
+});
+
+describe("entering a SQL connector's password again", () => {
+  it("an admin puts right a password this server cannot read, and the connector connects again", async () => {
+    env.secretsKey = KEY_B;
+    const unreadable = sealSecret("old-pw", sqlContext);
+    env.secretsKey = KEY_A;
+    db.tables.set(getTableName(connectors), [sqlRow(unreadable)]);
+    const answered = await admin().mapping.setConnectorPassword({ connectorId: 7, password: "new-pw" });
+    expect(JSON.stringify(answered)).not.toContain("new-pw");
+    const set = db.updates[0].set.configJson as Record<string, unknown>;
+    expect(set).toMatchObject(SQL_CONFIG);
+    expect(openSecret(set.password as string, sqlContext)).toBe("new-pw");
+    db.tables.set(getTableName(connectors), [sqlRow(set.password)]);
+    await admin().mapping.listSqlTables({ connectorId: 7 });
+    expect(pools.map((p) => p.password)).toEqual(["new-pw"]);
+  });
+
+  it("is an admin's to do, for a SQL connector of this workspace, with the password itself", async () => {
+    db.tables.set(getTableName(connectors), [sqlRow("x")]);
+    await expect(viewer().mapping.setConnectorPassword({ connectorId: 7, password: "p" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      admin().mapping.setConnectorPassword({ connectorId: 7, password: sealSecret("p", sqlContext) }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    db.tables.set(getTableName(connectors), [{ ...sqlRow("x"), type: "csv" }]);
+    await expect(admin().mapping.setConnectorPassword({ connectorId: 7, password: "p" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    db.tables.set(getTableName(connectors), []);
+    await expect(admin().mapping.setConnectorPassword({ connectorId: 7, password: "p" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    db.tables.set(getTableName(connectors), [{ ...sqlRow("x"), workspaceId: WS + 1 }]);
+    await expect(admin().mapping.setConnectorPassword({ connectorId: 7, password: "p" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(db.updates).toEqual([]);
   });
 });
 
 describe("a broker connector's password and client key are sealed at rest and opened only to connect", () => {
-  it("saving one seals the password and client key, and leaves the certificates as they are", async () => {
+  it("saving one seals the password and client key for its endpoint, and leaves the certificates as they are", async () => {
     vi.spyOn(iotBrokerManager, "stopBroker").mockResolvedValue(undefined);
     await admin().iot.upsertConnector({
-      name: "Plant broker", brokerType: "mqtt", endpointUrl: "mqtts://broker.acme.corp:8883", authType: "tls_cert",
+      name: "Plant broker", brokerType: "mqtt", endpointUrl: BROKER_ENDPOINT, authType: "tls_cert",
       username: "ingest", password: "pw-1", caCert: "CA-PEM", clientCert: "CERT-PEM", clientKey: "KEY-1", connectNow: false,
     });
     const stored = db.inserts[0].values.configJson as Record<string, unknown>;
@@ -165,11 +217,23 @@ describe("a broker connector's password and client key are sealed at rest and op
     expect(stored).toMatchObject({ username: "ingest", caCert: "CA-PEM", clientCert: "CERT-PEM" });
   });
 
-  it("connecting opens them for the broker", async () => {
+  it("saving one refuses a password or client key that is a sealed value", async () => {
+    vi.spyOn(iotBrokerManager, "stopBroker").mockResolvedValue(undefined);
+    const base = { name: "Mine", brokerType: "mqtt" as const, endpointUrl: "mqtts://attacker.example:8883", authType: "basic" as const, connectNow: false };
+    await expect(admin().iot.upsertConnector({ ...base, password: sealSecret("pw-1", iotContext("password")) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(admin().iot.upsertConnector({ ...base, clientKey: sealSecret("KEY-1", iotContext("clientKey")) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(db.inserts).toEqual([]);
+  });
+
+  it("connecting opens them for the broker, and only at the endpoint they were sealed for", async () => {
     const start = vi.spyOn(iotBrokerManager, "startBroker").mockResolvedValue(true);
     db.tables.set(getTableName(iotConnectors), [brokerRow(5, sealSecret("pw-1", iotContext("password")), sealSecret("KEY-1", iotContext("clientKey")))]);
     await admin().iot.toggleConnector({ id: 5, enable: true });
     expect(start.mock.calls[0][0]).toMatchObject({ id: 5, username: "ingest", password: "pw-1", clientKey: "KEY-1", caCert: "CA-PEM" });
+    // The endpoint changed in the database: nothing opens, and nothing is sent.
+    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, sealSecret("pw-1", iotContext("password")), undefined), endpointUrl: "mqtts://attacker.example:8883" }]);
+    await expect(admin().iot.toggleConnector({ id: 5, enable: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(start).toHaveBeenCalledTimes(1);
   });
 
   it("one it cannot open is refused with the reason, and no connection is tried", async () => {
@@ -183,7 +247,7 @@ describe("a broker connector's password and client key are sealed at rest and op
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("at start-up, a connector it cannot open stops only itself, and says why", async () => {
+  it("at start-up, one it cannot open stops only itself, keeps its status to be tried again, and shows why", async () => {
     const start = vi.spyOn(iotBrokerManager, "startBroker").mockResolvedValue(true);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     env.secretsKey = KEY_B;
@@ -194,40 +258,66 @@ describe("a broker connector's password and client key are sealed at rest and op
     await iotBrokerManager.init();
     expect(start.mock.calls.map(([c]) => [c.id, c.password])).toEqual([[6, "pw-6"]]);
     expect(db.updates).toEqual([
-      { table: getTableName(iotConnectors), set: { status: "error", lastError: expect.stringMatching(/cannot be read: it was sealed under a different key/) } },
+      { table: getTableName(iotConnectors), set: { lastError: expect.stringMatching(/cannot be read: it was sealed under a key this server does not have/) } },
     ]);
+    // Listed as in error meanwhile; the stored status stays "connected", so the next start tries again.
+    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, unreadable, undefined), lastError: db.updates[0].set.lastError }]);
+    vi.spyOn(iotBrokerManager, "getAllStats").mockReturnValue({});
+    const [listed] = await admin().iot.listConnectors();
+    expect(listed.status).toBe("error");
   });
 });
 
-describe("the bootstrap seals what earlier builds stored as plain text", () => {
-  it("seals each plain-text credential once, counts those under another key, and leaves the rest", async () => {
+describe("the bootstrap brings every stored credential under the current key", () => {
+  it("seals plain text, re-seals what a replaced key sealed, counts what it cannot open, and leaves the rest", async () => {
+    // Sealed before SECRETS_KEY was set (under the key derived from APP_SECRET), under
+    // the previous SECRETS_KEY, under a key nobody holds any more, and under the current one.
+    env.secretsKey = undefined;
+    const underDerived = sealSecret("derived-pw", sqlContext);
     env.secretsKey = KEY_B;
-    const underOtherKey = sealSecret("other-pw", sqlContext);
+    const underPrevious = sealSecret("previous-pw", sqlContext);
+    env.secretsKey = "c".repeat(64);
+    const underLost = sealSecret("lost-pw", sqlContext);
     env.secretsKey = KEY_A;
-    const alreadySealed = sealSecret("sealed-pw", sqlContext);
+    env.secretsKeyPrevious = KEY_B;
+    const underCurrent = sealSecret("current-pw", sqlContext);
     db.tables.set(getTableName(connectors), [
-      sqlRow("plain-pw", { host: "plain.acme.corp" }),
-      sqlRow(alreadySealed, { host: "sealed.acme.corp" }),
-      sqlRow(underOtherKey, { host: "other.acme.corp" }),
+      sqlRow("plain-pw"),
+      sqlRow(underDerived),
+      sqlRow(underPrevious),
+      sqlRow(underLost),
+      sqlRow(underCurrent),
       { ...sqlRow(undefined), configJson: null },
     ]);
     db.tables.set(getTableName(iotConnectors), [brokerRow(5, "plain-broker-pw", "plain-key")]);
 
-    expect(await sealStoredSecrets()).toEqual({ sealed: 3, otherKey: 1 });
-    expect(db.updates.map((u) => u.table)).toEqual([getTableName(connectors), getTableName(iotConnectors)]);
-    const sql = db.updates[0].set.configJson as Record<string, unknown>;
-    expect(sql.host).toBe("plain.acme.corp");
-    expect(openSecret(sql.password as string, sqlContext)).toBe("plain-pw");
-    const broker = db.updates[1].set.configJson as Record<string, unknown>;
-    expect(openSecret(broker.password as string, iotContext("password"))).toBe("plain-broker-pw");
-    expect(openSecret(broker.clientKey as string, iotContext("clientKey"))).toBe("plain-key");
-    expect(broker).toMatchObject({ username: "ingest", caCert: "CA-PEM", clientCert: "CERT-PEM" });
+    expect(await sealStoredSecrets()).toEqual({ sealed: 3, resealed: 2, unreadable: 1 });
+    const opened = db.updates.map((u) => {
+      const cfg = u.set.configJson as Record<string, unknown>;
+      return u.table === getTableName(connectors)
+        ? openSecret(cfg.password as string, sqlContext)
+        : `${openSecret(cfg.password as string, iotContext("password"))}+${openSecret(cfg.clientKey as string, iotContext("clientKey"))}`;
+    });
+    expect(opened).toEqual(["plain-pw", "derived-pw", "previous-pw", "plain-broker-pw+plain-key"]);
+    for (const u of db.updates) {
+      for (const v of Object.values(u.set.configJson as Record<string, unknown>)) {
+        if (isSealed(v)) expect(sealedUnderCurrentKey(v)).toBe(true);
+      }
+    }
 
-    // A second start finds nothing left to seal.
-    db.tables.set(getTableName(connectors), [{ ...sqlRow(undefined), configJson: sql }]);
-    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, undefined, undefined), configJson: broker }]);
+    // A second start finds nothing left to seal, and still counts the one it cannot open.
+    db.tables.set(getTableName(connectors), [sqlRow(underLost), ...db.updates.slice(0, 3).map((u) => ({ ...sqlRow(undefined), configJson: u.set.configJson }))]);
+    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, undefined, undefined), configJson: db.updates[3].set.configJson }]);
     db.updates.length = 0;
-    expect(await sealStoredSecrets()).toEqual({ sealed: 0, otherKey: 0 });
+    expect(await sealStoredSecrets()).toEqual({ sealed: 0, resealed: 0, unreadable: 1 });
+    expect(db.updates).toEqual([]);
+  });
+
+  it("refuses to start with a malformed key, even on a fresh database with nothing to seal", async () => {
+    env.secretsKey = "not a key";
+    await expect(sealStoredSecrets()).rejects.toThrow(/SECRETS_KEY must be 32 bytes/);
+    db.tables.set(getTableName(connectors), [sqlRow("plain-pw")]);
+    await expect(sealStoredSecrets()).rejects.toThrow(/SECRETS_KEY must be 32 bytes/);
     expect(db.updates).toEqual([]);
   });
 });

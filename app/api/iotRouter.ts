@@ -5,7 +5,7 @@ import { iotConnectors } from "@db/schema";
 import { createRouter, workspaceQuery, workspaceMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { brokerConfigFrom, iotBrokerManager, unreadableBrokerSecretMessage } from "./services/iot/iotBrokerManager";
-import { sealSecret, secretContext, SecretUnreadableError } from "./lib/secretBox";
+import { credentialInputProblem, sealSecret, secretContext, SecretUnreadableError } from "./lib/secretBox";
 import { ingestTelemetry, sampleDeviceId, webhookWorkspaceId } from "./services/iot/iotIngestion";
 import { hasWorkspaceRole } from "./services/workspaceGuard";
 import type { IotBrokerConfig, RawTelemetryPoint } from "./services/iot/types";
@@ -34,7 +34,9 @@ export const iotRouter = createRouter({
         topicPattern: r.topicPattern,
         clientId: r.clientId,
         authType: r.authType,
-        status: live ? live.status : r.status,
+        // Meant to be connected, but not running, with a reason: in error. The
+        // stored status stays, so the next start tries again (iotBrokerManager).
+        status: live ? live.status : r.status === "connected" && r.lastError ? "error" : r.status,
         lastConnectedAt: live?.lastConnectedAt ?? r.lastConnectedAt,
         messageCount: live ? live.messageCount : r.messageCount,
         errorCount: live ? live.errorCount : r.errorCount,
@@ -67,15 +69,18 @@ export const iotRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;
       const db = getDb();
+      const problem = credentialInputProblem({ password: input.password, clientKey: input.clientKey });
+      if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
 
-      // The password and client key are sealed before they are stored
-      // (lib/secretBox.ts); the certificates are public.
+      // The password and client key are sealed, for this workspace and broker
+      // endpoint, before they are stored (lib/secretBox.ts); the certificates are public.
+      const context = (field: string) => secretContext.iotConnector(ws.id, field, input.endpointUrl);
       const configJson: Record<string, unknown> = {};
       if (input.username) configJson.username = input.username;
-      if (input.password) configJson.password = sealSecret(input.password, secretContext.iotConnector(ws.id, "password"));
+      if (input.password) configJson.password = sealSecret(input.password, context("password"));
       if (input.caCert) configJson.caCert = input.caCert;
       if (input.clientCert) configJson.clientCert = input.clientCert;
-      if (input.clientKey) configJson.clientKey = sealSecret(input.clientKey, secretContext.iotConnector(ws.id, "clientKey"));
+      if (input.clientKey) configJson.clientKey = sealSecret(input.clientKey, context("clientKey"));
 
       let connectorId = input.id;
 

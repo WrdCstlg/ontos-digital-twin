@@ -1,23 +1,25 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { iotConnectors, workspaces, type IotConnector } from "@db/schema";
-import { readSecret, secretContext } from "../../lib/secretBox";
+import { readSecret, secretContext, SecretUnreadableError } from "../../lib/secretBox";
 import { MqttBrokerAdapter } from "./mqttAdapter";
 import type { BrokerAuthType, BrokerType, IotBrokerConfig } from "./types";
 
 /** What to tell someone whose broker connector's stored credentials this server cannot open. */
 export function unreadableBrokerSecretMessage(err: Error): string {
-  return `The connector's stored password or client key cannot be read: ${err.message}. Save the connector again with them.`;
+  return `The connector's stored password or client key cannot be read: ${err.message}. Delete the connector and add it again with them, or restore the key.`;
 }
 
 /**
  * A stored broker connector as the adapter connects with it: its password and
- * client key opened (lib/secretBox.ts). Throws SecretUnreadableError if either
- * cannot be opened.
+ * client key opened (lib/secretBox.ts), each bound to the broker's endpoint, so
+ * a row whose endpoint was changed opens nothing. Throws SecretUnreadableError
+ * if either cannot be opened.
  */
 export function brokerConfigFrom(row: IotConnector): IotBrokerConfig {
   const config = (row.configJson ?? {}) as Record<string, unknown>;
   const text = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const context = (field: string) => secretContext.iotConnector(row.workspaceId, field, row.endpointUrl);
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -28,10 +30,10 @@ export function brokerConfigFrom(row: IotConnector): IotBrokerConfig {
     clientId: row.clientId ?? undefined,
     authType: row.authType,
     username: text(config.username),
-    password: readSecret(config.password, secretContext.iotConnector(row.workspaceId, "password")),
+    password: readSecret(config.password, context("password")),
     caCert: text(config.caCert),
     clientCert: text(config.clientCert),
-    clientKey: readSecret(config.clientKey, secretContext.iotConnector(row.workspaceId, "clientKey")),
+    clientKey: readSecret(config.clientKey, context("clientKey")),
   };
 }
 
@@ -61,15 +63,18 @@ class IotBrokerManager {
       for (const row of rows) {
         if (row.brokerType === "mqtt" || row.brokerType === "aws_iot" || row.brokerType === "azure_iot") {
           // One connector whose credentials cannot be opened stops only itself.
+          // It keeps its status, so once the key is put right the next start
+          // connects it again; the reason is shown meanwhile (listConnectors).
           let brokerConfig: IotBrokerConfig;
           try {
             brokerConfig = brokerConfigFrom(row);
           } catch (err) {
-            const message = unreadableBrokerSecretMessage(err instanceof Error ? err : new Error(String(err)));
+            if (!(err instanceof SecretUnreadableError)) throw err;
+            const message = unreadableBrokerSecretMessage(err);
             console.warn(`[iot-manager] connector ${row.id} not started: ${message}`);
             await db
               .update(iotConnectors)
-              .set({ status: "error", lastError: message })
+              .set({ lastError: message })
               .where(eq(iotConnectors.id, row.id))
               .catch(() => undefined);
             continue;

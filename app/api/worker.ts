@@ -20,7 +20,12 @@ const POLL_MS = 1000;
 
 // SQL imports open the source's sealed password (lib/secretBox.ts): a
 // malformed SECRETS_KEY stops the worker here, before it takes any job.
-secretKey();
+try {
+  secretKey();
+} catch (err) {
+  console.error(`[secrets] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
 
 const worker = new JobWorker({
   handlers: jobHandlers,

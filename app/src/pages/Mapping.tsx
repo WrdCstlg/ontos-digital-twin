@@ -15,6 +15,7 @@ import {
 import { cn } from '@/lib/utils';
 import { ConnectorGrid } from '@/components/mapping/ConnectorGrid';
 import { NewConnectorDialog } from '@/components/mapping/NewConnectorDialog';
+import { UpdatePasswordDialog } from '@/components/mapping/UpdatePasswordDialog';
 import { MappingEditor, type CsvData } from '@/components/mapping/MappingEditor';
 import { PreviewDrawer } from '@/components/mapping/PreviewDrawer';
 import { SyncJobs } from '@/components/mapping/SyncJobs';
@@ -79,6 +80,7 @@ export default function Mapping() {
   const [csvData, setCsvData] = useState<CsvData | null>(null);
   const [preview, setPreview] = useState<{ open: boolean; mappingId: number | null }>({ open: false, mappingId: null });
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [passwordFor, setPasswordFor] = useState<{ id: number; name: string } | null>(null);
   const uploadConnRef = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Imports queued from this page (sync job id → mapping name), followed until
@@ -295,6 +297,10 @@ export default function Mapping() {
           onNewConnector={() => setWizard({ open: true })}
           onUploadCsv={requestCsvUpload}
           onRunNow={runSync}
+          onUpdatePassword={(id) => {
+            const conn = connectors.find((c) => c.id === id);
+            setPasswordFor(conn ? { id: conn.id, name: conn.name } : null);
+          }}
           activeMappingIds={activeMappingIds}
         />
       )}
@@ -337,6 +343,13 @@ export default function Mapping() {
         initialType={wizard.type}
         onCreated={() => toast.success('Connector created')}
         onError={setMutationError}
+      />
+
+      {/* a SQL connector's password, entered again */}
+      <UpdatePasswordDialog
+        connector={passwordFor}
+        onOpenChange={(open) => !open && setPasswordFor(null)}
+        onUpdated={() => toast.success('Password updated')}
       />
 
       {/* hidden CSV file input for upload+preview flow */}

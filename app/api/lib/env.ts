@@ -8,19 +8,34 @@ function required(name: string): string {
   return value ?? "";
 }
 
+/**
+ * Signs sessions, and derives the key that seals connector credentials when
+ * SECRETS_KEY is unset. In production it must be long enough that neither a
+ * session nor a sealed credential can be tested against guesses offline.
+ */
+function appSecret(): string {
+  if (process.env.NODE_ENV !== "production") return process.env.APP_SECRET || "ontos-development-jwt-signing-secret-key-32b!";
+  const value = required("APP_SECRET");
+  if (value.length < MIN_APP_SECRET_LENGTH) {
+    throw new Error(`APP_SECRET must be at least ${MIN_APP_SECRET_LENGTH} characters (e.g. \`openssl rand -hex 32\`)`);
+  }
+  return value;
+}
+const MIN_APP_SECRET_LENGTH = 32;
+
 export const env = {
   appId: process.env.APP_ID || "ontos",
-  appSecret:
-    process.env.APP_SECRET ||
-    (process.env.NODE_ENV === "production"
-      ? required("APP_SECRET")
-      : "ontos-development-jwt-signing-secret-key-32b!"),
+  appSecret: appSecret(),
   /**
    * The key that seals stored connector credentials: 32 bytes, as 64 hex
-   * characters or base64. Unset, a key derived from APP_SECRET is used, so
-   * changing APP_SECRET then makes stored credentials unreadable.
+   * characters or base64. Unset, a key derived from APP_SECRET is used.
    */
   secretsKey: process.env.SECRETS_KEY,
+  /**
+   * The key SECRETS_KEY replaced, while credentials sealed under it are
+   * re-sealed: the bootstrap does that on its next start (lib/secretBox.ts).
+   */
+  secretsKeyPrevious: process.env.SECRETS_KEY_PREVIOUS,
   isProduction: process.env.NODE_ENV === "production",
   databaseUrl: required("DATABASE_URL"),
   adminEmail: process.env.ADMIN_EMAIL ?? "admin@acme-ontology.com",

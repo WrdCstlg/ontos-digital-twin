@@ -12,7 +12,7 @@
  */
 
 import mysql from "mysql2/promise";
-import { readSecret, secretContext } from "../lib/secretBox";
+import { connectorEndpoint, readSecret, secretContext } from "../lib/secretBox";
 
 /* ── types ────────────────────────────────────────────────────── */
 
@@ -86,7 +86,8 @@ export function parseSqlConfig(raw: unknown, workspaceId: number): SqlConnectorC
     port: typeof cfg.port === "number" ? cfg.port : undefined,
     database,
     user: typeof cfg.user === "string" ? cfg.user : undefined,
-    password: readSecret(cfg.password, secretContext.connector(workspaceId, "password")),
+    // Bound to where it is sent: a row whose host was changed opens nothing.
+    password: readSecret(cfg.password, secretContext.connector(workspaceId, "password", connectorEndpoint(cfg))),
     ssl: cfg.ssl === true,
     schema: typeof cfg.schema === "string" ? cfg.schema : undefined,
   };
@@ -94,7 +95,7 @@ export function parseSqlConfig(raw: unknown, workspaceId: number): SqlConnectorC
 
 /** What to tell someone whose connector's stored password this server cannot open. */
 export function unreadablePasswordMessage(err: Error): string {
-  return `The connector's stored password cannot be read: ${err.message}. Create the connector again with its password.`;
+  return `The connector's stored password cannot be read: ${err.message}. A workspace admin can enter it again (Mapping, the connector, Update password).`;
 }
 
 /**
