@@ -16,22 +16,23 @@ function isPlain(v: unknown): v is string | number | boolean {
 }
 
 /**
- * A URL without any user name or password written into it. Only an http(s)
- * URL is parsed for them: anything else ("svc:pw@host" parses as a scheme and
- * a path) is shown only if nothing in it could be userinfo.
+ * Where a connector points, and nothing that could let someone in: an http(s)
+ * URL's origin and path. A user name or password, the query string and the
+ * fragment are dropped, since tokens and signatures travel there (?api_key=,
+ * #access_token=, an Azure SAS ?sig=). Anything that is not an http(s) URL
+ * ("svc:pw@host" parses as a scheme and a path) is cut at its first ? or #,
+ * and hidden if what remains could hold a user name or password.
  */
-function withoutUserinfo(url: string): string {
-  let u: URL;
+function displayUrl(url: string): string {
+  let u: URL | null = null;
   try {
     u = new URL(url);
   } catch {
-    return url.includes("@") ? "(hidden)" : url;
+    // not a URL: handled below
   }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return url.includes("@") ? "(hidden)" : url;
-  if (!u.username && !u.password) return url;
-  u.username = "";
-  u.password = "";
-  return u.toString();
+  if (u && (u.protocol === "http:" || u.protocol === "https:")) return `${u.origin}${u.pathname}`;
+  const head = url.split(/[?#]/, 1)[0];
+  return head.includes("@") ? "(hidden)" : head;
 }
 
 /** A connector's settings as clients see them. */
@@ -48,6 +49,10 @@ export type PublicConnector = Omit<Connector, "configJson"> & { configJson: Publ
  * A connector as clients see it. Every connector that leaves the server passes
  * through here, whoever asks: its stored password and inline data are used by
  * the server alone, and every workspace member can list connectors.
+ *
+ * The row is copied column by column rather than spread: a column added to the
+ * table later makes this fail to compile until someone decides whether clients
+ * may see it, instead of reaching them silently (as toPublicUser does for users).
  */
 export function publicConnector(c: Connector): PublicConnector {
   const cfg = (c.configJson ?? {}) as Record<string, unknown>;
@@ -59,7 +64,15 @@ export function publicConnector(c: Connector): PublicConnector {
     const v = cfg[key];
     if (isPlain(v)) configJson[key] = v;
   }
-  if (typeof cfg.baseUrl === "string") configJson.baseUrl = withoutUserinfo(cfg.baseUrl);
+  if (typeof cfg.baseUrl === "string") configJson.baseUrl = displayUrl(cfg.baseUrl);
   if (typeof cfg.auth === "string" && REST_AUTH_KINDS.has(cfg.auth)) configJson.auth = cfg.auth;
-  return { ...c, configJson };
+  return {
+    id: c.id,
+    workspaceId: c.workspaceId,
+    name: c.name,
+    type: c.type,
+    status: c.status,
+    createdAt: c.createdAt,
+    configJson,
+  };
 }

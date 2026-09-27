@@ -270,7 +270,9 @@ export const graphRouter = createRouter({
             .from(connectors)
             .where(and(eq(connectors.id, m.connectorId), eq(connectors.workspaceId, ws.id)))
             .limit(1);
-          provenance = { mapping: m, connector: c ? publicConnector(c) : null };
+          // A mapping belongs to a workspace through its connector: one whose
+          // connector is elsewhere is not this workspace's to show.
+          if (c) provenance = { mapping: m, connector: publicConnector(c) };
         }
       }
       const mods = await db

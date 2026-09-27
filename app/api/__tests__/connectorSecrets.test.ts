@@ -48,7 +48,9 @@ vi.mock("../queries/connection", async () => {
   return { getDb: vi.fn(() => ({ select: (fields?: Record<string, unknown>) => query(fields) })) };
 });
 
-const SECRETS = ["SENTINEL-SQL-PASSWORD", "SENTINEL-CSV-ROW", "SENTINEL-REST-KEY", "SENTINEL-URL-PASSWORD"];
+const SECRETS = [
+  "SENTINEL-SQL-PASSWORD", "SENTINEL-CSV-ROW", "SENTINEL-REST-KEY", "SENTINEL-URL-PASSWORD", "SENTINEL-QUERY-KEY", "SENTINEL-FRAGMENT-TOKEN",
+];
 const at = new Date("2026-01-01T00:00:00Z");
 const base = { workspaceId: mockWorkspace.id, status: "connected", createdAt: at };
 const CONNECTORS = [
@@ -59,7 +61,11 @@ const CONNECTORS = [
   { ...base, id: 12, name: "HRIS export", type: "csv", configJson: { filename: "hris.csv", rows: 1, csvText: "name\nSENTINEL-CSV-ROW" } },
   {
     ...base, id: 13, name: "ERP", type: "rest",
-    configJson: { baseUrl: "https://svc:SENTINEL-URL-PASSWORD@erp.acme.corp/api/v2", auth: "api-key", apiKey: "SENTINEL-REST-KEY" },
+    configJson: {
+      baseUrl: "https://svc:SENTINEL-URL-PASSWORD@erp.acme.corp/api/v2?api_key=SENTINEL-QUERY-KEY#access_token=SENTINEL-FRAGMENT-TOKEN",
+      auth: "api-key",
+      apiKey: "SENTINEL-REST-KEY",
+    },
   },
 ];
 const mappingFor = (c: { id: number; name: string }) => ({
