@@ -1,15 +1,37 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { jobs, workers } from "@db/schema";
+import { jobs, workers, type Job } from "@db/schema";
 import { createRouter, workspaceAdminMutation, workspaceAdminQuery, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
+import { ACTION_WEBHOOK_KIND } from "./services/actions/sideEffects";
+import { redactDeliveryResult, redactUrlsIn } from "./services/actions/webhookView";
+import { hasWorkspaceRole } from "./services/workspaceGuard";
 import { jobHandlers } from "./services/jobs/handlers";
 import { cancelQueuedJob, getJob, requeueFailedJob } from "./services/jobs/queue";
 
 /** A worker that has missed three heartbeats (every 5 s) is treated as gone. */
 const STALE_AFTER_SECONDS = 15;
+
+/**
+ * A job as a member who is not a workspace admin sees it. Workers are shared
+ * infrastructure (listWorkers is for admins), so their identities are left
+ * out, from the lease and from messages that name them; and an action
+ * webhook's address, often its credential, shows only where it goes.
+ */
+function jobFor(job: Job, isAdmin: boolean): Job {
+  if (isAdmin) return job;
+  const lastError = redactUrlsIn(job.lastError)
+    ?.replace(/lease held by \S+/g, "lease held by a worker")
+    .replace(/reclaimed by \S+/g, "reclaimed by another worker") ?? null;
+  return {
+    ...job,
+    leaseOwner: null,
+    lastError,
+    resultJson: job.kind === ACTION_WEBHOOK_KIND ? redactDeliveryResult(job.resultJson) : job.resultJson,
+  };
+}
 
 const JOB_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
 
@@ -56,12 +78,14 @@ export const operationsRouter = createRouter({
     )
     .query(async ({ ctx, input }) => {
       const ws = ctx.workspace;
-      return getDb()
+      const rows = await getDb()
         .select()
         .from(jobs)
         .where(input?.status ? and(eq(jobs.workspaceId, ws.id), eq(jobs.status, input.status)) : eq(jobs.workspaceId, ws.id))
         .orderBy(desc(jobs.id))
         .limit(input?.limit ?? 50);
+      const isAdmin = hasWorkspaceRole(ctx.membership, ctx.user, ["admin"]);
+      return rows.map((j) => jobFor(j, isAdmin));
     }),
 
   getJob: workspaceQuery
@@ -69,7 +93,7 @@ export const operationsRouter = createRouter({
     .query(async ({ ctx, input }) => {
       const job = await getJob(ctx.workspace.id, input.jobId);
       if (!job) throw new TRPCError({ code: "NOT_FOUND", message: `Job ${input.jobId} not found` });
-      return job;
+      return jobFor(job, hasWorkspaceRole(ctx.membership, ctx.user, ["admin"]));
     }),
 
   /** Workers are shared infrastructure, so their identities are for admins. */

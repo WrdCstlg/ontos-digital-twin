@@ -134,7 +134,7 @@ describe("Multi-Tenant Geometric Isolation & Workspace Guard", () => {
             resolveUserWorkspace(user, new Headers({ "x-workspace-id": String(mockWorkspaceBeta.id) })),
           ).rejects.toMatchObject({
             code: "FORBIDDEN",
-            message: `User does not have access to workspace '${mockWorkspaceBeta.slug}'.`,
+            message: "User does not have access to this workspace.",
           });
 
           // The guard looked up B by id, then asked for *this user's* membership in *B*.
@@ -284,7 +284,7 @@ describe("Multi-Tenant Geometric Isolation & Workspace Guard", () => {
       dbState.whereLimitQueue.push([mockWorkspace], []);
 
       await expect(resolveUserWorkspace(mockAdminUser, headers)).rejects.toThrow(
-        `User does not have access to workspace '${mockWorkspace.slug}'.`,
+        "User does not have access to this workspace.",
       );
     });
 

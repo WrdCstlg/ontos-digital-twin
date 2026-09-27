@@ -9,6 +9,7 @@ import {
   workspaceAdminMutation,
 } from "./middleware";
 import { getDb } from "./queries/connection";
+import { toPublicUser } from "./auth/service";
 import {
   actorLabelFor,
   verifyAuditChain,
@@ -33,7 +34,8 @@ export const adminRouter = createRouter({
     const userRows = userIds.length
       ? await db.select().from(users).where(inArray(users.id, userIds))
       : [];
-    const userMap = new Map(userRows.map((u) => [u.id, u]));
+    // Each account as any client sees one: never its password hash.
+    const userMap = new Map(userRows.map((u) => [u.id, toPublicUser(u)]));
     return rows.map((m) => ({
       ...m,
       user: userMap.get(m.userId) ?? null,

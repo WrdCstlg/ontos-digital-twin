@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { iotConnectors, workspaces, type IotConnector } from "@db/schema";
 import { readSecret, secretContext, SecretUnreadableError } from "../../lib/secretBox";
@@ -128,7 +128,8 @@ class IotBrokerManager {
             lastConnectedAt: connected ? new Date() : undefined,
             lastError: connected ? null : adapter.stats.lastError,
           })
-          .where(eq(iotConnectors.id, config.id));
+          // The row of this connector's own workspace, never one found by id alone.
+          .where(and(eq(iotConnectors.id, config.id), eq(iotConnectors.workspaceId, config.workspaceId)));
       } catch {
         // non-fatal
       }
