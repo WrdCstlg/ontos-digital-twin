@@ -62,7 +62,7 @@ inference out of them.
 **Semantic layer scope.** The ontology represents *claims* about how parts of a business
 affect one another, with provenance — it does not assert that those claims are true. Causal
 inference, measurement, incentive design and roll-up logic belong in separate systems that
-bind to it. See `AI_AGENT_ARCHITECTURE.md` for the reasoning.
+bind to it.
 
 **Tests.** Add or update Vitest tests for behaviour you change. Router-level and React
 component tests are the largest gap in the suite, so contributions there are especially

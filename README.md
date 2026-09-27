@@ -18,18 +18,6 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 
 ---
 
-## Built with AI coding agents
-
-Ontos was built almost entirely by AI coding agents, directed by **Senan Sumrein**
-across several sessions and more than one agent system. The interesting part is not
-the generation — it is the verification discipline that separated plausible output
-from working software, and the defects that passed every automated gate.
-
-- **[How Ontos Was Built (AI_AGENT_ARCHITECTURE.md)](AI_AGENT_ARCHITECTURE.md)** — How the work was organized, what the agents got right and wrong, and the checking that made the difference.
-- **[Semantic layer draft (docs/semantic-layer/)](docs/semantic-layer/)** — The cross-functional ontology designed by a multi-agent workflow, with its open critiques.
-
----
-
 ## Capabilities
 
 - **Ontology Studio** — browse, extend, version and diff ontology modules; Cytoscape.js
@@ -323,6 +311,8 @@ $env:NODE_ENV = "production"; node dist/boot.js
 ```
 compose.yaml                 Full stack: db, engine, init, app
 .env.example                 Secrets for the compose stack
+docs/semantic-layer/         Cross-functional ontology draft (xfn): a design, not implemented
+gate/                        The PRO-THESIS fault-injection gate (gate/README.md)
 app/
 ├── Dockerfile               Two-stage build; runtime carries no node_modules
 ├── api/                     Hono server + tRPC routers

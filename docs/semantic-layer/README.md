@@ -26,6 +26,3 @@ still carries logic belonging to the causal, measurement, incentive or propagati
 layers — exactly what the layer is meant to exclude. Resolve those before implementing,
 and check the prefix, tuple shapes and cross-module class names against `app/db/seed.ts`,
 since the integration critique never ran.
-
-See [`AI_AGENT_ARCHITECTURE.md`](../../AI_AGENT_ARCHITECTURE.md) for how the workflow was
-set up.
