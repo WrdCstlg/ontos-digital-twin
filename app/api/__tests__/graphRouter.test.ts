@@ -357,7 +357,8 @@ describe("graph.getNode", () => {
     expect(result.incoming).toEqual([{ edge: inc, direction: "in", other: n22, module: null }]);
     expect(result.provenance).toEqual({
       mapping,
-      connector,
+      // As every client sees a connector: its settings by name, no secrets.
+      connector: { ...connector, configJson: { hasInlineData: false, hasPassword: false } },
       submission: null,
       createdAt: node.createdAt,
       updatedAt: node.updatedAt,
@@ -372,6 +373,8 @@ describe("graph.getNode", () => {
     expect(i.conjuncts).toContainEqual({ sql: "`kg_edges`.`toNodeId` = ?", params: [20] });
     const nb = expectWorkspaceScoped(3, "kg_nodes", WS.id);
     expect(nb.conjuncts).toContainEqual({ sql: "`kg_nodes`.`id` in (?, ?)", params: [21, 22] });
+    const c = expectWorkspaceScoped(5, "connectors", WS.id);
+    expect(c.conjuncts).toContainEqual({ sql: "`connectors`.`id` = ?", params: [3] });
     expectWorkspaceScoped(6, "ontology_modules", WS.id);
   });
 

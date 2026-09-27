@@ -15,6 +15,7 @@ import { createRouter, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { isReadOnlySparql } from "./lib/sparqlGuard";
 import { semanticEngine } from "./services/semanticEngine";
+import { publicConnector, type PublicConnector } from "./services/connectorView";
 import { classWithDescendants } from "./services/actions/definitions";
 
 async function resolveWorkspace(userWorkspace: Workspace, workspaceKey?: string) {
@@ -241,7 +242,7 @@ export const graphRouter = createRouter({
 
       let provenance: {
         mapping: typeof mappings.$inferSelect | null;
-        connector: typeof connectors.$inferSelect | null;
+        connector: PublicConnector | null;
       } = { mapping: null, connector: null };
       // The action submission that created or last changed it.
       const [submission] = node.sourceSubmissionId
@@ -267,9 +268,9 @@ export const graphRouter = createRouter({
           const [c] = await db
             .select()
             .from(connectors)
-            .where(eq(connectors.id, m.connectorId))
+            .where(and(eq(connectors.id, m.connectorId), eq(connectors.workspaceId, ws.id)))
             .limit(1);
-          provenance = { mapping: m, connector: c ?? null };
+          provenance = { mapping: m, connector: c ? publicConnector(c) : null };
         }
       }
       const mods = await db
