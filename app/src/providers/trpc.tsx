@@ -12,8 +12,10 @@ import {
   outageClock,
   pendingSignOut,
   SESSION_CALL_TIMEOUT_MS,
+  SESSION_EPOCH_KEY,
   SESSION_OUTAGE_RECHECK_MS,
   SESSION_RECHECK_MS,
+  sessionEpoch,
   subscribePending,
   withSessionLock,
 } from "@/lib/sessionGrace";
@@ -33,6 +35,10 @@ function isAuthMe(key: readonly unknown[]): boolean {
  * check already under way is left to finish rather than restarted. Once the
  * outage clock is running, the session check's own 15 s cadence carries on and
  * further outages elsewhere add no checks.
+ *
+ * The session check's own results are the outage clock's evidence. The cache
+ * reports each once, as it settles, whether or not any part of the page is
+ * showing the session; a part of the page that opens later adds nothing (U1).
  */
 export function createAppQueryClient(): QueryClient {
   const authMeKey = getQueryKey(trpc.auth.me);
@@ -59,9 +65,11 @@ export function createAppQueryClient(): QueryClient {
   const client: QueryClient = new QueryClient({
     queryCache: new QueryCache({
       onError: (err, query) => {
-        // The session check's own failures drive the outage clock directly.
-        if (isAuthMe(query.queryKey)) return;
+        if (isAuthMe(query.queryKey)) return void outageClock.observe({ ok: false, error: err });
         recheck(err);
+      },
+      onSuccess: (_data, query) => {
+        if (isAuthMe(query.queryKey)) outageClock.observe({ ok: true });
       },
     }),
     mutationCache: new MutationCache({ onError: (err) => recheck(err) }),
@@ -170,6 +178,33 @@ export function SessionSignOutCompleter() {
       }
       was = now;
     });
+  }, [client]);
+
+  // A sign-in in any tab starts a new session (sessionEpoch). A tab that was
+  // frozen, or restored from the back/forward cache, may have missed the
+  // changes above, and would show the old user until its next check. Whenever
+  // it sees the epoch has moved (another tab's storage event, or on waking),
+  // it forgets the old session's outage and checks the session again.
+  useEffect(() => {
+    let known = sessionEpoch.get();
+    const check = () => {
+      const now = sessionEpoch.get();
+      if (now === known) return;
+      known = now;
+      outageClock.reset();
+      void client.invalidateQueries({ queryKey: getQueryKey(trpc.auth.me) });
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === SESSION_EPOCH_KEY || e.key === null) check();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", check);
+    window.addEventListener("pageshow", check);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", check);
+      window.removeEventListener("pageshow", check);
+    };
   }, [client]);
 
   useEffect(() => {

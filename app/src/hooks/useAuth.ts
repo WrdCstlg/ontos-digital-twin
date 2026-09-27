@@ -80,18 +80,12 @@ export function useAuth(options?: UseAuthOptions) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  const { data: user, error, refetch, errorUpdatedAt, dataUpdatedAt, status, fetchStatus } = query;
+  const { data: user, error, refetch, status, fetchStatus } = query;
 
-  // Feed each settled check into the shared outage clock, at the moment it is
-  // first seen: the check's own time identifies it, so a part of the page that
-  // mounts later and sees the same failure adds no evidence. The remembered
-  // persona (updated at 0) is a guess, not an answer: it ends no outage, so a
-  // reload still resumes the one the tab was in.
-  useEffect(() => {
-    if (status === "success" && dataUpdatedAt > 0) outageClock.observe({ ok: true });
-    else if (status === "error") outageClock.observe({ ok: false, error }, monotonicNow(), errorUpdatedAt);
-  }, [status, dataUpdatedAt, errorUpdatedAt, error]);
-
+  // The outage clock is fed by the query cache as each check settles
+  // (providers/trpc.tsx), not from here: a part of the page that mounts later
+  // adds no evidence, and the remembered persona, which is no check, ends no
+  // outage, so a reload still resumes the one the tab was in.
   const outage = useSyncExternalStore(outageClock.subscribe, outageClock.get, outageClock.get);
   const since = outage?.since ?? null;
 
