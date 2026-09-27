@@ -631,9 +631,6 @@ These are tracked, known behaviours rather than surprises:
   configuration, are used only by the server, and are never sent to a client; there is no
   secrets vault yet. TLS to a SQL source checks the server's certificate against the
   system's trusted authorities, so a server with a self-signed certificate is refused.
-- **Persona sessions outlive a database outage.** While the database is down, the server
-  answers a persona session from its token, unless persona login is off in production, so
-  the web app's three-minute grace period does not sign a persona user out.
 - **Webhook addresses are checked when the job runs.** A host whose DNS answer changes
   between that check and the request is not caught.
 - **Some state still lives in the API process.** Background jobs are safe to spread
