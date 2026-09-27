@@ -31,7 +31,8 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 - **Digital twins** — twin registry, live telemetry time series, topology subgraphs, and
   Azure DTDL v3 JSON export.
 - **Data mapping** — CSV files and PostgreSQL or MySQL tables mapped to ontology classes
-  and properties, with pre-commit SHACL checks, imported by a background worker.
+  and properties, with pre-commit SHACL checks that warn or, per mapping, block, imported
+  by a background worker.
 - **Global search** — ⌘K / Ctrl+K searches instances, classes, properties, insights,
   action types and connectors in the current workspace.
 - **Background jobs** — a durable queue in MySQL with leases and retries; any number of
@@ -624,11 +625,14 @@ These are tracked, known behaviours rather than surprises:
   returns a clear error naming `ALLOW_DEMO_LOGIN`, but the buttons should be hidden.
 - **SHACL validation is unavailable when the engine is offline.**
   `ontology.validateShacl` returns `conforms: null` with `engineOffline: true`
-  when the semantic engine is down. `mapping.runSync` commits with no SHACL
-  report at all. Callers should check `engineOffline` and `conforms !== null`
-  before trusting the result.
-- **Pre-commit SHACL checks are advisory.** Violations are recorded in the audit entry and
-  surfaced as a warning, but they do not block a sync.
+  when the semantic engine is down. An import whose mapping warns (the default) commits
+  with no SHACL report at all; one whose mapping blocks waits, retried, until the engine
+  can check it. Callers should check `engineOffline` and `conforms !== null` before
+  trusting the result.
+- **Pre-commit SHACL checks warn by default.** Violations are recorded in the audit entry
+  and surfaced as a warning, and the import goes ahead. A mapping set to **block on SHACL
+  violations** imports nothing when its rows fail the class's shapes, records the refusal in
+  the audit log, and fails the sync with the reasons.
 - **A later import replaces what an action changed.** A CSV import writes the properties of
   the objects it maps, so an import after an action overwrites that action's edits to the
   same object. The object's provenance then shows the import, not the action.
