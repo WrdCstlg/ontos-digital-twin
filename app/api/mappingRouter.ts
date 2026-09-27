@@ -225,6 +225,15 @@ export const mappingRouter = createRouter({
 
       let id = input.id;
       if (id) {
+        // Only this workspace's mapping may be changed: a mapping is a
+        // workspace's through its connector.
+        const [existing] = await db
+          .select({ id: mappings.id })
+          .from(mappings)
+          .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+          .where(and(eq(mappings.id, id), eq(connectors.workspaceId, ws.id)))
+          .limit(1);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${id} not found` });
         await db
           .update(mappings)
           .set({
@@ -272,13 +281,20 @@ export const mappingRouter = createRouter({
         mappingId: z.number().int().positive().optional(),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const { headers, rows } = parseCsv(input.csvText, 8);
       const db = getDb();
       let columnMap: ColumnMap | null = null;
       let classIri: string | null = null;
       if (input.mappingId) {
-        const [m] = await db.select().from(mappings).where(eq(mappings.id, input.mappingId)).limit(1);
+        // Only this workspace's mapping, through its connector.
+        const [found] = await db
+          .select({ mapping: mappings })
+          .from(mappings)
+          .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+          .where(and(eq(mappings.id, input.mappingId), eq(connectors.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        const m = found?.mapping;
         if (!m) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${input.mappingId} not found` });
         columnMap = (m.columnMapJson as ColumnMap) ?? null;
         classIri = m.classIri;

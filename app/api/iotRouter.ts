@@ -2,7 +2,7 @@ import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { iotConnectors } from "@db/schema";
-import { createRouter, workspaceQuery, workspaceMutation } from "./middleware";
+import { createRouter, workspaceAdminMutation, workspaceOntologistMutation, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { brokerConfigFrom, iotBrokerManager, unreadableBrokerSecretMessage } from "./services/iot/iotBrokerManager";
 import { credentialInputProblem, sealSecret, secretContext, SecretUnreadableError } from "./lib/secretBox";
@@ -10,8 +10,22 @@ import { ingestTelemetry, sampleDeviceId, webhookWorkspaceId } from "./services/
 import { hasWorkspaceRole } from "./services/workspaceGuard";
 import type { IotBrokerConfig, RawTelemetryPoint } from "./services/iot/types";
 
-export const iotRouter = createRouter({
-  /** List all configured IoT connectors with live runtime status and stats. */
+/**
+ * The workspace's own broker connector, or NOT_FOUND. The broker manager keys
+ * live connections by connector id alone, so every procedure that starts or
+ * stops one checks the id is this workspace's first.
+ */
+async function ownConnector(id: number, workspaceId: number) {
+  const [row] = await getDb()
+    .select({ id: iotConnectors.id, workspaceId: iotConnectors.workspaceId })
+    .from(iotConnectors)
+    .where(and(eq(iotConnectors.id, id), eq(iotConnectors.workspaceId, workspaceId)))
+    .limit(1);
+  if (!row || row.workspaceId !== workspaceId) throw new TRPCError({ code: "NOT_FOUND", message: "IoT connector not found" });
+  return row;
+}
+
+export const iotRouter = createRouter({  /** List all configured IoT connectors with live runtime status and stats. */
   listConnectors: workspaceQuery.query(async ({ ctx }) => {
     const ws = ctx.workspace;
     const db = getDb();
@@ -47,8 +61,8 @@ export const iotRouter = createRouter({
     });
   }),
 
-  /** Create or update an IoT broker connector. */
-  upsertConnector: workspaceMutation
+  /** Create or update an IoT broker connector: a workspace admin's, as other connectors are. */
+  upsertConnector: workspaceAdminMutation
     .input(
       z.object({
         id: z.number().optional(),
@@ -85,6 +99,9 @@ export const iotRouter = createRouter({
       let connectorId = input.id;
 
       if (connectorId) {
+        // Only this workspace's connector: the running broker is found by id, so
+        // an id from elsewhere must be refused before anything starts or stops.
+        await ownConnector(connectorId, ws.id);
         await db
           .update(iotConnectors)
           .set({
@@ -139,7 +156,7 @@ export const iotRouter = createRouter({
     }),
 
   /** Connect or disconnect a specific broker connector. */
-  toggleConnector: workspaceMutation
+  toggleConnector: workspaceAdminMutation
     .input(z.object({ id: z.number(), enable: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;
@@ -166,24 +183,25 @@ export const iotRouter = createRouter({
         await db
           .update(iotConnectors)
           .set({ status: connected ? "connected" : "error" })
-          .where(eq(iotConnectors.id, input.id));
+          .where(and(eq(iotConnectors.id, input.id), eq(iotConnectors.workspaceId, ws.id)));
         return { success: true, status: connected ? "connected" : "error" };
       } else {
         await iotBrokerManager.stopBroker(input.id);
         await db
           .update(iotConnectors)
           .set({ status: "disconnected" })
-          .where(eq(iotConnectors.id, input.id));
+          .where(and(eq(iotConnectors.id, input.id), eq(iotConnectors.workspaceId, ws.id)));
         return { success: true, status: "disconnected" };
       }
     }),
 
   /** Delete an IoT connector. */
-  deleteConnector: workspaceMutation
+  deleteConnector: workspaceAdminMutation
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;
       const db = getDb();
+      await ownConnector(input.id, ws.id);
       await iotBrokerManager.stopBroker(input.id);
       await db
         .delete(iotConnectors)
@@ -191,8 +209,8 @@ export const iotRouter = createRouter({
       return { success: true };
     }),
 
-  /** Directly ingest telemetry payload via tRPC. */
-  ingestTelemetry: workspaceMutation
+  /** Directly ingest telemetry payload via tRPC: writing data, so an editor's at least. */
+  ingestTelemetry: workspaceOntologistMutation
     .input(
       z.object({
         points: z.array(

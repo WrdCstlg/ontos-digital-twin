@@ -31,6 +31,7 @@ import {
   type Prepared,
   type SubmitterInfo,
 } from "./services/actions/service";
+import { redactDefinition, redactDeliveryResult, redactUrlsIn } from "./services/actions/webhookView";
 import type { TrpcContext } from "./context";
 
 /** Admins and ontologists define action types; any member may submit one their role allows. */
@@ -45,6 +46,14 @@ type Ctx = TrpcContext & {
   workspace: NonNullable<TrpcContext["workspace"]>;
   membership: NonNullable<TrpcContext["membership"]>;
 };
+
+/**
+ * Whether the caller may author action types, and so see their webhook
+ * addresses in full: everyone else sees where each goes (services/actions/webhookView.ts).
+ */
+function canAuthor(ctx: Pick<Ctx, "membership" | "user">): boolean {
+  return hasWorkspaceRole(ctx.membership, ctx.user, ["admin", "ontologist"]);
+}
 
 function submitterOf(ctx: Ctx): SubmitterInfo {
   return {
@@ -86,29 +95,34 @@ function outcome(prep: Prepared) {
 export const actionsRouter = createRouter({
   /** What the caller may do with action types: the client is not told its workspace role. */
   capabilities: workspaceQuery.query(({ ctx }) => ({
-    canAuthor: hasWorkspaceRole(ctx.membership, ctx.user, ["admin", "ontologist"]),
+    canAuthor: canAuthor(ctx),
   })),
 
   /** Every action type, with whether the caller may submit it. */
   listTypes: workspaceQuery.query(async ({ ctx }) => {
     const rows = await listActionTypes(ctx.workspace.id).catch(rethrow);
     const me = submitterOf(ctx);
+    const author = canAuthor(ctx);
     return rows.map((r) => {
       const denied = checkSubmitter(me, r.minRole as ActionRole, r.module.key);
-      return { ...r, canSubmit: r.status === "active" && !denied, deniedBecause: denied?.message ?? null };
+      const shown = author ? r : { ...r, definitionJson: redactDefinition(r.definitionJson), definition: redactDefinition(r.definition) };
+      return { ...shown, canSubmit: r.status === "active" && !denied, deniedBecause: denied?.message ?? null };
     });
   }),
 
   getType: workspaceQuery.input(z.object({ key: actionKeySchema })).query(async ({ ctx, input }) => {
     const l = await loaded(ctx.workspace.id, input.key);
     const denied = checkSubmitter(submitterOf(ctx), l.actionType.minRole as ActionRole, l.module.key);
+    const versions = await listVersions(ctx.workspace.id, input.key).catch(rethrow);
+    const author = canAuthor(ctx);
     return {
       ...l.actionType,
+      definitionJson: author ? l.actionType.definitionJson : redactDefinition(l.actionType.definitionJson),
       module: { key: l.module.key, name: l.module.name, color: l.module.color },
-      definition: l.definition,
+      definition: author ? l.definition : redactDefinition(l.definition),
       canSubmit: l.actionType.status === "active" && !denied,
       deniedBecause: denied?.message ?? null,
-      versions: await listVersions(ctx.workspace.id, input.key).catch(rethrow),
+      versions: author ? versions : versions.map((v) => ({ ...v, definitionJson: redactDefinition(v.definitionJson) })),
     };
   }),
 
@@ -231,6 +245,12 @@ export const actionsRouter = createRouter({
       .where(and(eq(actionTypeVersions.actionTypeId, submission.actionTypeId), eq(actionTypeVersions.version, submission.actionVersion)))
       .limit(1);
     const parsed = version ? actionDefinitionSchema.safeParse(version.definitionJson) : null;
-    return { submission, sideEffects, definition: parsed?.success ? parsed.data : null };
+    const definition = parsed?.success ? parsed.data : null;
+    if (canAuthor(ctx)) return { submission, sideEffects, definition };
+    return {
+      submission,
+      sideEffects: sideEffects.map((s) => ({ ...s, result: redactDeliveryResult(s.result), lastError: redactUrlsIn(s.lastError) })),
+      definition: redactDefinition(definition),
+    };
   }),
 });

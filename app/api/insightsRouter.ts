@@ -2,6 +2,7 @@ import { z } from "zod";
 import { and, count, desc, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
+  connectors,
   graphSnapshots,
   insights,
   kgEdges,
@@ -606,10 +607,13 @@ export const insightsRouter = createRouter({
       const recent = recentAudit.filter((a) => a.createdAt >= since);
       const syncs = recent.filter((a) => a.entityType === "sync_job").length;
       const ontologyChanges = recent.filter((a) => a.entityType === "ontology_class").length;
+      // This workspace's imports only: a sync job is a workspace's through its mapping's connector.
       const [jobCount] = await db
         .select({ n: count() })
         .from(syncJobs)
-        .innerJoin(mappings, eq(syncJobs.mappingId, mappings.id));
+        .innerJoin(mappings, eq(syncJobs.mappingId, mappings.id))
+        .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+        .where(eq(connectors.workspaceId, ws.id));
       const people = byModule.get("hr") ?? 0;
       const contracts = nodes.filter((n) => n.classIri === "lgl:Contract").length;
       const controls = nodes.filter((n) => n.classIri === "cmp:Control").length;

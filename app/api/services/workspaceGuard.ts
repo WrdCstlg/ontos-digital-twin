@@ -101,10 +101,11 @@ export async function resolveUserWorkspace(
       return { workspace: ws, membership: adminMembership };
     }
 
-    // Strict multi-tenant rejection
+    // Strict multi-tenant rejection. The message names no workspace: a slug
+    // told to someone who is not a member would let ids be mapped to names.
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: `User does not have access to workspace '${ws.slug}'.`,
+      message: "User does not have access to this workspace.",
     });
   }
 
