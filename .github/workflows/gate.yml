@@ -117,6 +117,8 @@ jobs:
         working-directory: gate
         run: |
           for v in .prothesis/runs/*/verdict.json; do echo "== $v"; cat "$v"; done
+          # Each oracle's own verdict and account, which verdict.json does not carry.
+          for r in .prothesis/runs/*/world-*/result.json; do [ -f "$r" ] || continue; echo "== $r"; jq -r '.oracles[] | "\(.oracle): \(.status) -- \(.explanation)"' "$r"; done
           # The driver's own account of each world: what it found, and its op counts.
           for d in .prothesis/runs/*/world-*/driver.log; do [ -f "$d" ] || continue; echo "== $d"; tail -n 40 "$d"; done
           for l in .prothesis/runs/*/world-*/logs/app.log .prothesis/runs/*/world-*/logs/worker-*.log; do
