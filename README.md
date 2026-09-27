@@ -1,7 +1,7 @@
 # Ontos
 
 [![CI](https://github.com/WrdCstlg/ontos-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/WrdCstlg/ontos-digital-twin/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Hono 4](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
@@ -268,6 +268,7 @@ required; `docker compose` refuses to start without them.
 | `ONTOS_IOT_CONSUMER` | no | on in the worker; in the web process, as `ONTOS_EMBEDDED_WORKER` | Whether a process runs the IoT consumer. Of those that do, only the one holding its lease connects to brokers, so `true` on several adds standbys, not connections. The Docker stack runs it in the worker |
 | `IOT_MQTT_VERSION` | no | `4` (MQTT 3.1.1) | `5` connects the `IOT_BROKER_URL` broker with MQTT 5.0 |
 | `VITE_APP_ID` | no | — | Application identifier exposed to the browser |
+| `VITE_SOURCE_URL` | no | this repository | Where the app's "Source code" link points. A deployment that runs a modified Ontos sets it to where that version's source is published (see [License](#license)). |
 | `ENGINE_HOST_*` | no | — | The engine host's settings: see [Engine host](#engine-host) |
 
 ---
@@ -1043,3 +1044,10 @@ These are tracked, known behaviours rather than surprises:
   on. Run `docker compose down -v` to start clean.
 - The largest client bundles are the vendor chunks: Three.js at ~890 kB (~240 kB gzipped)
   for the landing page's 3D graph, and Cytoscape and React at ~560 kB each.
+
+## License
+
+Ontos is licensed under the [GNU Affero General Public License v3.0 only](LICENSE)
+(AGPL-3.0-only). If you run a modified version for others over a network, section 13
+asks that you offer them its source: set `VITE_SOURCE_URL` to where you publish it, and
+the app's **Source code** link, on the sign-in page and in the sidebar, points there.

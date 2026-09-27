@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Enterprise Ontology Management and Digital Twin Platform",
   "author": "Senan Sumrein",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/WrdCstlg/ontos-digital-twin.git"

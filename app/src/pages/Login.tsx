@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { trpc } from "@/providers/trpc";
+import { LICENSE_NAME, SOURCE_URL } from "@/lib/source";
 import { useLocation, useNavigate } from "react-router";
 import { announcePendingChange, outageClock, pendingSignOut, sessionEpoch, withSessionLock } from "@/lib/sessionGrace";
 import { ShieldCheck, PencilRuler, DatabaseZap, Waypoints, ArrowRight, Loader2 } from "lucide-react";
@@ -296,7 +297,10 @@ export default function Login() {
         </Card>
 
         <p className="text-center text-[11px] text-slate-600 mt-6 tracking-wide">
-          Ontos v1.0 · Enterprise Ontology & Digital Twin Platform
+          Ontos v1.0 · Enterprise Ontology & Digital Twin Platform ·{" "}
+          <a href={SOURCE_URL} target="_blank" rel="noreferrer" className="underline decoration-slate-700 underline-offset-2 hover:text-slate-400">
+            Source code ({LICENSE_NAME})
+          </a>
         </p>
       </div>
     </div>
