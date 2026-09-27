@@ -205,6 +205,7 @@ required; `docker compose` refuses to start without them.
 | `ADMIN_PASSWORD` | **yes** | Password for the admin account. Re-applied whenever the bootstrap runs, so change it and run `docker compose up -d` to rotate it. `docker compose restart` does not re-run the bootstrap. |
 | `ADMIN_EMAIL` | no | Admin account address. Default `admin@acme-ontology.com`. |
 | `ONTOS_PORT` | no | Host port for the app. Default `3000`. |
+| `SECRETS_KEY` | no | Seals connector credentials in the database; 64 hex characters (`openssl rand -hex 32`). Unset, a key derived from `APP_SECRET` is used, so changing `APP_SECRET` makes stored credentials unreadable. |
 | `ALLOW_DEMO_LOGIN` | no | `true` re-enables persona login. Local demos only — see [Signing in](#signing-in). |
 | `ALLOWED_ORIGINS` | no | Cross-origin allowlist. The bundled client is same-origin and needs nothing here. |
 
@@ -216,6 +217,7 @@ required; `docker compose` refuses to start without them.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `APP_SECRET` | **yes** | — | HS256 signing key for session JWTs. Use 32+ random chars. |
+| `SECRETS_KEY` | no | derived from `APP_SECRET` | AES-256-GCM key that seals connector credentials: 32 bytes as 64 hex characters or base64. A malformed key stops the server and the bootstrap at start. |
 | `DATABASE_URL` | **yes** | — | MySQL connection string, e.g. `mysql://root:@localhost:3306/ontos` |
 | `APP_ID` | no | `ontos` | Application identifier |
 | `ADMIN_EMAIL` | no | `admin@acme-ontology.com` | This address is auto-promoted to the `admin` role |
@@ -630,10 +632,15 @@ These are tracked, known behaviours rather than surprises:
   same object. The object's provenance then shows the import, not the action.
 - **An action checked against SHACL is refused while the engine is offline**, rather than
   applied unchecked.
-- **SQL connector credentials are stored in the database.** They live in the connector's
-  configuration, are used only by the server, and are never sent to a client; there is no
-  secrets vault yet. TLS to a SQL source checks the server's certificate against the
-  system's trusted authorities, so a server with a self-signed certificate is refused.
+- **Connector credentials are sealed in the database, not held in a vault.** SQL and broker
+  passwords and client keys are encrypted with AES-256-GCM, each bound to its workspace and
+  field, and opened only when the server connects; they are never sent to a client. The key
+  comes from `SECRETS_KEY`, or from `APP_SECRET` when that is unset, and lives with the
+  server, so anyone who holds both the database and the key can read them. Changing the key
+  makes stored credentials unreadable: the server says so, and they must be entered again.
+  The bootstrap seals any credential an earlier build stored as plain text. TLS to a SQL
+  source checks the server's certificate against the system's trusted authorities, so a
+  server with a self-signed certificate is refused.
 - **Webhook addresses are checked when the job runs.** A host whose DNS answer changes
   between that check and the request is not caught.
 - **Some state still lives in the API process.** Background jobs are safe to spread
