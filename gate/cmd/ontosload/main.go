@@ -913,6 +913,13 @@ func (c *client) runnableCSVMappings(ctx context.Context) ([]int64, map[int64]bo
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, trpcMessage(payload))
 	}
+	return runnableFromList(payload)
+}
+
+// runnableFromList picks, from a mapping.listMappings answer, the mappings
+// whose connector is CSV with inline data. The server never sends the inline
+// payload itself, only that there is one (configJson.hasInlineData).
+func runnableFromList(payload []byte) ([]int64, map[int64]bool, error) {
 	var list struct {
 		Result struct {
 			Data struct {
@@ -920,8 +927,10 @@ func (c *client) runnableCSVMappings(ctx context.Context) ([]int64, map[int64]bo
 					ID        int64  `json:"id"`
 					Name      string `json:"name"`
 					Connector *struct {
-						Type       string                 `json:"type"`
-						ConfigJSON map[string]interface{} `json:"configJson"`
+						Type       string `json:"type"`
+						ConfigJSON struct {
+							HasInlineData bool `json:"hasInlineData"`
+						} `json:"configJson"`
 					} `json:"connector"`
 				} `json:"json"`
 			} `json:"data"`
@@ -933,14 +942,12 @@ func (c *client) runnableCSVMappings(ctx context.Context) ([]int64, map[int64]bo
 	var ids []int64
 	bulk := map[int64]bool{}
 	for _, m := range list.Result.Data.JSON {
-		if m.Connector == nil || m.Connector.Type != "csv" {
+		if m.Connector == nil || m.Connector.Type != "csv" || !m.Connector.ConfigJSON.HasInlineData {
 			continue
 		}
-		if text, ok := m.Connector.ConfigJSON["csvText"].(string); ok && text != "" {
-			ids = append(ids, m.ID)
-			if strings.HasPrefix(m.Name, bulkPrefix) {
-				bulk[m.ID] = true
-			}
+		ids = append(ids, m.ID)
+		if strings.HasPrefix(m.Name, bulkPrefix) {
+			bulk[m.ID] = true
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
