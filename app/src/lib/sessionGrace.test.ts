@@ -120,127 +120,176 @@ describe("the outage clock", () => {
 });
 
 describe("the outage clock counts only evidence it saw at the checking pace", () => {
+  const fail = { ok: false, error: unavailable } as const;
   beforeEach(() => {
     window.sessionStorage.clear();
     window.localStorage.removeItem(SESSION_EPOCH_KEY);
+    vi.useFakeTimers({ toFake: ["Date"] });
   });
+  afterEach(() => void vi.useRealTimers());
+  /** Both clocks move on by `ms`, as they do while the system is awake. */
+  const pass = (ms: number) => vi.setSystemTime(Date.now() + ms);
 
-  it("U1: a failure seen again, by a page that opens later, adds nothing", () => {
+  it("a gap longer than any checking pace starts a new outage; a throttled tab's minute does not", () => {
     const clock = createOutageClock();
-    clock.observe({ ok: false, error: unavailable }, T0, 1001);
-    clock.observe({ ok: false, error: unavailable }, T0 + SESSION_GRACE_MS + 5_000, 1001);
-    expect(clock.get()).toEqual({ since: T0, last: T0 });
-    clock.observe({ ok: false, error: unavailable }, T0 + 15_000, 1002);
-    expect(clock.get()).toEqual({ since: T0, last: T0 + 15_000 });
-  });
-
-  it("a gap longer than any checking pace (a laptop asleep) starts a new outage", () => {
-    const clock = createOutageClock();
-    clock.observe({ ok: false, error: unavailable }, T0, 1);
-    clock.observe({ ok: false, error: unavailable }, T0 + 15_000, 2);
-    clock.observe({ ok: false, error: unavailable }, T0 + 15_000 + SESSION_MAX_CHECK_GAP_MS + 1, 3);
-    expect(clock.get()).toEqual({ since: T0 + 15_000 + SESSION_MAX_CHECK_GAP_MS + 1, last: T0 + 15_000 + SESSION_MAX_CHECK_GAP_MS + 1 });
+    clock.observe(fail, T0);
+    pass(15_000);
+    clock.observe(fail, T0 + 15_000);
+    const gapped = T0 + 15_000 + SESSION_MAX_CHECK_GAP_MS + 1;
+    pass(SESSION_MAX_CHECK_GAP_MS + 1);
+    clock.observe(fail, gapped);
+    expect(clock.get()).toEqual({ since: gapped, last: gapped });
     // A throttled background tab, checking once a minute, still gathers evidence.
-    clock.observe({ ok: false, error: unavailable }, T0 + 15_000 + SESSION_MAX_CHECK_GAP_MS + 60_001, 4);
+    pass(60_000);
+    clock.observe(fail, gapped + 60_000);
+    expect(clock.get()).toEqual({ since: gapped, last: gapped + 60_000 });
+  });
+
+  it("a gap only the wall clock saw (a system asleep, where the monotonic clock stops) starts a new outage", () => {
+    const clock = createOutageClock();
+    clock.observe(fail, T0);
+    pass(170_000);
+    clock.observe(fail, T0 + 170_000);
+    // Two hours asleep: the monotonic clock moved 15 s, the wall clock two hours.
+    pass(2 * 3_600_000);
+    clock.observe(fail, T0 + 185_000);
+    expect(clock.get()).toEqual({ since: T0 + 185_000, last: T0 + 185_000 });
+  });
+
+  it("a wall clock set back neither hides a gap nor breaks a run", () => {
+    const clock = createOutageClock();
+    clock.observe(fail, T0);
+    vi.setSystemTime(Date.now() - 10 * 60_000);
+    clock.observe(fail, T0 + 15_000);
+    expect(clock.get()).toEqual({ since: T0, last: T0 + 15_000 });
+    clock.observe(fail, T0 + 15_000 + SESSION_MAX_CHECK_GAP_MS + 1);
     expect(clock.get()?.since).toBe(T0 + 15_000 + SESSION_MAX_CHECK_GAP_MS + 1);
   });
 
   it("U6: a sign-in since the outage began, in any tab, starts a new one", () => {
     const clock = createOutageClock();
-    clock.observe({ ok: false, error: unavailable }, T0, 1);
+    clock.observe(fail, T0);
     sessionEpoch.bump();
-    clock.observe({ ok: false, error: unavailable }, T0 + 15_000, 2);
+    pass(15_000);
+    clock.observe(fail, T0 + 15_000);
     expect(clock.get()).toEqual({ since: T0 + 15_000, last: T0 + 15_000 });
   });
 
-  it("U3: a reload resumes the outage the tab was in, rather than restarting it", () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      const before = createOutageClock();
-      before.observe({ ok: false, error: unavailable }, T0, 1);
-      vi.setSystemTime(Date.now() + 60_000);
-      // The page reloads: a new clock, a new monotonic origin.
-      const after = createOutageClock();
-      after.observe({ ok: false, error: unavailable }, 50, 2);
-      expect(after.get()).toEqual({ since: 50 - 60_000, last: 50 });
-      // A success ends it, and a later reload starts afresh.
-      after.observe({ ok: true }, 60);
-      const again = createOutageClock();
-      again.observe({ ok: false, error: unavailable }, 5, 3);
-      expect(again.get()).toEqual({ since: 5, last: 5 });
-    } finally {
-      vi.useRealTimers();
-    }
+  it("U3: a reload resumes the run the tab was in, crediting the span it had recorded", () => {
+    const before = createOutageClock();
+    before.observe(fail, T0);
+    pass(30_000);
+    before.observe(fail, T0 + 30_000);
+    pass(5_000);
+    // The page reloads: a new clock, a new monotonic origin.
+    const after = createOutageClock();
+    after.observe(fail, 50);
+    expect(after.get()).toEqual({ since: 50 - 30_000, last: 50 });
+    // A success ends it, and a later reload starts afresh.
+    after.observe({ ok: true }, 60);
+    const again = createOutageClock();
+    again.observe(fail, 5);
+    expect(again.get()).toEqual({ since: 5, last: 5 });
   });
 
-  it("U3: an outage remembered from too long ago, or from the future, is not resumed", () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      createOutageClock().observe({ ok: false, error: unavailable }, T0, 1);
-      vi.setSystemTime(Date.now() + SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS + 1);
-      const stale = createOutageClock();
-      stale.observe({ ok: false, error: unavailable }, 7, 2);
-      expect(stale.get()).toEqual({ since: 7, last: 7 });
-      vi.setSystemTime(Date.now() - 10 * 60_000);
-      const future = createOutageClock();
-      future.observe({ ok: false, error: unavailable }, 9, 3);
-      expect(future.get()).toEqual({ since: 9, last: 9 });
-    } finally {
-      vi.useRealTimers();
+  it("U3: a clock stepped forward across a reload does not shorten the grace period", () => {
+    const before = createOutageClock();
+    for (let t = 0; t <= 105_000; t += 15_000) {
+      if (t > 0) pass(15_000);
+      before.observe(fail, t);
     }
+    // The system clock steps 80 s forward, and the page reloads a moment later:
+    // the run had lasted 105 s, and the step adds nothing to it.
+    pass(80_000 + 1_000);
+    const after = createOutageClock();
+    after.observe(fail, 50);
+    expect(after.get()).toEqual({ since: 50 - 105_000, last: 50 });
+  });
+
+  it("U3: a reload just after a new run began resumes that run, not the one before it", () => {
+    const before = createOutageClock();
+    for (let t = 0; t <= 150_000; t += 30_000) {
+      if (t > 0) pass(30_000);
+      before.observe(fail, t);
+    }
+    // 100 s pass with no check, but the wall clock, set back meanwhile, shows
+    // only 70 s: the monotonic clock breaks the run, and a new one begins.
+    pass(70_000);
+    before.observe(fail, 250_000);
+    expect(before.get()).toEqual({ since: 250_000, last: 250_000 });
+    pass(1_000);
+    const after = createOutageClock();
+    after.observe(fail, 50);
+    expect(after.get()).toEqual({ since: 50, last: 50 });
+  });
+
+  it("U3: a run remembered from too long ago, or from the future, is not resumed", () => {
+    createOutageClock().observe(fail, T0);
+    pass(SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS + 1);
+    const stale = createOutageClock();
+    stale.observe(fail, 7);
+    expect(stale.get()).toEqual({ since: 7, last: 7 });
+    vi.setSystemTime(Date.now() - 10 * 60_000);
+    const future = createOutageClock();
+    future.observe(fail, 9);
+    expect(future.get()).toEqual({ since: 9, last: 9 });
   });
 
   describe("U3: each bound on resuming holds by itself", () => {
-    beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"] }));
-    afterEach(() => void vi.useRealTimers());
     const reloaded = () => {
       const clock = createOutageClock();
-      clock.observe({ ok: false, error: unavailable }, 11, 99);
+      clock.observe(fail, 11);
       return clock.get();
     };
 
-    it("not when the last check was longer ago than any checking pace, though the outage began within the grace period", () => {
-      createOutageClock().observe({ ok: false, error: unavailable }, 0, 1);
-      vi.setSystemTime(Date.now() + SESSION_MAX_CHECK_GAP_MS + 10_000);
+    it("not when its latest check was longer ago than any checking pace", () => {
+      const before = createOutageClock();
+      before.observe(fail, 0);
+      pass(30_000);
+      before.observe(fail, 30_000);
+      pass(SESSION_MAX_CHECK_GAP_MS + 10_000);
       expect(reloaded()).toEqual({ since: 11, last: 11 });
     });
 
-    it("not when the outage began longer ago than the grace period and a gap, though it was checked just now", () => {
+    it("not when the run had lasted longer than the grace period and a gap, though it was checked just now", () => {
       const before = createOutageClock();
       for (let t = 0; t <= SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS + 30_000; t += 60_000) {
-        vi.setSystemTime(Date.now() + (t === 0 ? 0 : 60_000));
-        before.observe({ ok: false, error: unavailable }, t, t + 1);
+        if (t > 0) pass(60_000);
+        before.observe(fail, t);
       }
-      vi.setSystemTime(Date.now() + 5_000);
+      pass(5_000);
       expect(reloaded()).toEqual({ since: 11, last: 11 });
     });
 
-    it("not when the clock was set back past the last check, though not past the outage's start", () => {
+    it("not when the clock was set back past its latest check", () => {
       const before = createOutageClock();
-      before.observe({ ok: false, error: unavailable }, 0, 1);
-      vi.setSystemTime(Date.now() + 60_000);
-      before.observe({ ok: false, error: unavailable }, 60_000, 2);
+      before.observe(fail, 0);
+      pass(60_000);
+      before.observe(fail, 60_000);
       vi.setSystemTime(Date.now() - 10_000);
       expect(reloaded()).toEqual({ since: 11, last: 11 });
     });
 
     it("not after a sign-in since, in any tab (U6)", () => {
-      createOutageClock().observe({ ok: false, error: unavailable }, 0, 1);
-      vi.setSystemTime(Date.now() + 30_000);
+      const before = createOutageClock();
+      before.observe(fail, 0);
+      pass(30_000);
+      before.observe(fail, 30_000);
       sessionEpoch.bump();
       expect(reloaded()).toEqual({ since: 11, last: 11 });
     });
 
-    it("not from a record that is malformed, or begins after its own last check", () => {
+    it("not from a record that is malformed, or claims a negative span", () => {
       const epoch = sessionEpoch.get();
       const now = Date.now();
       for (const raw of [
         "not json",
         "null",
         JSON.stringify({ epoch }),
-        JSON.stringify({ epoch, wallSince: String(now - 30_000), wallLast: now }),
-        JSON.stringify({ epoch, wallSince: now - 30_000, wallLast: String(now) }),
-        JSON.stringify({ epoch, wallSince: now + 1_000, wallLast: now }),
+        JSON.stringify({ epoch, span: "30000", wallLast: now }),
+        JSON.stringify({ epoch, span: 30_000, wallLast: String(now) }),
+        JSON.stringify({ epoch, span: -1_000, wallLast: now }),
+        JSON.stringify({ epoch, wallSince: now - 30_000, wallLast: now }),
       ]) {
         window.sessionStorage.setItem(SESSION_OUTAGE_KEY, raw);
         expect(reloaded(), raw).toEqual({ since: 11, last: 11 });
@@ -248,8 +297,11 @@ describe("the outage clock counts only evidence it saw at the checking pace", ()
     });
 
     it("but when every bound is met, it resumes", () => {
-      createOutageClock().observe({ ok: false, error: unavailable }, 0, 1);
-      vi.setSystemTime(Date.now() + 30_000);
+      const before = createOutageClock();
+      before.observe(fail, 0);
+      pass(30_000);
+      before.observe(fail, 30_000);
+      pass(10_000);
       expect(reloaded()).toEqual({ since: 11 - 30_000, last: 11 });
     });
   });

@@ -41,6 +41,13 @@ const server = {
   logoutDown: false,
   /** When set, sign-ins are refused with this error. */
   refuseSignIn: null as { code: string; message: string } | null,
+  /** Who the session belongs to. */
+  user: null as unknown as typeof USER,
+  /**
+   * Answer a session check by the cookie it was sent with, as a real server
+   * does, rather than by the session when the answer goes out.
+   */
+  cookieAtSend: false,
   calls: [] as string[],
 };
 const HTTP_STATUS: Record<string, number> = { UNAUTHORIZED: 401, FORBIDDEN: 403, SERVICE_UNAVAILABLE: 503 };
@@ -50,6 +57,7 @@ const PERSONA_KEY = "ontos:active-persona";
 const fakeLink: TRPCLink<AppRouter> = () => ({ op }) =>
   observable((observer) => {
     server.calls.push(op.path);
+    const sessionAtSend = server.session;
     const fail = (code: string, message: string) =>
       observer.error(TRPCClientError.from({ error: { message, code: -32000, data: { code, httpStatus: HTTP_STATUS[code] ?? 500 } } } as never));
     const ok = (data: unknown) => {
@@ -60,7 +68,7 @@ const fakeLink: TRPCLink<AppRouter> = () => ({ op }) =>
       if (server.down) return fail("SERVICE_UNAVAILABLE", "Your session could not be checked just now.");
       switch (op.path) {
         case "auth.me":
-          return server.session ? ok(USER) : fail("UNAUTHORIZED", "Please sign in");
+          return (server.cookieAtSend ? sessionAtSend : server.session) ? ok(server.user) : fail("UNAUTHORIZED", "Please sign in");
         case "auth.logout":
           if (server.logoutDown) return fail("SERVICE_UNAVAILABLE", "Your session could not be checked just now.");
           if (!server.session) return fail("UNAUTHORIZED", "Please sign in");
@@ -70,7 +78,7 @@ const fakeLink: TRPCLink<AppRouter> = () => ({ op }) =>
         case "auth.login":
           if (server.refuseSignIn) return fail(server.refuseSignIn.code, server.refuseSignIn.message);
           server.session = true;
-          return ok(USER);
+          return ok(server.user);
         default:
           return server.session ? ok({ totals: { nodes: 1, edges: 0 } }) : fail("UNAUTHORIZED", "Please sign in");
       }
@@ -168,7 +176,7 @@ function anotherTabSignsIn(persona?: unknown) {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
-  Object.assign(server, { down: false, session: true, latencyMs: 0, slow: {}, logoutDown: false, refuseSignIn: null, calls: [] });
+  Object.assign(server, { down: false, session: true, latencyMs: 0, slow: {}, logoutDown: false, refuseSignIn: null, user: USER, cookieAtSend: false, calls: [] });
   paths.length = 0;
   Object.assign(seen, { auth: null, watcher: null, navigate: null, appMounts: 0, queryClient: null });
   onlineManager.setOnline(true);
@@ -697,7 +705,7 @@ describe("round 3: checks keep their pace, and nothing waits to act later", () =
     window.localStorage.setItem(PERSONA_KEY, JSON.stringify(USER));
     const before = createOutageClock();
     for (let t = 0; t <= 120_000; t += SESSION_RECHECK_MS) {
-      before.observe({ ok: false, error: outage }, t, t + 1);
+      before.observe({ ok: false, error: outage }, t);
       if (t < 120_000) await advance(SESSION_RECHECK_MS);
     }
     // The reload, the server still down: the remembered persona opens the page,
@@ -735,18 +743,125 @@ describe("round 3: checks keep their pace, and nothing waits to act later", () =
     expect(paths).toEqual(["/app", "/quiet"]);
   });
 
+  it("U1: a check that fails while no part of the page shows the session counts at its own time, not when a page opens later", async () => {
+    renderApp();
+    await advance(100);
+    server.down = true;
+    await advance(10_000);
+    const since = outageClock.get()!.since;
+    // The check due 165 s in takes 8 s to fail; meanwhile the user opens the
+    // login page, where nothing shows the session.
+    await advance(since + 160_000 - performance.now());
+    server.slow = { "auth.me": 8_000 };
+    await advance(8_000);
+    await go("/login");
+    await advance(7_000);
+    // The server is back. At 200 s the user returns to the app.
+    Object.assign(server, { down: false, slow: {} });
+    await advance(since + 200_000 - performance.now());
+    await go("/app");
+    await advance(5_000);
+    expect(pendingSignOut.get()).toBe(false);
+    expect(server.session).toBe(true);
+    expect(seen.auth?.isAuthenticated).toBe(true);
+    expect(paths).toEqual(["/app", "/login", "/app"]);
+  });
+
+  it("a check that succeeds ends the outage: failures soon after it start a new one", async () => {
+    renderApp();
+    await advance(100);
+    server.down = true;
+    await advance(10_000);
+    const since = outageClock.get()!.since;
+    await advance(since + 168_000 - performance.now());
+    // The server answers once, 180 s in, then goes down again.
+    server.down = false;
+    await advance(15_000);
+    expect(outageClock.get()).toBeNull();
+    server.down = true;
+    await advance(80_000);
+    expect(pendingSignOut.get()).toBe(false);
+    expect(seen.auth?.isAuthenticated).toBe(true);
+  });
+
+  it("a system asleep mid-outage, with a clock that stops while it sleeps, does not carry the old evidence into the new day", async () => {
+    renderApp();
+    await advance(100);
+    server.down = true;
+    await advance(10_000);
+    const since = outageClock.get()!.since;
+    await advance(since + 170_000 - performance.now());
+    // Two hours asleep: the page's timers and monotonic clock stood still. On
+    // waking, the network is not back yet, so the next checks fail.
+    vi.setSystemTime(Date.now() + 2 * 3_600_000);
+    await advance(20_000);
+    expect(pendingSignOut.get()).toBe(false);
+    expect(seen.auth?.isAuthenticated).toBe(true);
+    server.down = false;
+    await advance(16_000);
+    expect(seen.auth?.isReconnecting).toBe(false);
+    expect(server.session).toBe(true);
+  });
+
+  it("a tab that slept through a sign-in elsewhere checks the session when it wakes, rather than showing the old user", async () => {
+    renderApp({ start: "/quiet" });
+    await advance(100);
+    expect(seen.auth?.user?.name).toBe("Ada Byron");
+    // Another tab signs in as someone else while this one is frozen, so none of
+    // the pending sign-out's storage events reach it. It learns of the new
+    // session from the epoch: on the storage event, on focus, or when the page
+    // is restored from the back/forward cache.
+    const wakeUps: [string, () => Event][] = [
+      ["storage", () => new StorageEvent("storage", { key: "ontos:session-epoch" })],
+      ["focus", () => new Event("focus")],
+      ["pageshow", () => new Event("pageshow")],
+    ];
+    for (const [i, [name, event]] of wakeUps.entries()) {
+      server.user = { ...USER, id: 10 + i, name: `Signed in elsewhere, then ${name}` };
+      window.localStorage.setItem("ontos:session-epoch", `a-later-session-${i}`);
+      await act(async () => void window.dispatchEvent(event()));
+      await advance(1_000);
+      expect(seen.auth?.user?.name).toBe(`Signed in elsewhere, then ${name}`);
+    }
+    // Waking with nothing new checks nothing.
+    const checks = count("auth.me");
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    await advance(1_000);
+    expect(count("auth.me")).toBe(checks);
+  });
+
+  it("a sign-in made just after an ordinary sign-out is not undone by that sign-out's slow session check", async () => {
+    // A page with no requests of its own, so no other failure prompts a re-check under the lock.
+    renderApp({ start: "/quiet" });
+    await advance(100);
+    server.cookieAtSend = true;
+    server.slow = { "auth.me": 3_000 };
+    // The sign-out's refresh sends a session check without a cookie; it will say "not signed in".
+    act(() => seen.auth?.logout());
+    await advance(100);
+    expect(paths).toEqual(["/quiet", "/login"]);
+    fireEvent.click(screen.getByText("Elena Cortez"));
+    await advance(500);
+    expect(paths).toEqual(["/quiet", "/login", "/app"]);
+    // The stale answer arrives, and is no answer about the new session.
+    await advance(5_000);
+    expect(seen.auth?.isAuthenticated).toBe(true);
+    expect(paths).toEqual(["/quiet", "/login", "/app"]);
+    expect(server.session).toBe(true);
+  });
+
   it("U6: a sign-in here starts another tab's outage afresh, so its old evidence cannot sign the new session out", async () => {
     const outage = { data: { code: "SERVICE_UNAVAILABLE" } };
     const otherTab = createOutageClock();
-    otherTab.observe({ ok: false, error: outage }, 0, 1);
-    otherTab.observe({ ok: false, error: outage }, 15_000, 2);
+    otherTab.observe({ ok: false, error: outage }, 0);
+    otherTab.observe({ ok: false, error: outage }, 15_000);
     server.session = false;
     renderApp({ start: "/login" });
     await advance(100);
     fireEvent.click(screen.getByText("Elena Cortez"));
     await advance(1_000);
     expect(paths).toEqual(["/login", "/app"]);
-    otherTab.observe({ ok: false, error: outage }, 30_000, 3);
+    otherTab.observe({ ok: false, error: outage }, 30_000);
     expect(otherTab.get()).toEqual({ since: 30_000, last: 30_000 });
   });
 

@@ -16,10 +16,12 @@
  *  I1  A 401 from the session check signs the user out at once.
  *  I2  No outage sign-out without a failed check SESSION_GRACE_MS or more,
  *      on the monotonic clock, after the first failed check of the outage.
- *      An outage is a run of failed checks, each counted once, no two more
- *      than SESSION_MAX_CHECK_GAP_MS apart, within one session epoch; a
- *      reload resumes the run the tab was in, and the remembered persona that
- *      opens the page is a guess, not an answer: it ends no run.
+ *      An outage is a run of failed checks, each counted once, when it
+ *      settles, whether or not the page is showing the session; no two more
+ *      than SESSION_MAX_CHECK_GAP_MS apart by either the monotonic or the
+ *      wall clock; within one session epoch. A reload resumes the run the tab
+ *      was in, crediting only the span it recorded. The remembered persona
+ *      that opens a page is a guess, not an answer: it ends no run.
  *  I3  An outage signs the user out at most once, in any tab.
  *  I4  Once an outage sign-out is pending, no user is shown as signed in
  *      until the server has ended the session or the user signs in again;
@@ -46,7 +48,10 @@
  * Degradation: the pending flag falls back from localStorage to a cookie to
  * memory; with none, the sign-out lasts until the page is reloaded. Without
  * sessionStorage a reload restarts the outage; without localStorage tabs
- * cannot tell sessions apart, and the other rules still hold.
+ * cannot tell sessions apart, and the other rules still hold. A hidden tab
+ * whose checks hang may have its timeouts throttled past the gap: it then
+ * starts a new outage at each failure, and signs no one out while hidden,
+ * which errs the safe way; a visible tab, or this one once shown, does.
  */
 
 export const SESSION_GRACE_MS = 3 * 60_000;
@@ -150,7 +155,12 @@ export const sessionEpoch = {
 
 /** Where a tab remembers its outage across a reload (sessionStorage: this tab only). */
 export const SESSION_OUTAGE_KEY = "ontos:outage";
-type Remembered = { epoch: string; wallSince: number; wallLast: number };
+/**
+ * `span`: how long the run had lasted at its latest failure, on the monotonic
+ * clock. `wallLast`: when that failure was seen, on the wall clock, used only
+ * to tell how long ago it was.
+ */
+type Remembered = { epoch: string; span: number; wallLast: number };
 
 function remember(v: Remembered | null): void {
   try {
@@ -161,40 +171,46 @@ function remember(v: Remembered | null): void {
   }
 }
 
-/** How long ago the outage this tab remembers began, if it may be resumed. */
+/**
+ * How long the run this tab remembers had lasted, if it may be resumed: one
+ * checked recently, by a wall clock that has not gone backwards, and no longer
+ * than the grace period and a gap. Only the span it recorded is credited: the
+ * reload itself checked nothing, and a clock stepped forward across it adds
+ * nothing to the run.
+ */
 function resumable(epoch: string): number | null {
   try {
     const raw = window.sessionStorage.getItem(SESSION_OUTAGE_KEY);
     if (!raw) return null;
     const v = JSON.parse(raw) as Partial<Remembered>;
-    const now = Date.now();
-    if (v.epoch !== epoch || typeof v.wallSince !== "number" || typeof v.wallLast !== "number") return null;
-    const sinceLast = now - v.wallLast;
-    const age = now - v.wallSince;
-    // Only an outage checked recently, and no longer than the grace period and
-    // one gap ago; a clock that went backwards resumes nothing.
-    if (sinceLast < 0 || sinceLast > SESSION_MAX_CHECK_GAP_MS || age < 0 || age > SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS) return null;
-    return age;
+    if (v.epoch !== epoch || typeof v.span !== "number" || typeof v.wallLast !== "number") return null;
+    const sinceLast = Date.now() - v.wallLast;
+    if (sinceLast < 0 || sinceLast > SESSION_MAX_CHECK_GAP_MS) return null;
+    if (v.span < 0 || v.span > SESSION_GRACE_MS + SESSION_MAX_CHECK_GAP_MS) return null;
+    return v.span;
   } catch {
     return null;
   }
 }
 
 /**
- * The shared outage clock. Each settled check is observed: a failure extends
- * the run, anything else ends it. Evidence counts only as the checks made it:
- * - a failure is counted once, by `stamp` (the check's own time), however many
- *   parts of the page see it, and whenever they mount;
- * - a gap longer than SESSION_MAX_CHECK_GAP_MS since the last failure (a
- *   laptop asleep, a tab frozen) starts a new outage, since nothing was checked;
+ * The shared outage clock. Each settled session check is observed once, when
+ * it settles (the query cache reports it: providers/trpc.tsx), whether or not
+ * any part of the page is showing the session: a failure extends the run,
+ * anything else ends it. Evidence counts only as the checks made it:
+ * - a gap longer than SESSION_MAX_CHECK_GAP_MS since the last failure starts a
+ *   new outage, since nothing was checked in between. The gap is the larger of
+ *   the monotonic and wall-clock gaps: the monotonic clock stops during system
+ *   sleep on some systems, and the wall clock can be set back, so either alone
+ *   can hide one. A clock change can therefore only start a new outage;
  * - a sign-in since the outage began (sessionEpoch) starts a new one;
- * - a reload resumes the outage the tab was in (see `resumable`). Only the
- *   page's first outage may: within a page the monotonic clock alone decides,
- *   since the wall clock can be set back.
+ * - a reload resumes the run the tab was in (see `resumable`). Only the page's
+ *   first outage may: within a page the clocks above decide.
  */
 export function createOutageClock() {
   let current: Outage | null = null;
-  let lastStamp: number | undefined;
+  /** When the latest failure was seen, on the wall clock (for the gap rule). */
+  let lastWall = 0;
   let epoch = "";
   let firstOutage = true;
   const listeners = new Set<() => void>();
@@ -203,31 +219,31 @@ export function createOutageClock() {
     for (const l of listeners) l();
   };
   const end = () => {
-    lastStamp = undefined;
     remember(null);
     if (current !== null) set(null);
   };
   return {
     get: (): Outage | null => current,
-    observe(result: { ok: true } | { ok: false; error: unknown }, at = monotonicNow(), stamp?: number) {
+    observe(result: { ok: true } | { ok: false; error: unknown }, at = monotonicNow()) {
       // Success, or "not signed in", is an answer: the outage, if any, is over.
       if (result.ok || isSignedOutError(result.error)) return end();
-      if (stamp !== undefined && stamp === lastStamp) return;
-      lastStamp = stamp;
       const now = sessionEpoch.get();
-      if (current !== null && now === epoch && at - current.last <= SESSION_MAX_CHECK_GAP_MS) {
+      const wall = Date.now();
+      if (current !== null && now === epoch && Math.max(at - current.last, wall - lastWall) <= SESSION_MAX_CHECK_GAP_MS) {
         if (at > current.last) {
+          lastWall = wall;
           set({ since: current.since, last: at });
-          remember({ epoch, wallSince: Date.now() - (at - current.since), wallLast: Date.now() });
+          remember({ epoch, span: at - current.since, wallLast: wall });
         }
         return;
       }
       epoch = now;
-      const age = firstOutage ? resumable(epoch) : null;
+      const span = firstOutage ? resumable(epoch) : null;
       firstOutage = false;
-      const since = age !== null ? at - age : at;
+      const since = span !== null ? at - span : at;
+      lastWall = wall;
       set({ since, last: at });
-      remember({ epoch, wallSince: Date.now() - (at - since), wallLast: Date.now() });
+      remember({ epoch, span: at - since, wallLast: wall });
     },
     /** Forgets the outage, the tab's stored copy too: the clock is as on a page just loaded. */
     reset() {

@@ -106,6 +106,10 @@ export default function Login() {
     try {
       const user = await withSessionLock(async () => {
         const accepted = await request();
+        // A session check still in flight went out without this session's
+        // cookie (an ordinary sign-out's refresh, say): its answer is about the
+        // old session, and must not land after the new one and sign it out.
+        await utils.auth.me.cancel();
         signedIn();
         return accepted;
       });
