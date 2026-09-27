@@ -399,6 +399,21 @@ describe("graph.getNode", () => {
     expectWorkspaceScoped(3, "ontology_modules", WS.id);
   });
 
+  it("shows no mapping whose connector is in another workspace", async () => {
+    const node = nodeRow(31, { sourceMappingId: 9 });
+    const elsewhere = { id: 9, connectorId: 44, moduleId: 5, name: "Another workspace's mapping" };
+    // node, outgoing, incoming, the mapping, no connector in this workspace, modules
+    dbState.queue.push([node], [], [], [elsewhere], [], []);
+
+    const result = await betaCaller().graph.getNode({ iri: node.iri });
+
+    expect(result.provenance.mapping).toBeNull();
+    expect(result.provenance.connector).toBeNull();
+    expect(JSON.stringify(result)).not.toContain("Another workspace's mapping");
+    const c = expectWorkspaceScoped(4, "connectors", WS.id);
+    expect(c.conjuncts).toContainEqual({ sql: "`connectors`.`id` = ?", params: [44] });
+  });
+
   it("returns NOT_FOUND when the IRI is not in the caller's workspace", async () => {
     dbState.queue.push([]);
 

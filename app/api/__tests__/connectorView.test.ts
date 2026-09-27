@@ -49,13 +49,25 @@ describe("publicConnector shows a connector's settings by name, and nothing else
     expect(publicConnector(connector("rest", { auth: "Bearer eyJhbGciOi" })).configJson).not.toHaveProperty("auth");
   });
 
-  it("removes a user name and password written into the base URL", () => {
-    expect(publicConnector(connector("rest", { baseUrl: "https://svc:pa55@erp.acme.corp/api/v2?x=1" })).configJson.baseUrl).toBe(
-      "https://erp.acme.corp/api/v2?x=1",
-    );
-    expect(publicConnector(connector("rest", { baseUrl: "https://erp.acme.corp/api/v2" })).configJson.baseUrl).toBe("https://erp.acme.corp/api/v2");
-    expect(publicConnector(connector("rest", { baseUrl: "svc:pa55@erp" })).configJson.baseUrl).toBe("(hidden)");
-    expect(publicConnector(connector("rest", { baseUrl: "erp.acme.corp/api" })).configJson.baseUrl).toBe("erp.acme.corp/api");
+  it("shows where a base URL points, never the user name, password, query or fragment written into it", () => {
+    const shown = (baseUrl: string) => publicConnector(connector("rest", { baseUrl })).configJson.baseUrl;
+    expect(shown("https://svc:pa55@erp.acme.corp/api/v2?x=1")).toBe("https://erp.acme.corp/api/v2");
+    expect(shown("https://erp.acme.corp/api/v2?api_key=K-1#access_token=T-1")).toBe("https://erp.acme.corp/api/v2");
+    expect(shown("https://acct.blob.core.windows.net/exports?sv=2024-01-01&sig=SIG%3D")).toBe("https://acct.blob.core.windows.net/exports");
+    expect(shown("https:svc:pa55@erp.acme.corp/api")).toBe("https://erp.acme.corp/api");
+    expect(shown(" https://svc:pa55@erp.acme.corp/api")).toBe("https://erp.acme.corp/api");
+    expect(shown("https://erp.acme.corp/api/v2")).toBe("https://erp.acme.corp/api/v2");
+    // Not an http(s) URL: cut at the query or fragment, and hidden if it could hold userinfo.
+    expect(shown("erp.acme.corp/api?token=T-1")).toBe("erp.acme.corp/api");
+    expect(shown("erp.acme.corp/api#access_token=T-1")).toBe("erp.acme.corp/api");
+    expect(shown("svc:pa55@erp")).toBe("(hidden)");
+    expect(shown("ftp://svc:pa55@files.acme.corp/x")).toBe("(hidden)");
+    expect(shown("erp.acme.corp/api")).toBe("erp.acme.corp/api");
+  });
+
+  it("carries the connector's known columns only, so a column added later does not reach clients unseen", () => {
+    const row = { ...connector("csv", { filename: "hris.csv" }), sealedCredentials: "SENTINEL" } as Connector;
+    expect(Object.keys(publicConnector(row)).sort()).toEqual(["configJson", "createdAt", "id", "name", "status", "type", "workspaceId"]);
   });
 
   it("copes with a connector that has no settings", () => {
