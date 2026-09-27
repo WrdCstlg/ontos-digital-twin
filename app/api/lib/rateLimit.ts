@@ -65,6 +65,18 @@ export class SlidingWindowRateLimiter {
   reset(key: string): void {
     this.hits.delete(key);
   }
+
+  /**
+   * Takes back the latest attempt counted for `key`: an attempt the server
+   * could not decide (its database unreachable, say) is no attempt against the
+   * limit, and the person is told to try again.
+   */
+  release(key: string): void {
+    const hits = this.hits.get(key);
+    if (!hits?.length) return;
+    hits.pop();
+    if (hits.length === 0) this.hits.delete(key);
+  }
 }
 
 /** Authentication limiter: 10 attempts per 15 minutes per identifier */

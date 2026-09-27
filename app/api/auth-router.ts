@@ -73,7 +73,14 @@ export const authRouter = createRouter({
       return toPublicUser(user);
     }),
 
-  logout: authedQuery.mutation(async ({ ctx }) => {
+  /**
+   * Clears the session cookie. That needs no database, so signing out works
+   * while the session cannot be checked: a person who signs out during an
+   * outage and closes the tab leaves no session behind for the next person at
+   * that browser. Public, since it only ever takes a session away; mutations
+   * are CSRF-checked (boot.ts), so another site cannot sign anyone out.
+   */
+  logout: publicQuery.mutation(async ({ ctx }) => {
     const opts = getSessionCookieOptions(ctx.req.headers);
     const sameSiteVal = (opts.sameSite?.toLowerCase() ?? "strict") as "strict" | "lax" | "none";
     // Clear both possible cookie names (prod and dev)

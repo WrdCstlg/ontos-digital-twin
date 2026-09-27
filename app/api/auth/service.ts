@@ -152,7 +152,11 @@ export async function loginWithCredentials(
   try {
     return await checkCredentials(email, password);
   } catch (err) {
-    throw signInError(err);
+    const refused = signInError(err);
+    // No verdict was reached, so the attempt does not count toward the limit:
+    // someone told to try again in a moment must not be locked out for it.
+    if (refused.code === "SERVICE_UNAVAILABLE") authRateLimiter.release(email.trim().toLowerCase());
+    throw refused;
   }
 }
 

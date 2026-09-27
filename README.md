@@ -547,8 +547,11 @@ const result = await ontos.actions.submit("renew-contract", { contract: "lgl:Con
 - Passwords hashed with `node:crypto` scrypt, 128-bit salts, constant-time verification.
 - `secureHeaders` (HSTS, `X-Frame-Options: DENY`, `nosniff`), explicit-origin CORS, CSRF
   origin checks on mutations, and a 2 MB body limit.
-- Sliding-window rate limits on auth (10 / 15 min), NLQ (30 / min), SPARQL (30 / min) and
-  graph scans (10 / min).
+- Sliding-window rate limits on auth (10 / 15 min; a sign-in the server could not decide,
+  its database unreachable, does not count), NLQ (30 / min), SPARQL (30 / min) and graph
+  scans (10 / min).
+- Signing out needs no database: it clears the session cookie even while the session
+  cannot be checked.
 - NLQ input is capped at 500 characters and screened for destructive or injection intent.
 - `/api/sparql` sits outside tRPC, so it performs its own session check and is gated to
   read-only query forms (`api/lib/sparqlGuard.ts`).

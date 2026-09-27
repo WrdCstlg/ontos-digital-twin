@@ -90,6 +90,19 @@ describe("a sign-in the database cannot serve", () => {
     await expect(loginWithCredentials("nobody@acme.com", "anything")).rejects.toMatchObject(invalid);
   });
 
+  it("by password does not count toward the sign-in limit, since it reached no verdict", async () => {
+    vi.mocked(findUserByEmail).mockRejectedValue(new Error(OUTAGE));
+    for (let i = 0; i < 12; i++) {
+      await expect(loginWithCredentials("retrying@acme.com", "a-long-password")).rejects.toMatchObject(unavailable);
+    }
+    // The database is back: the next attempt gets its verdict, not a lockout.
+    vi.mocked(findUserByEmail).mockResolvedValue(undefined);
+    await expect(loginWithCredentials("retrying@acme.com", "a-long-password")).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    // Verdicts still count: ten refusals, and the eleventh attempt is limited.
+    for (let i = 0; i < 9; i++) await loginWithCredentials("retrying@acme.com", "wrong").catch(() => undefined);
+    await expect(loginWithCredentials("retrying@acme.com", "wrong")).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+  });
+
   it("through the router, sets no session cookie", async () => {
     vi.mocked(upsertUser).mockRejectedValue(new Error(OUTAGE));
     vi.mocked(findUserByEmail).mockRejectedValue(new Error(OUTAGE));
@@ -98,5 +111,17 @@ describe("a sign-in the database cannot serve", () => {
     await expect(caller.auth.demoLogin({ role: "editor" })).rejects.toMatchObject(unavailable);
     await expect(caller.auth.login({ email: "ada@acme.com", password: "a-long-password" })).rejects.toMatchObject(unavailable);
     expect(ctx.resHeaders.get("set-cookie")).toBeNull();
+  });
+});
+
+describe("signing out", () => {
+  it("needs no database: with the session unchecked, or none at all, it clears both session cookies", async () => {
+    for (const ctx of [{ ...createMockContext({ user: null }), sessionUnavailable: true }, createMockContext({ user: null })]) {
+      await expect(appRouter.createCaller(ctx).auth.logout()).resolves.toEqual({ success: true });
+      const cleared = ctx.resHeaders.getSetCookie();
+      expect(cleared).toHaveLength(2);
+      for (const c of cleared) expect(c).toMatch(/=; .*Max-Age=0/);
+    }
+    expect(findUserById).not.toHaveBeenCalled();
   });
 });
