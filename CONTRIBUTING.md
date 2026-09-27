@@ -68,6 +68,25 @@ bind to it.
 component tests are the largest gap in the suite, so contributions there are especially
 welcome.
 
+## How changes land
+
+Every change reaches `master` through a pull request, never a direct push, whoever or
+whatever wrote it, a coding agent included. `master` on
+[WrdCstlg/ontos-digital-twin](https://github.com/WrdCstlg/ontos-digital-twin) is protected:
+a pull request can merge only when it is up to date with `master` and the CI jobs (both Node
+versions and the Docker stack) and the PRO-THESIS gate have passed. The rule applies to
+administrators too.
+
+1. Work on a branch of your own, one topic per branch. Two people or agents never share a
+   working tree: each has its own clone or `git worktree`.
+2. Open the pull request against WrdCstlg `master` and say how you verified the change.
+3. Before it merges, the change gets a review pass focused on what automated checks miss:
+   authorization and workspace scoping, secrets in responses, and flows a user takes in a
+   browser. The gate and the tests did not catch the defects such a review found in
+   September 2026 (see the history of `api/mappingRouter.ts` and `api/searchRouter.ts`).
+4. Once merged, the maintainer mirrors `master` to piercepartners:
+   `git fetch personal && git push origin personal/master:master`.
+
 ## Commits and pull requests
 
 Commit messages follow a Conventional Commits style, as in the existing history:
