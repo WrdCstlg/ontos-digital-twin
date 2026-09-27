@@ -830,6 +830,28 @@ describe("round 3: checks keep their pace, and nothing waits to act later", () =
     expect(count("auth.me")).toBe(checks);
   });
 
+  it("after this tab's own sign-in, focus adds no check, and an outage in the new session signs out on time", async () => {
+    server.session = false;
+    renderApp({ start: "/login" });
+    await advance(100);
+    fireEvent.click(screen.getByText("Elena Cortez"));
+    await advance(1_000);
+    expect(paths).toEqual(["/login", "/app"]);
+    const checks = count("auth.me");
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    await advance(1_000);
+    expect(count("auth.me")).toBe(checks);
+    // An outage in the new session, with the tab refocused near its end: its
+    // evidence stands, and the sign-out comes three minutes after it began.
+    server.down = true;
+    await advance(10_000);
+    const since = outageClock.get()!.since;
+    await advance(since + 165_000 - performance.now());
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    await advance(since + SESSION_GRACE_MS + 20_000 - performance.now());
+    expect(pendingSignOut.get()).toBe(true);
+  });
+
   it("a sign-in made just after an ordinary sign-out is not undone by that sign-out's slow session check", async () => {
     // A page with no requests of its own, so no other failure prompts a re-check under the lock.
     renderApp({ start: "/quiet" });

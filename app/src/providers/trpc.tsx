@@ -180,17 +180,18 @@ export function SessionSignOutCompleter() {
     });
   }, [client]);
 
-  // A sign-in in any tab starts a new session (sessionEpoch). A tab that was
-  // frozen, or restored from the back/forward cache, may have missed the
+  // A sign-in in another tab starts a new session (sessionEpoch). A tab that
+  // was frozen, or restored from the back/forward cache, may have missed the
   // changes above, and would show the old user until its next check. Whenever
   // it sees the epoch has moved (another tab's storage event, or on waking),
-  // it forgets the old session's outage and checks the session again.
+  // it forgets the old session's outage and checks the session again; a check
+  // already under way went out with the old session's cookie, so it is
+  // replaced. Its own sign-ins move the epoch too, and count as seen
+  // (sessionEpoch.bump), so they prompt nothing here.
   useEffect(() => {
-    let known = sessionEpoch.get();
+    sessionEpoch.takeChange();
     const check = () => {
-      const now = sessionEpoch.get();
-      if (now === known) return;
-      known = now;
+      if (!sessionEpoch.takeChange()) return;
       outageClock.reset();
       void client.invalidateQueries({ queryKey: getQueryKey(trpc.auth.me) });
     };
