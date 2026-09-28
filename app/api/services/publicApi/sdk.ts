@@ -46,9 +46,12 @@ const key = (k: string) => (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stri
 export function generateTypeScriptSdk(model: OntologyModel, generatedAt = new Date()): string {
   const out: string[] = [];
   out.push(
+    `// SPDX-License-Identifier: AGPL-3.0-only`,
     `// Ontos Ontology API client for "${model.workspace.name}".`,
     `// Generated ${generatedAt.toISOString()} from ontology version ${model.version}. Do not edit:`,
     `// download it again from the Developers page when the ontology changes.`,
+    `// Part of Ontos, (c) 2026 Senan Sumrein and Pierce Partners, licensed under the`,
+    `// GNU Affero General Public License v3.0 only. Its source: the "Source code" link in Ontos.`,
     ``,
     `export const ONTOLOGY_VERSION = ${JSON.stringify(model.version)};`,
     ``,
