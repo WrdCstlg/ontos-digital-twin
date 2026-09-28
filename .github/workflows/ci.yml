@@ -114,12 +114,23 @@ jobs:
             exit 1
           fi
 
+      # A copy of a workspace's graph is tested against MySQL and an engine together.
+      - name: Fetch semantic engine
+        run: |
+          mkdir -p bin
+          curl -fsSL -o bin/open-ontologies \
+            "https://github.com/fabio-rovai/open-ontologies/releases/download/${ENGINE_VERSION}/open-ontologies-x86_64-unknown-linux-gnu"
+          echo "${ENGINE_SHA256}  bin/open-ontologies" | sha256sum --check --strict -
+          chmod +x bin/open-ontologies
+
       - name: Test on MySQL
         run: npm --prefix app run test:mysql
         env:
           ONTOS_TEST_DATABASE_URL: mysql://root:ci-throwaway@127.0.0.1:3306
           # The zone the service's TZ puts its sessions in: setup fails if not.
           ONTOS_TEST_SESSION_TIME_ZONE: "+05:00"
+          # The tests that need an engine start their own from this binary.
+          OPEN_ONTOLOGIES_BIN: ${{ github.workspace }}/bin/open-ontologies
 
   docker:
     name: Docker stack boots and serves
