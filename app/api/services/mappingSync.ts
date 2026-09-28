@@ -18,7 +18,7 @@ import {
 import { getDb } from "../queries/connection";
 import { writeAudit } from "./audit";
 import { EngineRequestError, semanticEngine, type ShaclValidationResult } from "./semanticEngine";
-import { buildPrefixMap, expandIri, knowledgeGraphToTurtle, modulePrefixes, shaclJsonToTurtle } from "./rdfBridge";
+import { buildPrefixMap, expandIri, knowledgeGraphSubjects, modulePrefixes, shaclJsonToTurtle } from "./rdfBridge";
 import { workspaceDatatypeRanges } from "./datatypeRanges";
 import { explainShaclReport, type ExplainedShaclReport } from "./explainableShacl";
 import { enqueueJob } from "./jobs/queue";
@@ -331,14 +331,14 @@ export async function checkImportShacl(
     });
   }
 
-  const dataTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId), modulePrefixes(mods));
+  const data = knowledgeGraphSubjects(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId), modulePrefixes(mods));
   let raw: ShaclValidationResult;
   try {
     // A store that changed under the check (EngineInterference) makes it unchecked.
     raw = await semanticEngine.exclusive(
       () =>
         semanticEngine.checkLoaded(
-          async () => (await semanticEngine.loadTurtle(dataTtl)).triplesLoaded,
+          async () => (await semanticEngine.loadSubjects(prefixMap, data)).triplesLoaded,
           () => semanticEngine.validateShacl(shapesTtl),
         ),
       { signal },

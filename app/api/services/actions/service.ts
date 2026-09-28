@@ -22,7 +22,7 @@ import { getDb } from "../../queries/connection";
 import { canonicalize, writeAudit } from "../audit";
 import { enqueueJob } from "../jobs/queue";
 import { EngineInterference, semanticEngine, type ShaclValidationResult } from "../semanticEngine";
-import { buildPrefixMap, expandIri, knowledgeGraphToTurtle, modulePrefixes, shaclJsonToTurtle } from "../rdfBridge";
+import { buildPrefixMap, expandIri, knowledgeGraphSubjects, modulePrefixes, shaclJsonToTurtle } from "../rdfBridge";
 import { workspaceDatatypeRanges } from "../datatypeRanges";
 import { explainShaclReport } from "../explainableShacl";
 import { ACTION_WEBHOOK_KIND } from "./sideEffects";
@@ -235,7 +235,7 @@ export async function checkShacl(workspaceId: number, plan: EditPlan, objects: M
   try {
     report = await semanticEngine.exclusive(() =>
       semanticEngine.checkLoaded(
-        async () => (await semanticEngine.loadTurtle(knowledgeGraphToTurtle(nodes, edges, prefixMap, ranges, modulePrefixes(mods)))).triplesLoaded,
+        async () => (await semanticEngine.loadSubjects(prefixMap, knowledgeGraphSubjects(nodes, edges, prefixMap, ranges, modulePrefixes(mods)))).triplesLoaded,
         () => semanticEngine.validateShacl(shaclJsonToTurtle(shaped, prefixMap)),
       ),
     );
