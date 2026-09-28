@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { kgEdges, kgNodes, ontologyClasses, ontologyModules, twinStateLog } from "@db/schema";
 import { createRouter, EDITOR_ROLES, workspaceQuery, workspaceOntologistMutation, workspaceAdminMutation } from "./middleware";
 import { getDb } from "./queries/connection";
+import { withDeadlockRetry } from "./lib/mysqlErrors";
 import { actorLabelFor, writeAudit } from "./services/audit";
 import { recordGraphChange } from "./services/graphChanges";
 import { hasWorkspaceRole } from "./services/workspaceGuard";
@@ -320,74 +321,97 @@ export const twinRouter = createRouter({
       ];
       if (input?.iri) conds.push(eq(kgNodes.iri, input.iri));
       const rows = await db
-        .select()
+        .select({ id: kgNodes.id, classIri: kgNodes.classIri })
         .from(kgNodes)
         .where(and(...conds))
         .orderBy(kgNodes.iri)
         .limit(500);
-      const twins = rows.filter((r) => SIMULATED_TWIN_CLASSES.has(r.classIri));
-      if (input?.iri && !twins.length) {
+      const candidates = rows.filter((r) => SIMULATED_TWIN_CLASSES.has(r.classIri));
+      if (input?.iri && !candidates.length) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Simulated twin '${input.iri}' not found`,
         });
       }
 
-      const changed: { iri: string; label: string; classIri: string; changes: StateChange[] }[] = [];
-      const logRows: (typeof twinStateLog.$inferInsert)[] = [];
-      const updates: { id: number; next: TwinState }[] = [];
-      for (const t of twins) {
-        const state = ((t.propsJson ?? {}) as TwinState) ?? {};
-        const { next, changes } = advanceTwinState(t.classIri, state, Math.random, now);
-        if (!changes.length) continue;
-        updates.push({ id: t.id, next });
-        for (const c of changes) {
-          if (typeof c.new === "number" && LOGGED_NUMERIC_KEYS.has(c.key)) {
-            logRows.push({
-              nodeId: t.id,
-              key: c.key,
-              valueNum: c.new,
-              valueText: null,
-              unit: null,
-              recordedAt: now,
-            });
-          } else if (c.key === "status" && typeof c.new === "string") {
-            logRows.push({
-              nodeId: t.id,
-              key: "status",
-              valueNum: null,
-              valueText: c.new,
-              unit: null,
-              recordedAt: now,
-            });
-          }
-        }
-        changed.push({ iri: t.iri, label: t.label, classIri: t.classIri, changes });
-      }
-      // The twins' new state and the graph's change, together (graphChanges.ts).
-      if (updates.length) {
-        await db.transaction(async (tx) => {
-          for (const u of updates) await tx.update(kgNodes).set({ propsJson: u.next }).where(eq(kgNodes.id, u.id));
-          await recordGraphChange(tx, ws.id, { nodes: updates.map((u) => u.id) });
-        });
-      }
-      for (let i = 0; i < logRows.length; i += 500) {
-        await db.insert(twinStateLog).values(logRows.slice(i, i + 500));
-      }
+      // One transaction, the twins locked (in id order, as telemetry and actions
+      // lock them) before their state is read: a state read unlocked would be
+      // written back over a reading that arrived in between. The audit entry and
+      // the graph's change (graphChanges.ts) are recorded with it, the graph
+      // change last.
+      const { changed } = await withDeadlockRetry(() =>
+        db.transaction(
+          async (tx) => {
+            const ids = candidates.map((r) => r.id).sort((a, b) => a - b);
+            const locked = ids.length
+              ? await tx
+                  .select()
+                  .from(kgNodes)
+                  .where(and(inArray(kgNodes.id, ids), eq(kgNodes.workspaceId, ws.id), isNull(kgNodes.deletedAt)))
+                  .orderBy(kgNodes.id)
+                  .for("update")
+              : [];
+            const byId = new Map(locked.map((t) => [t.id, t]));
+            const twins = candidates.flatMap((r) => byId.get(r.id) ?? []);
 
-      await writeAudit({
-        workspaceId: ws.id,
-        actor: actorLabelFor(ctx.user),
-        action: `Advanced twin simulation tick — ${changed.length} twins updated`,
-        entityType: "twin_tick",
-        entityId: input?.iri ?? "all",
-        payload: {
-          tickedAt: now.toISOString(),
-          twinsUpdated: changed.length,
-          stateLogRows: logRows.length,
-          sample: changed.slice(0, 5).map((c) => ({ iri: c.iri, changes: c.changes })),
-        },
-      });
+            const changed: { iri: string; label: string; classIri: string; changes: StateChange[] }[] = [];
+            const logRows: (typeof twinStateLog.$inferInsert)[] = [];
+            const updated: number[] = [];
+            for (const t of twins) {
+              const state = ((t.propsJson ?? {}) as TwinState) ?? {};
+              const { next, changes } = advanceTwinState(t.classIri, state, Math.random, now);
+              if (!changes.length) continue;
+              await tx.update(kgNodes).set({ propsJson: next }).where(eq(kgNodes.id, t.id));
+              updated.push(t.id);
+              for (const c of changes) {
+                if (typeof c.new === "number" && LOGGED_NUMERIC_KEYS.has(c.key)) {
+                  logRows.push({
+                    nodeId: t.id,
+                    key: c.key,
+                    valueNum: c.new,
+                    valueText: null,
+                    unit: null,
+                    recordedAt: now,
+                  });
+                } else if (c.key === "status" && typeof c.new === "string") {
+                  logRows.push({
+                    nodeId: t.id,
+                    key: "status",
+                    valueNum: null,
+                    valueText: c.new,
+                    unit: null,
+                    recordedAt: now,
+                  });
+                }
+              }
+              changed.push({ iri: t.iri, label: t.label, classIri: t.classIri, changes });
+            }
+            for (let i = 0; i < logRows.length; i += 500) {
+              await tx.insert(twinStateLog).values(logRows.slice(i, i + 500));
+            }
+
+            await writeAudit(
+              {
+                workspaceId: ws.id,
+                actor: actorLabelFor(ctx.user),
+                action: `Advanced twin simulation tick — ${changed.length} twins updated`,
+                entityType: "twin_tick",
+                entityId: input?.iri ?? "all",
+                payload: {
+                  tickedAt: now.toISOString(),
+                  twinsUpdated: changed.length,
+                  stateLogRows: logRows.length,
+                  sample: changed.slice(0, 5).map((c) => ({ iri: c.iri, changes: c.changes })),
+                },
+              },
+              tx,
+            );
+            if (updated.length) await recordGraphChange(tx, ws.id, { nodes: updated });
+            return { changed };
+          },
+          { isolationLevel: "read committed" },
+        ),
+      );
 
       return { tickedAt: now.toISOString(), count: changed.length, twins: changed };
     }),

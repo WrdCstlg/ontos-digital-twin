@@ -97,4 +97,41 @@ describe("memoryDb refuses what it cannot evaluate", () => {
     await expect(db.select().from(jobs).orderBy(sql`rand()`)).rejects.toThrow(/unsupported ORDER BY/);
     expect(() => db.select().from(jobs).groupBy(jobs.workspaceId)).toThrow(/GROUP BY is unsupported/);
   });
+
+});
+
+describe("memoryDb updates to SQL values", () => {
+  it("evaluate a column of the row's own plus a number, and keep any other as given", async () => {
+    const { db, rows } = dbWith([iotConnectors, [{ id: 5, workspaceId: 1, configVersion: 3, messageCount: 10 }]]);
+    await db.update(iotConnectors).set({ configVersion: sql`${iotConnectors.configVersion} + 1`, messageCount: sql`${iotConnectors.messageCount} + ${4}` });
+    expect(rows(iotConnectors)[0]).toMatchObject({ configVersion: 4, messageCount: 14 });
+    const now = sql`now(3)`;
+    await db.update(iotConnectors).set({ observedAt: now });
+    expect(rows(iotConnectors)[0].observedAt).toBe(now);
+  });
+});
+
+describe("memoryDb transactions", () => {
+  it("keep what the body wrote when it returns, and put the tables back when it throws", async () => {
+    const { db, rows } = dbWith([iotConnectors, [{ id: 5, workspaceId: 1, status: "connected" }]]);
+    await db.transaction(async (tx) => {
+      await tx.update(iotConnectors).set({ status: "error" }).where(eq(iotConnectors.id, 5));
+    });
+    expect(rows(iotConnectors)[0].status).toBe("error");
+
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.update(iotConnectors).set({ status: "disconnected" }).where(eq(iotConnectors.id, 5));
+        await tx.insert(iotConnectors).values({ workspaceId: 1, name: "B", brokerType: "mqtt", endpointUrl: "mqtt://b" });
+        throw new Error("rolled back");
+      }),
+    ).rejects.toThrow("rolled back");
+    expect(rows(iotConnectors)).toEqual([{ id: 5, workspaceId: 1, status: "error" }]);
+  });
+
+  it("read under a lock as they read without one: there are no locks in memory", async () => {
+    const { db } = dbWith([jobs, [{ id: 1, workspaceId: 1 }, { id: 2, workspaceId: 2 }]]);
+    const locked = await db.transaction((tx) => tx.select().from(jobs).where(eq(jobs.workspaceId, 2)).for("update"));
+    expect(locked.map((r) => r.id)).toEqual([2]);
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { EventEmitter } from "node:events";
-import type { SQL } from "drizzle-orm";
+import { getTableName, type SQL, type Table } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { KgNode } from "@db/schema";
 import type { RawTelemetryPoint } from "../services/iot/types";
@@ -16,31 +16,50 @@ import { recordGraphChange } from "../services/graphChanges";
 
 const DEMO_WS_ID = 9;
 
-// Mock the database and external services
+// Mock the database and external services. Reads that resolve a device end in
+// limit(); the transaction's locking read of the twins in orderBy().for(), and
+// its check of the lease in for() alone. Every write is recorded, in order.
 const mockSelect = vi.fn();
 const mockFrom = vi.fn();
 const mockWhere = vi.fn();
 const mockLimit = vi.fn();
+const mockLocked = vi.fn();
+const mockFence = vi.fn();
 const mockUpdate = vi.fn();
 const mockSet = vi.fn();
 const mockInsert = vi.fn();
 const mockValues = vi.fn();
+const writes: string[] = [];
 
 const mockDb = {
   select: mockSelect.mockReturnValue({
     from: mockFrom.mockReturnValue({
       where: mockWhere.mockReturnValue({
         limit: mockLimit,
+        orderBy: () => ({ for: mockLocked }),
+        for: mockFence,
       }),
     }),
   }),
-  update: mockUpdate.mockReturnValue({
-    set: mockSet.mockReturnValue({
-      where: vi.fn().mockResolvedValue([{ affectedRows: 1 }]),
+  update: mockUpdate.mockImplementation((t: Table) => ({
+    set: mockSet.mockImplementation(() => ({
+      where: vi.fn(async () => {
+        writes.push(`update ${getTableName(t)}`);
+        return [{ affectedRows: 1 }];
+      }),
+    })),
+  })),
+  insert: mockInsert.mockImplementation((t: Table) => ({
+    values: mockValues.mockImplementation(async () => {
+      writes.push(`insert ${getTableName(t)}`);
+      return [{ insertId: 1 }];
     }),
-  }),
-  insert: mockInsert.mockReturnValue({
-    values: mockValues.mockResolvedValue([{ insertId: 1 }]),
+  })),
+  transaction: vi.fn(async (body: (tx: unknown) => Promise<unknown>, config?: unknown) => {
+    writes.push(`begin ${JSON.stringify(config ?? {})}`);
+    const result = await body(mockDb);
+    writes.push("commit");
+    return result;
   }),
   // A transaction on the same mock: what one guarantees is tested on a real MySQL.
   transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(mockDb)),
@@ -55,7 +74,10 @@ vi.mock("../services/graphChanges", () => ({ recordGraphChange: vi.fn(async () =
 vi.mock("../services/audit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/audit")>()),
   getDemoWorkspace: vi.fn().mockResolvedValue({ id: 9, name: "Demo Workspace" }),
-  writeAudit: vi.fn().mockResolvedValue(true),
+  writeAudit: vi.fn(async () => {
+    writes.push("audit");
+    return true;
+  }),
 }));
 
 // reconcileInsights is replaced (it reads the DB); runRules stays real so the
@@ -98,7 +120,14 @@ type LogRow = { nodeId: number; key: string; valueNum: number | null; valueText:
 const dialect = new MySqlDialect();
 const renderWhere = (i: number) => dialect.sqlToQuery(mockWhere.mock.calls[i][0] as SQL);
 const lastPropsWrite = () => (mockSet.mock.calls.at(-1)![0] as PropsWrite).propsJson;
-const loggedRows = () => mockValues.mock.calls.flatMap((c) => c[0] as LogRow[]);
+const loggedRows = () => mockValues.mock.calls.filter((c) => Array.isArray(c[0])).flatMap((c) => c[0] as LogRow[]);
+
+/** The twins the device lookups found, as the locking read then returns them: current, in id order. */
+async function resolvedTwins() {
+  const found = (await Promise.all(mockLimit.mock.results.map((r) => r.value))) as KgNode[][];
+  const byId = new Map(found.flat().map((t) => [t.id, t]));
+  return [...byId.values()].sort((a, b) => a.id - b.id);
+}
 
 const coldZone = {
   id: 55,
@@ -116,8 +145,13 @@ const coldZone = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  writes.length = 0;
   mockLimit.mockReset();
   mockLimit.mockResolvedValue([]);
+  mockLocked.mockReset();
+  mockLocked.mockImplementation(resolvedTwins);
+  mockFence.mockReset();
+  mockFence.mockResolvedValue([{ name: "iot-consumer" }]);
 });
 
 afterEach(() => {
@@ -342,6 +376,7 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0]).toContain("telemetry must be an object");
       expect(mockSelect).not.toHaveBeenCalled();
+      expect(mockDb.transaction).not.toHaveBeenCalled();
       expect(reconcileInsights).not.toHaveBeenCalled();
     });
 
@@ -418,7 +453,58 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       expect(reconcileInsights).toHaveBeenCalledWith(1);
       expect(writeAudit).toHaveBeenCalledWith(
         expect.objectContaining({ workspaceId: 1, actor: "test_aws_iot", entityType: "iot_telemetry" }),
+        mockDb,
       );
+    });
+
+    it("writes in one transaction, with the twin locked before its state is read, and the audit entry inside it", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      await ingestTelemetry([{ twinIri: coldZone.iri, telemetry: { temperature: 4.4 } }], { workspaceId: 1 });
+
+      expect(writes).toEqual([`begin {"isolationLevel":"read committed"}`, "update kg_nodes", "insert twin_state_log", "audit", "commit"]);
+      // The locking read: this workspace's live twins, by id.
+      expect(mockLocked).toHaveBeenCalledWith("update");
+      const lock = renderWhere(mockWhere.mock.calls.length - 1);
+      expect(lock.sql).toMatch(/`kg_nodes`\.`id` in \(\?\) and `kg_nodes`\.`workspaceId` = \? and `kg_nodes`\.`deletedAt` is null/);
+      expect(lock.params).toEqual([55, 1]);
+      // Insights are reconciled after the commit, outside the transaction.
+      expect(reconcileInsights).toHaveBeenCalledOnce();
+    });
+
+    it("merges the state it read under the lock, not the one the lookup saw: a reading written meanwhile is kept", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      // Between the lookup and the lock, another writer set humidity.
+      mockLocked.mockResolvedValueOnce([{ ...coldZone, propsJson: { ...coldZone.propsJson, humidity: 61 } }]);
+      await ingestTelemetry([{ twinIri: coldZone.iri, telemetry: { temperature: 4.4 } }], { workspaceId: 1 });
+      expect(lastPropsWrite()).toMatchObject({ temperature: 4.4, humidity: 61, zoneType: "cold-chain" });
+    });
+
+    it("locks the twins of a batch once each, in id order, and writes each once", async () => {
+      const other = { ...coldZone, id: 12, iri: "dtwin:log/warehouse-01/zone-storage", propsJson: { zoneType: "storage" } };
+      mockLimit.mockResolvedValueOnce([coldZone]).mockResolvedValueOnce([other]).mockResolvedValueOnce([coldZone]);
+      const result = await ingestTelemetry(
+        [
+          { twinIri: coldZone.iri, telemetry: { temperature: 4.4 } },
+          { twinIri: other.iri, telemetry: { temperature: 12 } },
+          { twinIri: coldZone.iri, telemetry: { humidity: 52 } },
+        ],
+        { workspaceId: 1 },
+      );
+      expect(renderWhere(mockWhere.mock.calls.length - 1).params).toEqual([12, 55, 1]);
+      expect(mockSet).toHaveBeenCalledTimes(2);
+      expect(result.updatedTwins.map((t) => [t.twinIri, t.updatedKeys])).toEqual([
+        [other.iri, ["temperature"]],
+        [coldZone.iri, ["temperature", "humidity"]],
+      ]);
+    });
+
+    it("reports a twin deleted between its lookup and the lock as unresolved, and writes nothing for it", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      mockLocked.mockResolvedValueOnce([]);
+      const result = await ingestTelemetry([{ twinIri: coldZone.iri, telemetry: { temperature: 4.4 } }], { workspaceId: 1 });
+      expect(result).toMatchObject({ success: false, updatedTwins: [], errors: [`Could not resolve device '${coldZone.iri}' to an active digital twin`] });
+      expect(mockSet).not.toHaveBeenCalled();
+      expect(writeAudit).not.toHaveBeenCalled();
     });
 
     it("reports an error when resolving an unmapped device ID", async () => {
@@ -439,6 +525,21 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       expect(mockUpdate).not.toHaveBeenCalled();
       expect(reconcileInsights).not.toHaveBeenCalled();
       expect(writeAudit).not.toHaveBeenCalled();
+    });
+
+    it("reports each point's problem in the order of the points", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      const result = await ingestTelemetry(
+        [
+          { twinIri: coldZone.iri, telemetry: { temperature: Infinity } },
+          { deviceId: "ghost", telemetry: { temperature: 1 } },
+        ],
+        { workspaceId: 1 },
+      );
+      expect(result.errors).toEqual([
+        `Rejected non-finite value for 'temperature' on ${coldZone.iri}`,
+        "Could not resolve device 'ghost' to an active digital twin",
+      ]);
     });
 
     it("skips null, undefined and non-scalar values, stores booleans as strings, and only reconciles when something changed", async () => {
@@ -480,6 +581,7 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
 
     it("treats a reconciliation failure as non-fatal and still writes the audit entry", async () => {
       vi.mocked(reconcileInsights).mockRejectedValueOnce(new Error("insights table locked"));
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
       mockLimit.mockResolvedValueOnce([coldZone]);
 
       const result = await ingestTelemetry([{ twinIri: coldZone.iri, telemetry: { temperature: 4.4 } }], {
