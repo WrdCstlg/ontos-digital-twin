@@ -632,13 +632,14 @@ server instead, and checks what only a real one can:
 `ONTOS_TEST_DATABASE_URL` names the server, without a database. Each run creates a
 database of its own there, `ontos_test_<pid>_<time>`, empties it between tests and drops it
 at the end, so two runs can share a server; they refuse to empty any other database. A run
-killed before it ends leaves its database behind, to drop by hand. With
-`ONTOS_TEST_SESSION_TIME_ZONE` set (`+05:00`, say), the server's sessions run in that time
-zone until the run ends, so a time taken from the app's clock where the database's belongs
-shows; CI sets it. A throwaway server will do:
+killed before it ends leaves its database behind, to drop by hand. Run them against a
+server whose sessions are off UTC, so a time taken from the app's clock where the
+database's belongs shows: start it with `TZ=PKT-5` (five hours ahead of UTC) and set
+`ONTOS_TEST_SESSION_TIME_ZONE=+05:00`, which setup checks, changing nothing on the server.
+CI does both. A throwaway server will do:
 
 ```bash
-docker run -d --name ontos-test-mysql -e MYSQL_ROOT_PASSWORD=test -p 127.0.0.1:33306:3306 mysql:8.4
+docker run -d --name ontos-test-mysql -e MYSQL_ROOT_PASSWORD=test -e TZ=PKT-5 -p 127.0.0.1:33306:3306 mysql:8.4
 ONTOS_TEST_DATABASE_URL=mysql://root:test@127.0.0.1:33306 ONTOS_TEST_SESSION_TIME_ZONE=+05:00 npm run test:mysql
 docker rm -f ontos-test-mysql
 ```
@@ -672,6 +673,10 @@ NODE_ENV=production node dist/boot.js
 `npm run build` emits `dist/public/` (static client assets) and `dist/boot.js` (bundled
 Node server), and the server serves both. Everything is bundled, so `dist/` plus
 `db/migrations/` is all a deployment needs — no `node_modules`.
+
+MySQL must keep row-based binary logging, its default (`binlog_format` `ROW`, or `MIXED`).
+A worker claims jobs at READ COMMITTED, which MySQL refuses under `STATEMENT`: every claim
+would fail, and the worker would log `claim failed` without end.
 
 ---
 

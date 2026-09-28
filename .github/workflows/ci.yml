@@ -74,6 +74,9 @@ jobs:
         image: mysql:8.4@sha256:85b9bf2e29cf836ecb8c2a15a935d4ba0c606631dff1dd79531a11983c638f2a
         env:
           MYSQL_ROOT_PASSWORD: ci-throwaway
+          # Sessions at +05:00, not UTC (POSIX TZ: PKT-5 is five hours ahead), so
+          # a time taken from the app's clock where the database's belongs shows.
+          TZ: PKT-5
         ports:
           - 127.0.0.1:3306:3306
         options: >-
@@ -95,16 +98,19 @@ jobs:
 
       # A schema.ts change committed without its migration: drizzle-kit would
       # generate one. It connects to nothing, but its config wants a URL.
+      # drizzle-kit exits 0 when it fails (it cannot ask whether a column was
+      # renamed without a terminal, for one), so only its all-clear passes.
       - name: The schema has every migration it needs
         working-directory: app
         env:
           DATABASE_URL: mysql://unused@127.0.0.1:1/unused
         run: |
-          timeout 120 npx drizzle-kit generate
+          out="$(timeout 120 npx drizzle-kit generate 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
           drift="$(git status --porcelain -- db/migrations)"
-          if [ -n "$drift" ]; then
+          if [ -n "$drift" ] || ! grep -q "No schema changes, nothing to migrate" <<< "$out"; then
             echo "$drift"
-            echo "::error::db/schema.ts differs from its migrations: run npm run db:generate and commit what it writes"
+            echo "::error::db/schema.ts differs from its migrations, or drizzle-kit could not tell: run npm run db:generate and commit what it writes"
             exit 1
           fi
 
@@ -112,8 +118,7 @@ jobs:
         run: npm --prefix app run test:mysql
         env:
           ONTOS_TEST_DATABASE_URL: mysql://root:ci-throwaway@127.0.0.1:3306
-          # A session not on UTC, so a time taken from the app's clock where the
-          # queue should take the database's shows.
+          # The zone the service's TZ puts its sessions in: setup fails if not.
           ONTOS_TEST_SESSION_TIME_ZONE: "+05:00"
 
   docker:

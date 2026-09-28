@@ -10,9 +10,12 @@ import { onDatabase, testDatabase, testServer } from "./database";
  * A run killed before then leaves its ontos_test_… database behind, to drop by
  * hand.
  *
- * ONTOS_TEST_SESSION_TIME_ZONE (e.g. +05:00), when set, becomes the server's
- * time zone for new sessions until the run ends, so that a time taken from the
- * app's clock where the queue should take the database's shows. CI sets it.
+ * ONTOS_TEST_SESSION_TIME_ZONE (e.g. +05:00), when set, is the time zone the
+ * server's sessions are meant to run in, off UTC, so that a time taken from the
+ * app's clock where the queue should take the database's shows. Setup checks
+ * it and changes nothing: the server is started in that zone (CI's MySQL
+ * service runs with TZ=PKT-5), never switched to it, which would switch every
+ * other client of the server too.
  */
 export default async function setup() {
   const server = testServer();
@@ -23,15 +26,9 @@ export default async function setup() {
   }
   const database = testDatabase();
   const admin = await connectWhenReady(server.toString());
-  let zoneWas: string | null = null;
   try {
     const zone = process.env.ONTOS_TEST_SESSION_TIME_ZONE;
-    if (zone) {
-      const [[{ was }]] = await admin.query<mysql.RowDataPacket[]>("select @@global.time_zone as was");
-      zoneWas = String(was);
-      await admin.query("set global time_zone = ?", [zone]);
-      await expectSessionsIn(server.toString(), zone);
-    }
+    if (zone) await expectSessionsIn(server.toString(), zone);
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
     await admin.query(`CREATE DATABASE \`${database}\``);
     const conn = await mysql.createConnection(onDatabase(server, database));
@@ -41,36 +38,33 @@ export default async function setup() {
       await conn.end();
     }
   } catch (err) {
-    await restore(admin, database, zoneWas);
+    await dropDatabase(admin, database);
     throw err;
   }
   await admin.end();
 
-  return async () => {
-    const c = await mysql.createConnection(server.toString());
-    await restore(c, database, zoneWas);
-  };
+  return async () => dropDatabase(await mysql.createConnection(server.toString()), database);
 }
 
-/** Drops this run's database, and gives the server its time zone back. */
-async function restore(conn: mysql.Connection, database: string, zoneWas: string | null) {
+async function dropDatabase(conn: mysql.Connection, database: string) {
   try {
     await conn.query(`DROP DATABASE IF EXISTS \`${database}\``);
-    if (zoneWas !== null) await conn.query("set global time_zone = ?", [zoneWas]);
   } finally {
     await conn.end();
   }
 }
 
-/** A new session starts in `zone`: its offset from UTC, when `zone` is one (±HH:MM), is that zone's. */
+/** A new session starts in `zone` (±HH:MM): its offset from UTC is that zone's. */
 async function expectSessionsIn(url: string, zone: string) {
   const offset = /^([+-])(\d{2}):(\d{2})$/.exec(zone);
-  if (!offset) return;
+  if (!offset) throw new Error(`ONTOS_TEST_SESSION_TIME_ZONE must be an offset such as +05:00, not '${zone}'`);
   const expected = (offset[1] === "-" ? -1 : 1) * (Number(offset[2]) * 60 + Number(offset[3]));
   const probe = await mysql.createConnection(url);
   try {
     const [[{ minutes }]] = await probe.query<mysql.RowDataPacket[]>("select timestampdiff(minute, utc_timestamp(), now()) as minutes");
-    if (Number(minutes) !== expected) throw new Error(`a new session is ${minutes} minutes from UTC, not ${expected} (${zone}): ONTOS_TEST_SESSION_TIME_ZONE did not take`);
+    if (Number(minutes) !== expected) {
+      throw new Error(`the server's sessions are ${minutes} minutes from UTC, not ${expected} (${zone}): start it in that zone (e.g. TZ=PKT-5 for +05:00)`);
+    }
   } finally {
     await probe.end();
   }
