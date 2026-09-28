@@ -31,17 +31,27 @@ Root-level `npm` scripts are thin proxies into `./app`; run anything else with
 CI runs these on every push and pull request. Run them before you open a PR:
 
 ```bash
-npm run check   # TypeScript, strict mode, all three projects
-npm run lint    # ESLint
-npm test        # Vitest
-npm run build   # client, server and database bootstrap bundles
+npm run check      # TypeScript, strict mode, all four projects (the browser tests included)
+npm run lint       # ESLint
+npm test           # Vitest
+npm run build      # client, server and database bootstrap bundles
+npm run test:e2e   # Playwright browser tests, against a running stack (below)
 ```
 
 A second CI job runs the server tests on a real MySQL 8.4 (`npm --prefix app run
 test:mysql`; the README's [Testing](README.md#on-a-real-mysql) section says how to run them
 locally). Run them when you change the schema, a migration, the job queue or a query that
 groups or counts. A third job builds the Docker image and boots the full compose stack, so
-changes to the `Dockerfile`, `compose.yaml` or `db/bootstrap.ts` are exercised end to end.
+changes to the `Dockerfile`, `compose.yaml` or `db/bootstrap.ts` are exercised end to end. A
+fourth boots the same stack with persona login on and runs the browser tests in `app/e2e`
+against it.
+
+To run the browser tests locally, start a stack with persona login on: the Docker stack
+with `ALLOW_DEMO_LOGIN=true` in the root `.env`, or `npm run dev`, where it is always on.
+Install Chromium once with `npx --prefix app playwright install chromium`, then run
+`npm run test:e2e`. The tests exercise what the stack serves, so rebuild it after changing
+the app, and set `BASE_URL` if it is not on port 3000. See [Testing](README.md#testing) for
+what they cover.
 
 **Formatting.** A Prettier config lives in `app/.prettierrc`. The existing codebase is not
 uniformly formatted and CI does not enforce it, so please do not reformat files you are not
