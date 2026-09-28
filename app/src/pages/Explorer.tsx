@@ -373,8 +373,8 @@ export default function Explorer() {
 
           {/* Right pane — living graph canvas */}
           <div className="relative min-h-[420px] lg:min-h-0">
-            {/* Browse toolbar */}
-            <div className="absolute left-3 right-3 top-3 z-10 flex flex-wrap items-center gap-2">
+            {/* Browse toolbar, stacked over the layout pill below it: its search results drop down across the pill */}
+            <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2">
               <div className="relative">
                 <div className="flex h-8 items-center gap-2 rounded-lg border border-border-hairline bg-bg-panel/90 px-2.5 backdrop-blur">
                   <Search className="size-3.5 text-text-muted" />
