@@ -10,12 +10,14 @@ import {
   syncJobs,
   type Connector,
   type Job,
+  type KgEdge,
+  type KgNode,
   type Mapping,
   type SyncJob,
 } from "@db/schema";
 import { getDb } from "../queries/connection";
 import { writeAudit } from "./audit";
-import { semanticEngine } from "./semanticEngine";
+import { EngineRequestError, semanticEngine, type ShaclValidationResult } from "./semanticEngine";
 import { buildPrefixMap, knowledgeGraphToTurtle, shaclJsonToTurtle } from "./rdfBridge";
 import { workspaceDatatypeRanges } from "./datatypeRanges";
 import { explainShaclReport, type ExplainedShaclReport } from "./explainableShacl";
@@ -219,6 +221,167 @@ function readPayload(job: Job): MappingSyncPayload {
   return { syncJobId: p.syncJobId, mappingId: p.mappingId };
 }
 
+/* ── the SHACL pre-check ─────────────────────────────────────── */
+
+/** What checking an import against its class's SHACL shapes found. */
+export type ImportShaclCheck =
+  /** The class has no shapes, or the import holds no rows to check. */
+  | { kind: "none" }
+  /**
+   * Checked. `report` holds the import's own results (the nodes it links to are
+   * not judged); `refusal` those a mapping set to block refuses, the Violations,
+   * or null when there are none.
+   */
+  | { kind: "checked"; report: ExplainedShaclReport; refusal: ExplainedShaclReport | null }
+  /** Not checked just now (the engine away or busy with another graph, a timeout); a later try may be. */
+  | { kind: "unchecked"; reason: string }
+  /** The engine answered that it cannot check this import (data it cannot parse, shapes it cannot read). */
+  | { kind: "uncheckable"; reason: string };
+
+/** How many IRIs one lookup names at most, well under MySQL's placeholder limit. */
+const IRI_BATCH = 1000;
+
+/**
+ * Checks what an import will write against its class's SHACL shapes: the rows
+ * as the import writes them (the last row wins for a repeated IRI), each value
+ * typed as the ontology declares, and the links they make, to another row or
+ * to a node already in the graph, with that node's class, so links and
+ * sh:class resolve (the import drops a link to anything else, and so does the
+ * check). Only the rows' own results count.
+ */
+export async function checkImportShacl(
+  workspaceId: number,
+  m: Mapping,
+  columnMap: ColumnMap,
+  moduleKey: string,
+  rows: Record<string, string>[],
+): Promise<ImportShaclCheck> {
+  const db = getDb();
+  const [targetClass] = await db
+    .select()
+    .from(ontologyClasses)
+    .where(and(eq(ontologyClasses.moduleId, m.moduleId), eq(ontologyClasses.iri, m.classIri)))
+    .limit(1);
+  if (!targetClass?.shaclJson) return { kind: "none" };
+  const mods = await db.select().from(ontologyModules).where(eq(ontologyModules.workspaceId, workspaceId));
+  const prefixMap = buildPrefixMap(mods);
+  const shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);
+  if (!shapesTtl.trim()) return { kind: "none" };
+
+  const own = new Map<string, { label: string; props: Record<string, string> }>();
+  const links: { from: string; to: string; predicate: string }[] = [];
+  for (const row of rows) {
+    const iri = renderTemplate(columnMap.subject, row);
+    if (!iri || iri.includes("{}")) continue;
+    const props: Record<string, string> = {};
+    for (const [col, propIri] of Object.entries(columnMap.fields ?? {})) {
+      if (row[col]) props[propIri] = row[col];
+    }
+    own.set(iri, { label: (columnMap.label ? row[columnMap.label] : iri) || iri, props });
+    for (const l of columnMap.links ?? []) {
+      const to = renderTemplate(l.target, { value: row[l.column] ?? "" });
+      if (row[l.column] && to) links.push({ from: iri, to, predicate: l.predicate });
+    }
+  }
+  if (own.size === 0) return { kind: "none" };
+  if (!(await semanticEngine.ensureEngineRunning())) return { kind: "unchecked", reason: "the semantic engine is not running" };
+
+  const outside = [...new Set(links.map((l) => l.to))].filter((iri) => !own.has(iri));
+  const existing: { iri: string; classIri: string; moduleKey: string; label: string }[] = [];
+  for (let i = 0; i < outside.length; i += IRI_BATCH) {
+    existing.push(
+      ...(await db
+        .select({ iri: kgNodes.iri, classIri: kgNodes.classIri, moduleKey: kgNodes.moduleKey, label: kgNodes.label })
+        .from(kgNodes)
+        .where(and(eq(kgNodes.workspaceId, workspaceId), inArray(kgNodes.iri, outside.slice(i, i + IRI_BATCH))))),
+    );
+  }
+
+  const now = new Date();
+  const idOf = new Map<string, number>();
+  const node = (iri: string, classIri: string, nodeModuleKey: string, label: string, props: Record<string, string>): KgNode => {
+    const id = idOf.size + 1;
+    idOf.set(iri, id);
+    const base = { sourceMappingId: m.id, sourceSubmissionId: null, createdAt: now, updatedAt: now, deletedAt: null };
+    return { id, workspaceId, moduleKey: nodeModuleKey, classIri, iri, label, propsJson: props, ...base };
+  };
+  const nodes = [
+    ...[...own].map(([iri, r]) => node(iri, m.classIri, moduleKey, r.label, r.props)),
+    ...existing.map((t) => node(t.iri, t.classIri, t.moduleKey, t.label, {})),
+  ];
+  const edges: KgEdge[] = [];
+  const made = new Set<string>();
+  for (const l of links) {
+    const from = idOf.get(l.from);
+    const to = idOf.get(l.to);
+    const key = `${l.from} ${l.predicate} ${l.to}`;
+    if (from === undefined || to === undefined || made.has(key)) continue;
+    made.add(key);
+    edges.push({
+      id: edges.length + 1, workspaceId, fromNodeId: from, toNodeId: to, predicateIri: l.predicate, moduleKey,
+      sourceMappingId: m.id, sourceSubmissionId: null, deletedAt: null, createdAt: now,
+    });
+  }
+
+  const dataTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId));
+  let raw: ShaclValidationResult;
+  try {
+    raw = await semanticEngine.exclusive(async () => {
+      await semanticEngine.clearStore();
+      await semanticEngine.loadTurtle(dataTtl);
+      return semanticEngine.validateShacl(shapesTtl);
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return err instanceof EngineRequestError ? { kind: "uncheckable", reason } : { kind: "unchecked", reason };
+  }
+
+  // The engine holds one graph, and the lock around clear, load and validate
+  // is this process's: another process using the same engine can load its own
+  // graph in between. A report that did not look at exactly the nodes of this
+  // class loaded here was taken on some other graph, or on none.
+  const expected = nodes.filter((n) => n.classIri === m.classIri).length;
+  if (raw.focusNodes !== expected) {
+    return {
+      kind: "unchecked",
+      reason: `the engine checked ${raw.focusNodes} node(s) of ${m.classIri} where this import loaded ${expected}, so not this import's graph (another process may have used the engine at the same time)`,
+    };
+  }
+
+  const expand = (iri: string) => {
+    const colon = iri.indexOf(":");
+    const ns = colon > 0 ? prefixMap.get(iri.slice(0, colon)) : undefined;
+    return ns ? ns + iri.slice(colon + 1) : iri;
+  };
+  const judged = new Set([...own.keys()].flatMap((iri) => [iri, expand(iri)]));
+  const reportOn = (violations: ShaclValidationResult["violations"]) =>
+    explainShaclReport({ ...raw, conforms: violations.length === 0, violationCount: violations.length, violations });
+  const mine = raw.violations.filter((v) => judged.has(v.focusNode));
+  const refused = mine.filter((v) => (v.severity ?? "Violation") === "Violation");
+  return { kind: "checked", report: reportOn(mine), refusal: refused.length ? reportOn(refused) : null };
+}
+
+/**
+ * A SHACL report as an audit entry keeps it: the counts and the first groups
+ * of results, never every result with its justification and the engine's raw
+ * answer (an import can hold tens of thousands of rows).
+ */
+function shaclSummary(report: ExplainedShaclReport) {
+  return {
+    conforms: report.conforms,
+    violationCount: report.violationCount,
+    focusNodes: report.focusNodes,
+    groups: report.signatureSummary.slice(0, 5).map((g) => ({
+      constraint: g.constraint,
+      path: g.path,
+      count: g.count,
+      sampleFocusNodes: g.sampleFocusNodes.slice(0, 3),
+      humanExplanation: g.humanExplanation,
+      remediationAction: g.remediationAction,
+    })),
+  };
+}
+
 function interrupted(signal: AbortSignal): never {
   throw new Error(`import interrupted: ${signal.reason instanceof Error ? signal.reason.message : "aborted"}`);
 }
@@ -264,84 +427,41 @@ export async function runMappingSync(
   const moduleKey =
     (await db.select().from(ontologyModules).where(eq(ontologyModules.id, m.moduleId)).limit(1))[0]?.key ?? "custom";
 
-  // Pre-validate mapped data against the class's SHACL shapes, when it has any.
-  const [targetClass] = await db
-    .select()
-    .from(ontologyClasses)
-    .where(and(eq(ontologyClasses.moduleId, m.moduleId), eq(ontologyClasses.iri, m.classIri)))
-    .limit(1);
-  let shaclReport: ExplainedShaclReport | null = null;
-  // The class has shapes, but they could not be checked (engine away, or the check failed).
-  let shaclUnchecked = false;
-  if (targetClass?.shaclJson && !(await semanticEngine.ensureEngineRunning())) shaclUnchecked = true;
-  else if (targetClass?.shaclJson) {
-    try {
-      const prefixMap = buildPrefixMap();
-      const shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);
-      if (shapesTtl.trim()) {
-        const candidateNodes: (typeof kgNodes.$inferSelect)[] = [];
-        let tempId = 1;
-        for (const row of rows) {
-          const iri = renderTemplate(columnMap.subject, row);
-          if (!iri || iri.includes("{}")) continue;
-          const props: Record<string, string> = {};
-          for (const [col, propIri] of Object.entries(columnMap.fields ?? {})) {
-            if (row[col]) props[propIri] = row[col];
-          }
-          candidateNodes.push({
-            id: tempId++,
-            workspaceId,
-            moduleKey,
-            classIri: m.classIri,
-            iri,
-            label: columnMap.label ? row[columnMap.label] ?? iri : iri,
-            propsJson: props,
-            sourceMappingId: m.id,
-            sourceSubmissionId: null,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            deletedAt: null,
-          });
-        }
-        // Typed as the ontology declares each property, as the imported graph is.
-        const dataTtl = knowledgeGraphToTurtle(candidateNodes, [], prefixMap, await workspaceDatatypeRanges(workspaceId));
-        const valRes = await semanticEngine.exclusive(async () => {
-          await semanticEngine.clearStore();
-          await semanticEngine.loadTurtle(dataTtl);
-          return semanticEngine.validateShacl(shapesTtl);
-        });
-        shaclReport = explainShaclReport(valRes);
-      }
-    } catch (shaclErr) {
-      console.warn("[mappingSync] SHACL pre-validation encountered error:", shaclErr);
-      shaclUnchecked = true;
-    }
-  }
+  const shacl = await checkImportShacl(workspaceId, m, columnMap, moduleKey, rows);
+  const shaclReport = shacl.kind === "checked" ? shacl.report : null;
+  const shaclNotChecked = shacl.kind === "unchecked" || shacl.kind === "uncheckable" ? shacl.reason : null;
+  if (shaclNotChecked) console.warn(`[mappingSync] mapping ${m.id}: SHACL not checked: ${shaclNotChecked}`);
 
-  // A mapping set to block imports nothing its class's shapes reject, and
-  // nothing unchecked: without the engine the import waits, as an action
-  // checked against SHACL does. Warn (the default) imports and records.
+  // A mapping set to block imports nothing its class's shapes reject with a
+  // Violation (a Warning or Info is recorded, as warn records everything), and
+  // nothing unchecked. A check that may pass later is retried, as many times
+  // as the job has attempts (three, a few seconds apart); one the engine
+  // cannot do fails for good, with its reason. Warn (the default) imports and
+  // records. Each attempt decides for itself: a refusal does not undo what an
+  // earlier attempt that passed the check had written before it died.
   if (m.shaclMode === "block") {
-    if (shaclUnchecked) {
-      throw new Error(
-        `mapping '${m.name}' blocks imports its class's SHACL shapes have not checked, and they could not be checked just now (is the semantic engine running?)`,
-      );
+    if (shacl.kind === "uncheckable") {
+      throw new PermanentJobError(`SHACL: this mapping blocks imports its class's shapes have not checked, and the semantic engine cannot check this one: ${shacl.reason}`);
     }
-    if (shaclReport && !shaclReport.conforms) {
-      const worst = shaclReport.signatureSummary
+    if (shacl.kind === "unchecked") {
+      throw new Error(`mapping '${m.name}' blocks imports its class's SHACL shapes have not checked, and they could not be checked just now: ${shacl.reason}`);
+    }
+    if (shacl.kind === "checked" && shacl.refusal) {
+      const r = shacl.refusal;
+      const worst = r.signatureSummary
         .slice(0, 3)
         .map((g) => `${g.humanExplanation} (${g.count}×, e.g. ${g.sampleFocusNodes[0] ?? "?"})`)
         .join("; ");
       await writeAudit({
         workspaceId,
         actor,
-        action: `Sync '${m.name}' refused: ${shaclReport.violationCount} SHACL violation(s), and the mapping blocks imports that do not conform`,
+        action: `Sync '${m.name}' refused: ${r.violationCount} SHACL violation(s), and the mapping blocks imports that do not conform`,
         entityType: "sync_job",
         entityId: payload.syncJobId,
-        payload: { mappingId: m.id, refused: true, shaclReport },
+        payload: { mappingId: m.id, refused: true, shacl: shaclSummary(shacl.report) },
       });
       throw new PermanentJobError(
-        `SHACL: ${shaclReport.violationCount} violation(s) in the mapped rows, and this mapping blocks imports that do not conform. ${worst}`,
+        `SHACL: ${r.violationCount} violation(s) in the mapped rows, and this mapping blocks imports that do not conform. ${worst}`,
       );
     }
   }
@@ -447,7 +567,14 @@ export async function runMappingSync(
     }`,
     entityType: "sync_job",
     entityId: payload.syncJobId,
-    payload: { mappingId: m.id, processed, edgesCreated, snapshot: snapLabel, shaclReport },
+    payload: {
+      mappingId: m.id,
+      processed,
+      edgesCreated,
+      snapshot: snapLabel,
+      shacl: shaclReport ? shaclSummary(shaclReport) : null,
+      ...(shaclNotChecked ? { shaclNotChecked } : {}),
+    },
   });
 
   await db
