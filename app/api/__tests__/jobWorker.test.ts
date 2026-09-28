@@ -248,6 +248,87 @@ describe("JobWorker", () => {
     expect(q.sweep).toHaveBeenCalledOnce();
   });
 
+  it("catches up behind workspace graphs on its heartbeat, at most once per graphSweepMs and one round at a time", async () => {
+    const { q } = fakeQueue([]);
+    const starts: number[] = [];
+    let inFlight = 0;
+    let most = 0;
+    q.catchUpGraphs = vi.fn(async () => {
+      starts.push(Date.now());
+      most = Math.max(most, ++inFlight);
+      await new Promise((r) => setTimeout(r, 40));
+      inFlight--;
+      return 2;
+    });
+    const lines: string[] = [];
+    const w = new JobWorker({ id: "w-test", handlers: {}, queue: q, pollMs: 5, heartbeatMs: 10, graphSweepMs: 60, log: (l) => lines.push(l) });
+    workers.push(w);
+    w.start();
+
+    await until(() => starts.length >= 3);
+    expect(most).toBe(1);
+    // Heartbeats every 10 ms; catch-up rounds start no sooner than 60 ms apart.
+    for (let i = 1; i < starts.length; i++) expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(59);
+    expect(lines).toContain("caught up 2 workspace graph(s) behind MySQL");
+  });
+
+  it("without QueueOps.catchUpGraphs (no engine host configured), never tries", async () => {
+    const { q } = fakeQueue([]);
+    expect(q.catchUpGraphs).toBeUndefined();
+    const w = new JobWorker({ id: "w-test", handlers: {}, queue: q, pollMs: 5, heartbeatMs: 5, graphSweepMs: 5, log: () => {} });
+    workers.push(w);
+    w.start();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(w.status().state).toBe("running");
+  });
+
+  it("logs a failed graph catch-up round, goes on running jobs, and tries again later", async () => {
+    const { q, calls } = fakeQueue([]);
+    const catchUpGraphs = vi.fn(async () => Promise.reject(new Error("engine host unavailable")));
+    q.catchUpGraphs = catchUpGraphs;
+    const lines: string[] = [];
+    const w = new JobWorker({
+      id: "w-test",
+      handlers: { "test.kind": { run: async () => ({}) } },
+      queue: q,
+      pollMs: 5,
+      heartbeatMs: 10,
+      graphSweepMs: 20,
+      log: (l) => lines.push(l),
+    });
+    workers.push(w);
+    w.start();
+
+    await until(() => catchUpGraphs.mock.calls.length >= 2);
+    expect(lines).toContain("graph catch-up failed: engine host unavailable");
+    vi.mocked(q.claim).mockResolvedValueOnce({ kind: "claimed", job: makeJob({ id: 17 }) });
+    await until(() => calls.complete.length === 1);
+    expect(w.status().state).toBe("running");
+  });
+
+  it("on stop, lets a graph catch-up round under way finish, and starts no other", async () => {
+    const { q } = fakeQueue([]);
+    let finish: () => void = () => undefined;
+    const catchUpGraphs = vi.fn(() => new Promise<number>((resolve) => (finish = () => resolve(0))));
+    q.catchUpGraphs = catchUpGraphs;
+    const w = new JobWorker({ id: "w-test", handlers: {}, queue: q, pollMs: 5, heartbeatMs: 10, graphSweepMs: 10, log: () => {} });
+    workers.push(w);
+    w.start();
+    await until(() => catchUpGraphs.mock.calls.length === 1);
+
+    let stopped = false;
+    const stopping = w.stop(50).then(() => {
+      stopped = true;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stopped).toBe(false);
+    finish();
+    await stopping;
+    expect(w.status().state).toBe("stopped");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(catchUpGraphs).toHaveBeenCalledOnce();
+  });
+
   it("on stop, aborts a job still running after the grace period and sends it back to the queue", async () => {
     const { q, calls } = fakeQueue([{ kind: "claimed", job: makeJob({ id: 14 }) }]);
     const onRetry = vi.fn(async () => {});
