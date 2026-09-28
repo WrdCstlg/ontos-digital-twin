@@ -12,6 +12,7 @@ import {
 import { MqttBrokerAdapter } from "../services/iot/mqttAdapter";
 import { getDemoWorkspace, writeAudit } from "../services/audit";
 import { reconcileInsights, runRules } from "../insightsRouter";
+import { recordGraphChange } from "../services/graphChanges";
 
 const DEMO_WS_ID = 9;
 
@@ -41,11 +42,15 @@ const mockDb = {
   insert: mockInsert.mockReturnValue({
     values: mockValues.mockResolvedValue([{ insertId: 1 }]),
   }),
+  // A transaction on the same mock: what one guarantees is tested on a real MySQL.
+  transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(mockDb)),
 };
 
 vi.mock("../queries/connection", () => ({
   getDb: () => mockDb,
 }));
+
+vi.mock("../services/graphChanges", () => ({ recordGraphChange: vi.fn(async () => 1) }));
 
 vi.mock("../services/audit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/audit")>()),
@@ -381,6 +386,8 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       expect(result.receivedCount).toBe(1);
       expect(result.updatedTwins).toHaveLength(1);
       expect(result.updatedTwins[0].twinIri).toBe("dtwin:Logistics_Shipment_1004");
+      // The twin's new state is a change to the workspace's graph, recorded with it.
+      expect(vi.mocked(recordGraphChange)).toHaveBeenLastCalledWith(mockDb, 1, { nodes: [77] });
       expect(result.updatedTwins[0].updatedKeys).toEqual(
         expect.arrayContaining(["temperature", "humidity", "vibration", "status"]),
       );

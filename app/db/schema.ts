@@ -2,6 +2,7 @@ import {
   mysqlTable,
   mysqlEnum,
   varchar,
+  char,
   text,
   timestamp,
   bigint,
@@ -11,6 +12,7 @@ import {
   boolean,
   json,
   index,
+  primaryKey,
   uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
@@ -532,6 +534,55 @@ export type AuditEntry = typeof auditLog.$inferSelect;
 export const auditChainLock = mysqlTable("audit_chain_lock", {
   id: tinyint("id", { unsigned: true }).primaryKey(),
 });
+
+/**
+ * Each workspace's graph version: bumped by every transaction that changes
+ * what the workspace's graph renders to, as that transaction's last graph
+ * write (services/graphChanges.ts). The row stays locked until the
+ * transaction commits, so versions commit in order and none is skipped; a
+ * rolled-back change takes its version with it. A semantic engine that holds
+ * version V holds every change up to V.
+ */
+export const graphVersions = mysqlTable("graph_versions", {
+  workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  /** The last committed change. */
+  version: bigint("version", { mode: "number", unsigned: true }).notNull().default(0),
+  /** New whenever the graph was replaced rather than changed (a seed, a restore): engines rebuild. */
+  epoch: char("epoch", { length: 36 }).notNull(),
+  /** graph_dirty rows up to here may have been pruned: an engine older than this rebuilds. */
+  minRetainedVersion: bigint("minRetainedVersion", { mode: "number", unsigned: true }).notNull().default(0),
+  /** The last version an engine confirmed it holds. */
+  projectedVersion: bigint("projectedVersion", { mode: "number", unsigned: true }).notNull().default(0),
+  projectedAt: timestamp("projectedAt", { fsp: 3 }),
+});
+export type GraphVersion = typeof graphVersions.$inferSelect;
+
+/**
+ * What changed, and in which version last: one row per subject, however
+ * often it changed, so a twin updated a thousand times is one row. An
+ * `incoming` row marks the nodes that link to that node (it came into the
+ * graph or left it, and a link renders only to a live node). A `workspace`
+ * row (subjectId 0) is a change every subject's rendering may depend on (a
+ * module's prefix, a property's range): the graph is rebuilt.
+ */
+export const graphDirty = mysqlTable(
+  "graph_dirty",
+  {
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    subjectKind: mysqlEnum("subjectKind", ["node", "incoming", "class", "property", "workspace"]).notNull(),
+    subjectId: bigint("subjectId", { mode: "number", unsigned: true }).notNull(),
+    version: bigint("version", { mode: "number", unsigned: true }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.subjectKind, table.subjectId] }),
+    index("graph_dirty_ws_version").on(table.workspaceId, table.version),
+  ],
+);
+export type GraphDirtyRow = typeof graphDirty.$inferSelect;
 
 /* ─────────────────────────────────────────────────────────────
  * Digital twin state history — one row per (twin, telemetry key,
