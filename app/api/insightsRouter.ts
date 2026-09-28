@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, count, desc, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
   connectors,
@@ -15,6 +15,7 @@ import type { KgEdge, KgNode } from "@db/schema";
 import { createRouter, EDITOR_ROLES, workspaceQuery, workspaceMutation, workspaceOntologistMutation } from "./middleware";
 import { hasWorkspaceRole } from "./services/workspaceGuard";
 import { getDb } from "./queries/connection";
+import { withDeadlockRetry } from "./lib/mysqlErrors";
 import { scanRateLimiter } from "./lib/rateLimit";
 import { actorLabelFor, writeAudit } from "./services/audit";
 
@@ -465,6 +466,12 @@ export function runRules(nodes: KgNode[], edges: KgEdge[]): RuleFinding[] {
  * Recompute all rule findings and upsert them into `insights` by ruleId.
  * Shared by the runScan mutation and the seed scripts, so the persisted
  * insight set always matches whatever's actually in the graph.
+ *
+ * Each finding is one upsert on the key (workspaceId, ruleId): reconciliations
+ * that run at once (a scan beside live telemetry, or two replicas' telemetry)
+ * meet in the same row. Reading first and then inserting let each insert its
+ * own. An update keeps the insight's id and its status, so an acknowledged
+ * finding stays acknowledged.
  */
 export type ReconcileResult = { ruleId: string; status: "created" | "updated"; insightId: number };
 
@@ -474,19 +481,14 @@ export async function reconcileInsights(
   const db = getDb();
   const { nodes, edges } = await loadGraph(workspaceId);
   const findings = runRules(nodes, edges);
-  const existing = await db.select().from(insights).where(eq(insights.workspaceId, workspaceId));
-  const byRule = new Map(existing.map((i) => [i.ruleId, i]));
+  // Which findings are new, for the caller to show: the rows themselves are
+  // decided by the upserts below, whatever runs beside this.
+  const existing = await db.select({ ruleId: insights.ruleId }).from(insights).where(eq(insights.workspaceId, workspaceId));
+  const known = new Set(existing.map((i) => i.ruleId));
   const results: ReconcileResult[] = [];
   for (const f of findings) {
-    const ex = f.ruleId ? byRule.get(f.ruleId) : undefined;
-    if (ex) {
-      await db
-        .update(insights)
-        .set({ title: f.title, summary: f.summary, severity: f.severity, evidenceJson: f.evidence })
-        .where(eq(insights.id, ex.id));
-      results.push({ ruleId: f.ruleId, status: "updated", insightId: ex.id });
-    } else {
-      const [{ id }] = await db
+    const [res] = await withDeadlockRetry(() =>
+      db
         .insert(insights)
         .values({
           workspaceId,
@@ -498,9 +500,18 @@ export async function reconcileInsights(
           evidenceJson: f.evidence,
           status: "open",
         })
-        .$returningId();
-      results.push({ ruleId: f.ruleId, status: "created", insightId: id });
-    }
+        .onDuplicateKeyUpdate({
+          set: {
+            // The row's own id, as the statement's insert id, whether it was inserted or updated.
+            id: sql`last_insert_id(${insights.id})`,
+            title: f.title,
+            summary: f.summary,
+            severity: f.severity,
+            evidenceJson: f.evidence,
+          },
+        }),
+    );
+    results.push({ ruleId: f.ruleId, status: known.has(f.ruleId) ? "updated" : "created", insightId: Number(res.insertId) });
   }
   return { scanned: { nodes: nodes.length, edges: edges.length }, results };
 }

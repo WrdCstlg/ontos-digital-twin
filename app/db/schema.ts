@@ -482,24 +482,30 @@ export const kgEdges = mysqlTable(
 );
 export type KgEdge = typeof kgEdges.$inferSelect;
 
-export const insights = mysqlTable("insights", {
-  id: bigint("id", { mode: "number", unsigned: true })
-    .autoincrement()
-    .primaryKey(),
-  workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
-    .notNull()
-    .references(() => workspaces.id, { onDelete: "cascade" }),
-  type: mysqlEnum("type", ["anomaly", "analytics", "narrative"]).notNull(),
-  severity: mysqlEnum("severity", ["info", "warn", "risk"]).notNull(),
-  ruleId: varchar("ruleId", { length: 128 }),
-  title: varchar("title", { length: 512 }).notNull(),
-  summary: text("summary"),
-  evidenceJson: json("evidenceJson"),
-  status: mysqlEnum("status", ["open", "acknowledged"])
-    .notNull()
-    .default("open"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const insights = mysqlTable(
+  "insights",
+  {
+    id: bigint("id", { mode: "number", unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    workspaceId: bigint("workspaceId", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    type: mysqlEnum("type", ["anomaly", "analytics", "narrative"]).notNull(),
+    severity: mysqlEnum("severity", ["info", "warn", "risk"]).notNull(),
+    ruleId: varchar("ruleId", { length: 128 }),
+    title: varchar("title", { length: 512 }).notNull(),
+    summary: text("summary"),
+    evidenceJson: json("evidenceJson"),
+    status: mysqlEnum("status", ["open", "acknowledged"])
+      .notNull()
+      .default("open"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  // One insight per rule and workspace: reconciliations that run at once (a
+  // scan beside live telemetry) meet in the same row (insightsRouter.ts).
+  (table) => [uniqueIndex("insights_ws_rule").on(table.workspaceId, table.ruleId)],
+);
 export type Insight = typeof insights.$inferSelect;
 
 export const auditLog = mysqlTable(
@@ -647,11 +653,22 @@ export const iotConnectors = mysqlTable(
     clientId: varchar("clientId", { length: 255 }),
     authType: mysqlEnum("authType", ["none", "basic", "tls_cert", "sas_token", "api_key"]).notNull().default("none"),
     configJson: json("configJson"),
+    // Desired state, set by the workspace's admins: whether it should run, and
+    // which edit of its settings. The IoT consumer restarts it when the version
+    // moves (services/iot/iotConsumer.ts).
+    enabled: boolean("enabled").notNull().default(true),
+    configVersion: int("configVersion", { unsigned: true }).notNull().default(1),
+    // Observed state, written by the consumer that holds the IoT lease: the
+    // status and counters below, the settings version they describe, who
+    // reported them and when. Until the version matches, the change is pending.
     status: mysqlEnum("status", ["connected", "disconnected", "error", "disabled"]).notNull().default("disconnected"),
     lastConnectedAt: timestamp("lastConnectedAt"),
     messageCount: bigint("messageCount", { mode: "number", unsigned: true }).default(0).notNull(),
     errorCount: bigint("errorCount", { mode: "number", unsigned: true }).default(0).notNull(),
     lastError: text("lastError"),
+    observedVersion: int("observedVersion", { unsigned: true }),
+    consumerOwner: varchar("consumerOwner", { length: 128 }),
+    observedAt: timestamp("observedAt", { fsp: 3 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt")
       .defaultNow()
@@ -665,4 +682,41 @@ export const iotConnectors = mysqlTable(
 );
 export type IotConnector = typeof iotConnectors.$inferSelect;
 export type InsertIotConnector = typeof iotConnectors.$inferInsert;
+
+/**
+ * Broker messages already recorded, by connector: a message the broker
+ * delivers again (it does, after a consumer hands over) is recognised and has
+ * no second effect. Rows older than a week are pruned (services/iot/iotConsumer.ts).
+ */
+export const iotMessageSeen = mysqlTable(
+  "iot_message_seen",
+  {
+    // The connector's id; 0 for the broker IOT_BROKER_URL names, which has no row.
+    connectorId: bigint("connectorId", { mode: "number", unsigned: true }).notNull(),
+    // SHA-256, hex, of the payload's message id when it has one, else of topic and payload.
+    fingerprint: char("fingerprint", { length: 64 }).notNull(),
+    seenAt: timestamp("seenAt").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.connectorId, table.fingerprint] }),
+    index("iot_message_seen_at").on(table.seenAt),
+  ],
+);
+
+/* ─────────────────────────────────────────────────────────────
+ * Leases: work exactly one process may do at a time, whatever the
+ * number of processes (the IoT consumer, `iot-consumer`). Held on the
+ * database's clock; the generation, raised on every acquisition, fences
+ * out a holder that lost it (services/leases.ts).
+ * ───────────────────────────────────────────────────────────── */
+export const leases = mysqlTable("leases", {
+  name: varchar("name", { length: 128 }).primaryKey(),
+  // The holding process, as workers.id names one; null once released.
+  owner: varchar("owner", { length: 128 }),
+  generation: bigint("generation", { mode: "number", unsigned: true }).notNull().default(0),
+  expiresAt: timestamp("expiresAt", { fsp: 3 }),
+  acquiredAt: timestamp("acquiredAt", { fsp: 3 }),
+  renewedAt: timestamp("renewedAt", { fsp: 3 }),
+});
+export type LeaseRow = typeof leases.$inferSelect;
 
