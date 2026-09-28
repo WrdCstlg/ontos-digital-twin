@@ -30,20 +30,21 @@ export type HttpAnswer = { status: number; headers: IncomingHttpHeaders; text: s
 
 /** The exchange took longer than its timeout. */
 export class HttpTimeoutError extends Error {
-  constructor(readonly timeoutMs: number) {
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number) {
     super(`No answer within ${timeoutMs} ms`);
     this.name = "HttpTimeoutError";
+    this.timeoutMs = timeoutMs;
   }
 }
 
 /** The other side could not be reached, or dropped the connection before its answer was complete. */
 export class HttpConnectionError extends Error {
-  constructor(
-    message: string,
-    readonly code?: string,
-  ) {
+  readonly code?: string;
+  constructor(message: string, code?: string) {
     super(message);
     this.name = "HttpConnectionError";
+    this.code = code;
   }
 }
 

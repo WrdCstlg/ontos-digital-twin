@@ -15,6 +15,7 @@ import { createRouter, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { isReadOnlySparql } from "./lib/sparqlGuard";
 import { semanticEngine } from "./services/semanticEngine";
+import { graphReadFailure, queryWorkspaceGraph, READ_WAIT_SECONDS, workspaceGraphs } from "./services/workspaceGraph";
 import { publicConnector, type PublicConnector } from "./services/connectorView";
 import { classWithDescendants } from "./services/actions/definitions";
 
@@ -322,6 +323,17 @@ export const graphRouter = createRouter({
         });
       }
 
+      // With the engine host, the workspace's own copy answers (workspaceGraph.ts).
+      if (workspaceGraphs()) {
+        try {
+          const res = await queryWorkspaceGraph(ws.id, input.query, { fresh: input.autoSync });
+          return { variables: res.variables, results: res.results, count: res.results.length, version: res.version };
+        } catch (err) {
+          const failure = graphReadFailure(err);
+          throw new TRPCError({ code: failure.status === 400 ? "BAD_REQUEST" : "SERVICE_UNAVAILABLE", message: failure.message });
+        }
+      }
+
       const isAlive = await semanticEngine.ensureEngineRunning();
       if (!isAlive) {
         throw new TRPCError({
@@ -356,6 +368,17 @@ export const graphRouter = createRouter({
 
   syncStore: workspaceQuery.query(async ({ ctx }) => {
     const ws = ctx.workspace;
+    // With the engine host, bringing the workspace's copy up to date is a
+    // catch-up of what changed, not a reload.
+    const hosted = workspaceGraphs();
+    if (hosted) {
+      try {
+        return await hosted.catchUp(ws.id, { waitSeconds: READ_WAIT_SECONDS });
+      } catch (err) {
+        const failure = graphReadFailure(err);
+        throw new TRPCError({ code: failure.status === 400 ? "BAD_REQUEST" : "SERVICE_UNAVAILABLE", message: failure.message });
+      }
+    }
     const isAlive = await semanticEngine.ensureEngineRunning();
     if (!isAlive) {
       throw new TRPCError({

@@ -5,6 +5,7 @@ import { getDb } from "../queries/connection";
 import { isReadOnlySparql } from "../lib/sparqlGuard";
 import { llmGateway } from "./llmGateway";
 import { semanticEngine } from "./semanticEngine";
+import { queryWorkspaceGraph, workspaceGraphs } from "./workspaceGraph";
 
 /* ──────────────────────────────────────────────────────────────
  * Deterministic, ontology-grounded NL→query simulator.
@@ -597,15 +598,11 @@ export async function executeGenerated(
       return { columns: ["iri", "label", "class", "module"], rows, subgraph: subgraphFor(ids, edges, nodes), intent };
     }
     case "llm-generated": {
-      const isAlive = await semanticEngine.ensureEngineRunning();
-      if (!isAlive) {
+      // With the engine host, the workspace's own copy answers, current.
+      if (!workspaceGraphs() && !(await semanticEngine.ensureEngineRunning())) {
         throw new Error("Semantic engine is offline: cannot execute LLM-generated SPARQL query.");
       }
-      // The store may hold another workspace's graph; load this one first.
-      const res = await semanticEngine.exclusive(async () => {
-        await semanticEngine.syncWorkspace(workspaceId);
-        return semanticEngine.querySparql(sparql);
-      });
+      const res = await queryWorkspaceGraph(workspaceId, sparql);
       return {
         columns: res.variables,
         rows: res.results as Record<string, unknown>[],
