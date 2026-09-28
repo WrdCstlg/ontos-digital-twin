@@ -93,10 +93,28 @@ jobs:
       - name: Install dependencies
         run: npm --prefix app ci
 
+      # A schema.ts change committed without its migration: drizzle-kit would
+      # generate one. It connects to nothing, but its config wants a URL.
+      - name: The schema has every migration it needs
+        working-directory: app
+        env:
+          DATABASE_URL: mysql://unused@127.0.0.1:1/unused
+        run: |
+          timeout 120 npx drizzle-kit generate
+          drift="$(git status --porcelain -- db/migrations)"
+          if [ -n "$drift" ]; then
+            echo "$drift"
+            echo "::error::db/schema.ts differs from its migrations: run npm run db:generate and commit what it writes"
+            exit 1
+          fi
+
       - name: Test on MySQL
         run: npm --prefix app run test:mysql
         env:
           ONTOS_TEST_DATABASE_URL: mysql://root:ci-throwaway@127.0.0.1:3306
+          # A session not on UTC, so a time taken from the app's clock where the
+          # queue should take the database's shows.
+          ONTOS_TEST_SESSION_TIME_ZONE: "+05:00"
 
   docker:
     name: Docker stack boots and serves

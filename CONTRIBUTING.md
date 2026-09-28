@@ -52,7 +52,10 @@ otherwise changing — it buries the real diff. Formatting the lines you touch i
 **Schema changes need a migration.** Edit `app/db/schema.ts`, then run
 `npm --prefix app run db:generate` and commit the generated SQL and the updated `meta/`
 files. Do not use `db:push` for anything you intend to commit; it bypasses migration
-history. The MySQL tests fail when `schema.ts` and the migrations disagree.
+history. CI fails when `drizzle-kit generate` would still write a migration, and the MySQL
+tests fail when the migrations build something other than `schema.ts`. A released migration
+never changes (a database that applied it never runs it again): add the new one's hash to
+`RELEASED` in `api/__tests__/migrationHistory.test.ts`, whose test tells you the hash.
 
 **Seed scripts are destructive.** `db/seed.ts` and `db/seed-twins.ts` clear every table,
 including the hash-linked audit chain, before inserting. Never point them at a database

@@ -35,15 +35,17 @@ const A = mockWorkspace;
 const B = mockWorkspaceBeta;
 const at = new Date("2026-01-01T00:00:00Z");
 
-/** A viewer in workspace `ws`. */
-const viewerIn = (ws: Workspace) =>
+/** A member of workspace `ws` in `role`, with a plain account: the workspace role alone decides. */
+const memberIn = (ws: Workspace, role: "viewer" | "ontologist" | "admin") =>
   appRouter.createCaller(
     createMockContext({
       user: mockViewerUser,
       workspace: ws,
-      membership: { id: 900 + ws.id, workspaceId: ws.id, userId: mockViewerUser.id, role: "viewer", moduleScope: null, createdAt: at },
+      membership: { id: 900 + ws.id, workspaceId: ws.id, userId: mockViewerUser.id, role, moduleScope: null, createdAt: at },
     }),
   );
+const viewerIn = (ws: Workspace) => memberIn(ws, "viewer");
+const adminIn = (ws: Workspace) => memberIn(ws, "admin");
 
 const definition = {
   parameters: [{ name: "person", label: "Person", type: "object", classIri: "hr:Person", required: true }],
@@ -103,20 +105,22 @@ beforeAll(async () => {
     ...[2, 3, 4, 5, 6].map((id) => ({ id, mappingId: 100, status: "succeeded" as const, rowsProcessed: 5 })),
   ]);
 
-  // A's queue: four jobs waiting an hour, one failed. B's: one waiting two minutes, one running, two done.
-  const job = (workspaceId: number, status: "queued" | "running" | "succeeded" | "failed", waited = sql`now()`) =>
-    ({ workspaceId, kind: "mapping.sync", status, createdAt: waited });
+  // A's queue: four jobs waiting an hour (1-4), one failed (5). B's: one waiting two minutes (6), one running (7), two done.
+  const job = (id: number, workspaceId: number, status: "queued" | "running" | "succeeded" | "failed", waited = sql`now()`) =>
+    ({ id, workspaceId, kind: "mapping.sync", status, createdAt: waited });
   await db.insert(jobs).values([
-    ...[1, 2, 3, 4].map(() => job(A.id, "queued", sql`now() - interval 1 hour`)),
-    job(A.id, "failed"),
-    job(B.id, "queued", sql`now() - interval 2 minute`),
-    job(B.id, "running"),
-    job(B.id, "succeeded"),
-    job(B.id, "succeeded"),
+    ...[1, 2, 3, 4].map((id) => job(id, A.id, "queued", sql`now() - interval 1 hour`)),
+    job(5, A.id, "failed"),
+    job(6, B.id, "queued", sql`now() - interval 2 minute`),
+    job(7, B.id, "running"),
+    job(8, B.id, "succeeded"),
+    job(9, B.id, "succeeded"),
   ]);
+  // Workers serve every workspace: one on A's job, one on B's, one silent for a minute.
   await db.insert(workers).values([
-    { id: "worker-alive", hostname: "h1", status: "running" },
-    { id: "worker-silent", hostname: "h2", status: "running", lastSeenAt: sql`now() - interval 1 minute` },
+    { id: "worker-on-a", hostname: "h1", status: "running", currentJobId: 1 },
+    { id: "worker-on-b", hostname: "h2", status: "running", currentJobId: 7 },
+    { id: "worker-silent", hostname: "h3", status: "running", lastSeenAt: sql`now() - interval 1 minute` },
   ]);
 
   const finding = (workspaceId: number, status: "open" | "acknowledged") =>
@@ -174,7 +178,7 @@ describe("each workspace's counts and summaries are its own", () => {
     expect(b.byStatus).toEqual({ queued: 1, running: 1, succeeded: 2, failed: 0 });
     expect(b.oldestQueuedSeconds).toBeGreaterThanOrEqual(115);
     expect(b.oldestQueuedSeconds).toBeLessThan(180);
-    expect(b.workersAlive).toBe(1);
+    expect(b.workersAlive).toBe(2);
 
     const a = await viewerIn(A).operations.summary();
     expect(a.byStatus).toEqual({ queued: 4, running: 0, succeeded: 0, failed: 1 });
@@ -190,6 +194,19 @@ describe("each workspace's counts and summaries are its own", () => {
     expect(await viewerIn(A).ontology.listModules()).toEqual([
       expect.objectContaining({ key: "hr", classCount: 3, propertyCount: 2, instanceCount: 5 }),
     ]);
+  });
+
+  it("the workers, each naming the job it runs only to the workspace the job is", async () => {
+    const byId = async (ws: Workspace) => Object.fromEntries((await adminIn(ws).operations.listWorkers()).map((w) => [w.id, w]));
+    const b = await byId(B);
+    expect(b["worker-on-b"]).toMatchObject({ currentJobId: 7, busyElsewhere: false, alive: true });
+    expect(b["worker-on-a"]).toMatchObject({ currentJobId: null, busyElsewhere: true, alive: true });
+    expect(b["worker-silent"]).toMatchObject({ currentJobId: null, busyElsewhere: false, alive: false });
+    expect(b["worker-silent"].secondsSinceSeen).toBeGreaterThanOrEqual(55);
+
+    const a = await byId(A);
+    expect(a["worker-on-a"]).toMatchObject({ currentJobId: 1, busyElsewhere: false });
+    expect(a["worker-on-b"]).toMatchObject({ currentJobId: null, busyElsewhere: true });
   });
 
   it("each action type's submissions, and when it was last submitted", async () => {

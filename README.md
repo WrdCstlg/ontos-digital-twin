@@ -97,7 +97,9 @@ queued import and returns; a worker claims it with `SELECT … FOR UPDATE SKIP L
 renews a 15-second lease while it works, and records the outcome only while it still
 holds the lease. A failed attempt is retried up to three times with backoff. A worker
 that stops renewing (crashed, killed, or cut off) loses the job to another worker when
-the lease lapses.
+the lease lapses, and a job so stranded is claimed before any queued one. A claim runs
+at READ COMMITTED and reads due jobs in the order of their index, so it locks the one
+job it takes and workers claiming at once pass each other rather than wait or deadlock.
 
 An action submission is planned outside any lock, then applied in one transaction: the
 objects it read are locked and checked unchanged, and the edits, the submission record,
@@ -604,8 +606,8 @@ client-side graph analytics. The `semanticEngine.test.ts` cases are **live integ
 tests**: they start the engine daemon themselves from the local binary, so they need the
 binary in place (see [Semantic engine](#semantic-engine)) but not a daemon already running.
 
-Router tests call tRPC procedures with a mock context and an in-memory database, and
-`bootRoutes.test.ts` does the same for the plain HTTP routes. They check permissions,
+Router tests call tRPC procedures with a mock context and a mocked or in-memory database,
+and `bootRoutes.test.ts` does the same for the plain HTTP routes. They check permissions,
 workspace scoping and responses. A few React components have render tests; pages do not.
 
 CI has no `app/.env`. To run the suite as CI does, point dotenv at a missing file:
@@ -617,24 +619,35 @@ The in-memory database imitates SQL: it has no row locks, no clock of its own, a
 refuses `GROUP BY`. `npm run test:mysql` runs `api/**/*.mysql.test.ts` against a MySQL 8.4
 server instead, and checks what only a real one can:
 
-- the migrations build the database `db/schema.ts` describes (its tables, columns, defaults,
-  indexes and foreign keys) and run again as a no-op, so a schema change committed without
-  its migration fails;
-- concurrent workers never claim the same job, leases run out on the database's clock, and a
-  worker that lost its lease cannot write over the one that took the job;
-- the routes that group and count return only the caller's workspace's rows.
+- the migrations build the database `db/schema.ts` describes (its tables, columns with their
+  defaults and on-update and generated clauses, indexes, foreign keys and CHECK constraints)
+  and run again as a no-op;
+- workers claiming at once, on a table that holds a history of finished jobs, neither
+  deadlock nor take the same job, and a claim passes over a job another transaction holds;
+  leases are set and run out on the database's clock; and a worker that lost its lease
+  cannot write over the one that took the job;
+- the routes that group and count return only the caller's workspace's rows, and saving a
+  mapping unchanged is not taken for a conflict.
 
-`ONTOS_TEST_DATABASE_URL` names the server, without a database. The tests create
-`ontos_test` there, empty it between tests and drop it at the end; they refuse to empty any
-other database. A throwaway server will do:
+`ONTOS_TEST_DATABASE_URL` names the server, without a database. Each run creates a
+database of its own there, `ontos_test_<pid>_<time>`, empties it between tests and drops it
+at the end, so two runs can share a server; they refuse to empty any other database. A run
+killed before it ends leaves its database behind, to drop by hand. With
+`ONTOS_TEST_SESSION_TIME_ZONE` set (`+05:00`, say), the server's sessions run in that time
+zone until the run ends, so a time taken from the app's clock where the database's belongs
+shows; CI sets it. A throwaway server will do:
 
 ```bash
 docker run -d --name ontos-test-mysql -e MYSQL_ROOT_PASSWORD=test -p 127.0.0.1:33306:3306 mysql:8.4
-ONTOS_TEST_DATABASE_URL=mysql://root:test@127.0.0.1:33306 npm run test:mysql
+ONTOS_TEST_DATABASE_URL=mysql://root:test@127.0.0.1:33306 ONTOS_TEST_SESSION_TIME_ZONE=+05:00 npm run test:mysql
 docker rm -f ontos-test-mysql
 ```
 
-CI runs them in a job of their own against the MySQL image `compose.yaml` pins. The Docker
+CI runs them in a job of their own against the MySQL image `compose.yaml` pins. The same
+job fails if `drizzle-kit generate` would write a migration, which catches a change to
+`schema.ts` committed without one, and `migrationHistory.test.ts` (in `npm test`) keeps the
+migration history in order and append-only: drizzle skips, on a database already migrated,
+a migration dated before the last it applied, and never runs an edited one again. The Docker
 job still boots the full stack and smoke-tests login, the seeded graph and an import run by
 the worker.
 

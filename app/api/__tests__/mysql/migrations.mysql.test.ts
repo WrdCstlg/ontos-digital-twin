@@ -1,9 +1,12 @@
 /**
- * The migrations build the database schema.ts describes: its tables, columns,
- * defaults, indexes and foreign keys, and nothing else. A change to schema.ts
- * without its migration fails here; the in-memory database the other tests
- * use cannot notice one. And they run again as a no-op, as the bootstrap runs
- * them on every start.
+ * The migrations build the database schema.ts describes: its tables, columns
+ * (types, nullability, defaults, auto-increment, on-update, generated),
+ * indexes, foreign keys and CHECK constraints, and nothing else. A migration
+ * whose SQL builds something other than what schema.ts says fails here, where
+ * the in-memory database the other tests use cannot notice. And they run again
+ * as a no-op, as the bootstrap runs them on every start. That schema.ts has a
+ * migration at all is CI's `drizzle-kit generate` check; that the history only
+ * grows, in order, is migrationHistory.test.ts.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -14,6 +17,7 @@ import { migrate } from "drizzle-orm/mysql2/migrator";
 import { is, SQL } from "drizzle-orm";
 import { getTableConfig, MySqlDialect, MySqlTable, type MySqlColumn } from "drizzle-orm/mysql-core";
 import * as schema from "@db/schema";
+import { testDatabase } from "./database";
 
 const migrationsFolder = path.resolve(import.meta.dirname, "../../../db/migrations");
 const journal = JSON.parse(readFileSync(path.join(migrationsFolder, "meta/_journal.json"), "utf8")) as { entries: { tag: string }[] };
@@ -45,6 +49,17 @@ function describeDeclared(c: MySqlColumn) {
     nullable: !c.notNull,
     default: declaredDefault(c),
     autoIncrement: Boolean((c as { autoIncrement?: boolean }).autoIncrement),
+    onUpdateNow: Boolean((c as { hasOnUpdateNow?: boolean }).hasOnUpdateNow),
+    generated: c.generated ? String((c.generated as { mode?: string }).mode ?? "virtual").toLowerCase() : null,
+  };
+}
+
+/** The same, from information_schema's `extra`: auto_increment, on update CURRENT_TIMESTAMP, VIRTUAL or STORED GENERATED. */
+function describeExtra(extra: string) {
+  return {
+    autoIncrement: /\bauto_increment\b/i.test(extra),
+    onUpdateNow: /\bon update current_timestamp\b/i.test(extra),
+    generated: /\b(virtual|stored) generated\b/i.exec(extra)?.[1].toLowerCase() ?? null,
   };
 }
 
@@ -70,10 +85,7 @@ describe("the migrated database is the one schema.ts describes", () => {
        from information_schema.columns where ${OURS}`,
     );
     const actual = Object.fromEntries(
-      cols.map((r) => [
-        `${r.t}.${r.c}`,
-        { type: r.type, nullable: r.nullable === "YES", default: normaliseDefault(r.dflt), autoIncrement: r.extra.includes("auto_increment") },
-      ]),
+      cols.map((r) => [`${r.t}.${r.c}`, { type: r.type, nullable: r.nullable === "YES", default: normaliseDefault(r.dflt), ...describeExtra(r.extra) }]),
     );
     const expected = Object.fromEntries(declared.flatMap((t) => t.columns.map((c) => [`${t.name}.${c.name}`, describeDeclared(c)])));
     expect(actual).toEqual(expected);
@@ -131,10 +143,20 @@ describe("the migrated database is the one schema.ts describes", () => {
       .sort(byName);
     expect(actual).toEqual(expected);
   });
+
+  it("and the CHECK constraints declared", async () => {
+    const checks = await rows<{ t: string; name: string }>(
+      `select table_name as t, constraint_name as name from information_schema.table_constraints
+       where table_schema = database() and constraint_type = 'CHECK'`,
+    );
+    expect(checks.map((c) => `${c.t}.${c.name}`).sort(byName)).toEqual(declared.flatMap((t) => t.checks.map((c) => `${t.name}.${c.name}`)).sort(byName));
+  });
 });
 
 describe("the migrations", () => {
   it("were all applied, and run again as a no-op", async () => {
+    const [{ name }] = await rows<{ name: string }>("select database() as name");
+    expect(name, "migrating only this run's database").toBe(testDatabase());
     const applied = () => rows<{ id: number; hash: string; created_at: string }>("select id, hash, created_at from __drizzle_migrations order by id");
     const before = await applied();
     expect(before).toHaveLength(journal.entries.length);
