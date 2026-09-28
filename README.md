@@ -36,9 +36,9 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 - **Global search** — ⌘K / Ctrl+K searches instances, classes, properties, insights,
   action types and connectors in the current workspace.
 - **Background jobs** — a durable queue in MySQL with leases and retries; any number of
-  worker processes, each with its own semantic engine (see
-  [Known limitations](#known-limitations)); a worker that dies mid-job has its job
-  reclaimed. The Operations page shows the queue and the workers.
+  worker processes, whose engine work takes turns under a MySQL lock when they share one
+  semantic engine; a worker that dies mid-job has its job reclaimed. The Operations page
+  shows the queue and the workers.
 - **Action types** — named, parameterised edits to the knowledge graph: typed parameters
   (including objects of a class), submission criteria, declarative rules (create, change
   and delete objects; add, remove and replace links), a minimum role and module scopes,
@@ -776,11 +776,13 @@ These are tracked, known behaviours rather than surprises:
   Oxigraph engine is not partitioned per workspace: reasoning, SHACL validation, CSV
   import and SPARQL each clear the store and load what they need. The app runs those
   sequences one at a time under a lock, so they no longer interfere, but a slow
-  reasoning run delays the next query. The lock lives in the process, so several app
-  replicas must not share one engine. Replicas of the worker do share `engine-worker` in
-  `compose.yaml`. An import whose SHACL report was taken on another replica's graph is
-  treated as unchecked (its mapping, if set to block, retries), but the other engine work
-  of concurrent imports is not yet kept apart. Run one worker per engine until it is.
+  reasoning run delays the next query. The app's lock lives in its process, so several app
+  replicas must not share one engine. Replicas of the worker may: they share
+  `engine-worker` in `compose.yaml`, and each engine task takes a MySQL named lock, one
+  per engine, that every replica takes too. Their imports' engine work therefore takes
+  turns, which bounds how far adding workers speeds up SHACL checks of imports on one
+  engine. An import whose report still did not look at its own graph is treated as
+  unchecked.
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that
   has no hash yet will accept a known fixed bootstrap password and be upgraded to a real

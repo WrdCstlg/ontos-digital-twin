@@ -30,6 +30,15 @@ export function getDb(): AppDatabase {
   return instance;
 }
 
+/**
+ * A connection of the pool's for the caller alone, for what must stay on one
+ * session (a named lock). Release it, or destroy it if it may be broken.
+ */
+export async function getPoolConnection(): Promise<mysql.PoolConnection> {
+  getDb();
+  return pool!.getConnection();
+}
+
 export async function closeDb(): Promise<void> {
   if (pool) {
     await pool.end();
