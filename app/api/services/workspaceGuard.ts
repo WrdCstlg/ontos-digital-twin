@@ -164,14 +164,17 @@ export async function resolveUserWorkspace(
   });
 }
 
-/** Check if user/membership has the required workspace-level role */
+/**
+ * Whether the member's role in this workspace is one of `allowedRoles`. The
+ * workspace role decides. An account's own role counts only as a platform
+ * administrator's ("admin"), so a workspace admin can make anyone a viewer in
+ * their workspace, whatever the account was given elsewhere.
+ */
 export function hasWorkspaceRole(
   membership: WorkspaceMember,
   user: User,
   allowedRoles: string[],
 ): boolean {
   if (user.role === "admin") return true;
-  if (allowedRoles.includes(membership.role)) return true;
-  if (allowedRoles.includes(user.role)) return true;
-  return false;
+  return allowedRoles.includes(membership.role);
 }

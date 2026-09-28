@@ -111,6 +111,12 @@ describe("an API token", () => {
     expect((await principalFor({ authorization: TOKEN })).role).toBe("admin");
   });
 
+  it("acts at its creator's role in the workspace, not the creator account's", async () => {
+    creator({ userRole: "ontologist", email: "o@acme.com", memberRole: "viewer", moduleScope: null });
+    withToken(apiToken({ role: "ontologist" }));
+    expect((await principalFor({ authorization: TOKEN })).role).toBe("viewer");
+  });
+
   it("with no creator on record keeps its own role", async () => {
     withToken(apiToken({ createdByUserId: null, role: "ontologist" }));
     expect((await principalFor({ authorization: TOKEN })).role).toBe("ontologist");
@@ -146,6 +152,14 @@ describe("a session", () => {
     vi.mocked(resolveUserWorkspace).mockResolvedValue({ workspace: mockWorkspace, membership: { ...mockViewerMembership, moduleScope: ["hr"] } });
     const p = await principalFor({ cookie: "ontos_session=x" });
     expect(p).toMatchObject({ kind: "session", role: "viewer", scopes: ["read"], moduleScope: ["hr"], limitKey: `user:${mockViewerUser.id}` });
+  });
+
+  it("takes the membership's role, whatever the account's own role, unless the account is a platform admin", async () => {
+    vi.mocked(sessionUser).mockResolvedValue({ ...mockViewerUser, role: "ontologist" });
+    vi.mocked(resolveUserWorkspace).mockResolvedValue({ workspace: mockWorkspace, membership: mockViewerMembership });
+    expect((await principalFor({ cookie: "ontos_session=x" })).role).toBe("viewer");
+    vi.mocked(sessionUser).mockResolvedValue({ ...mockViewerUser, role: "admin" });
+    expect((await principalFor({ cookie: "ontos_session=x" })).role).toBe("admin");
   });
 
   it("is refused 401 without a session, 403 without a workspace, and answered 503 when it could not be checked", async () => {

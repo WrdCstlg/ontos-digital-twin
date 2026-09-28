@@ -45,12 +45,13 @@ export type PrincipalResult = { ok: true; principal: Principal } | ({ ok: false 
 const RANK: Record<ActionRole, number> = { viewer: 0, editor: 1, ontologist: 2, admin: 3 };
 const isRole = (r: unknown): r is ActionRole => typeof r === "string" && (ACTION_ROLES as readonly string[]).includes(r);
 
-/** The higher of two roles, where either may be missing or not a workspace role. */
-function higher(a: unknown, b: unknown): ActionRole | null {
-  const ra = isRole(a) ? RANK[a] : -1;
-  const rb = isRole(b) ? RANK[b] : -1;
-  const best = Math.max(ra, rb);
-  return best < 0 ? null : ACTION_ROLES[best];
+/**
+ * A member's role in the workspace, as the API acts on it. The workspace role
+ * decides; the account's own role counts only as a platform administrator's.
+ */
+function workspaceRole(userRole: unknown, memberRole: unknown): ActionRole | null {
+  if (userRole === "admin") return "admin";
+  return isRole(memberRole) ? memberRole : null;
 }
 
 function lower(a: ActionRole, b: ActionRole): ActionRole {
@@ -87,7 +88,7 @@ async function creatorAccess(token: ApiToken): Promise<{ role: ActionRole; modul
   // A persona's tokens stop with persona login, as its sessions do.
   if (env.isProduction && !env.allowDemoLogin && isDemoPersona(row.email)) return null;
   if (row.memberRole) {
-    const role = row.userRole === "admin" ? "admin" : higher(row.memberRole, row.userRole);
+    const role = workspaceRole(row.userRole, row.memberRole);
     return role ? { role, moduleScope: row.userRole === "admin" ? [] : scopeOf(row.moduleScope) } : null;
   }
   // Without a membership, as for sessions: only a system administrator, and only outside production.
@@ -144,7 +145,7 @@ async function sessionPrincipal(headers: Headers): Promise<PrincipalResult> {
     }
     return { ok: false, ...unavailable };
   }
-  const role = user.role === "admin" ? "admin" : (higher(resolved.membership.role, user.role) ?? "viewer");
+  const role = workspaceRole(user.role, resolved.membership.role) ?? "viewer";
   return {
     ok: true,
     principal: {

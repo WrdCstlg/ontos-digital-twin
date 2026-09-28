@@ -59,13 +59,14 @@ export async function createToken(
   creator: TokenCreator,
   input: NewTokenInput,
 ): Promise<{ token: string; row: Omit<ApiToken, "tokenHash"> }> {
+  // The creator's role in this workspace, as for everything else a member does
+  // there; the account's own role counts only as a platform administrator's.
   const creatorRank =
     creator.userRole === "admin"
       ? RANK.admin
-      : Math.max(
-          (ACTION_ROLES as readonly string[]).includes(creator.memberRole) ? RANK[creator.memberRole as ActionRole] : -1,
-          (ACTION_ROLES as readonly string[]).includes(creator.userRole) ? RANK[creator.userRole as ActionRole] : -1,
-        );
+      : (ACTION_ROLES as readonly string[]).includes(creator.memberRole)
+        ? RANK[creator.memberRole as ActionRole]
+        : -1;
   if (RANK[input.role] > creatorRank) throw new TokenRefused(`A token cannot have a higher role (${input.role}) than its creator`);
   if (input.scopes.length === 0) throw new TokenRefused("A token needs at least one scope");
   const { token, prefix, hash } = newToken();
