@@ -17,6 +17,7 @@ import {
   datatypeRanges,
   moduleToTurtle,
   knowledgeGraphToTurtle,
+  modulePrefixes,
 } from "./rdfBridge";
 
 export type SemanticEngineHealth = {
@@ -569,7 +570,7 @@ class SemanticEngineClient {
 
     // Load instances
     if (nodes.length > 0) {
-      const kgTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties));
+      const kgTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes(modules));
       const res = await this.loadTurtle(kgTtl);
       totalTriples += res.triplesLoaded;
     }

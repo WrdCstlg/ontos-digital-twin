@@ -22,7 +22,7 @@ import { getDb } from "../../queries/connection";
 import { canonicalize, writeAudit } from "../audit";
 import { enqueueJob } from "../jobs/queue";
 import { semanticEngine } from "../semanticEngine";
-import { buildPrefixMap, knowledgeGraphToTurtle, shaclJsonToTurtle } from "../rdfBridge";
+import { buildPrefixMap, expandIri, knowledgeGraphToTurtle, modulePrefixes, shaclJsonToTurtle } from "../rdfBridge";
 import { workspaceDatatypeRanges } from "../datatypeRanges";
 import { explainShaclReport } from "../explainableShacl";
 import { ACTION_WEBHOOK_KIND } from "./sideEffects";
@@ -228,17 +228,12 @@ export async function checkShacl(workspaceId: number, plan: EditPlan, objects: M
   }
 
   const prefixMap = buildPrefixMap(mods);
-  const expand = (iri: string) => {
-    const colon = iri.indexOf(":");
-    const ns = colon > 0 ? prefixMap.get(iri.slice(0, colon)) : undefined;
-    return ns ? ns + iri.slice(colon + 1) : iri;
-  };
-  const judged = new Set([...touchedIris].flatMap((i) => [i, expand(i)]));
+  const judged = new Set([...touchedIris].flatMap((i) => [i, expandIri(i, prefixMap)]));
   // Values typed as their properties declare, as the workspace's graph is.
   const ranges = await workspaceDatatypeRanges(workspaceId);
   const report = await semanticEngine.exclusive(async () => {
     await semanticEngine.clearStore();
-    await semanticEngine.loadTurtle(knowledgeGraphToTurtle(nodes, edges, prefixMap, ranges));
+    await semanticEngine.loadTurtle(knowledgeGraphToTurtle(nodes, edges, prefixMap, ranges, modulePrefixes(mods)));
     return semanticEngine.validateShacl(shaclJsonToTurtle(shaped, prefixMap));
   });
   if (report.error) return { status: "unavailable", violations: [] };
