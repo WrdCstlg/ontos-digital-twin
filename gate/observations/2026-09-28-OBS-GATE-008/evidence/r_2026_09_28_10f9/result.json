@@ -1,0 +1,146 @@
+{
+  "compose_project": "thesis-ontos-5a03315d",
+  "driver": {
+    "drain": {
+      "deadline_ms": 10000,
+      "drained": true,
+      "outcome": "completed",
+      "waited_ms": 7
+    },
+    "exit_code": 0,
+    "started": true,
+    "stopped": false
+  },
+  "oracles": [
+    {
+      "class": "crash",
+      "explanation": "all 8 node process(es) ran to the end of the world without an unplanned exit",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "no_crash",
+      "status": "ok",
+      "valid_phases": [
+        "BOOT",
+        "SEED",
+        "DRIVE",
+        "PERTURB",
+        "HEAL",
+        "QUIESCE",
+        "ASSERT",
+        "TEARDOWN"
+      ]
+    },
+    {
+      "class": "crash",
+      "explanation": "scanned 82 line(s) across 8 log stream(s) against 12 crash signature(s) with no match",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "no_panic_log",
+      "status": "ok",
+      "valid_phases": [
+        "BOOT",
+        "SEED",
+        "DRIVE",
+        "PERTURB",
+        "HEAL",
+        "QUIESCE",
+        "ASSERT",
+        "TEARDOWN"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "all 6 node(s) with a declared health probe answered it after HEAL (within 2029ms convergence window); not judged, no health entry declared: db, sink",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "availability_after_heal",
+      "status": "ok",
+      "valid_phases": [
+        "QUIESCE",
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "all 48 operation(s) completed within SLO ceiling (5000ms) after HEAL",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "no_stuck_op",
+      "status": "ok",
+      "valid_phases": [
+        "HEAL",
+        "QUIESCE",
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "every side effect of an applied action was delivered: 27 side-effect job(s): succeeded 27.",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "actions.delivered",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "safety",
+      "explanation": "every acknowledged action is applied, every submission has one audit entry, every edit traces to an applied submission, and every latest gate note is in place: 29 submission(s), 28 applied; the driver recorded 6 action(s) (ok 6, fail 0, info 0).",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "actions.durable",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "consistency",
+      "explanation": "a client did not read back what the Ontology API had acknowledged (stale_read 2). First, at t+2787ms: submission 40 on person/hr:Person/E-0157 was acknowledged, and the next read found an object naming the earlier submission 11 as its last change. 21 submission(s) through the API, 21 acknowledged; 21 judged by the client's next read (19 saw their own write, 0 a later one, 0 of those by a write the history does not name), 0 not judged.",
+      "first_seen_ms": 2787,
+      "observed_phase": "DRIVE",
+      "oracle": "api.read_your_writes",
+      "status": "violated",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "safety",
+      "explanation": "no lease lapsed across 27 job(s).",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "jobs.lease_lapse",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "safety",
+      "explanation": "no operation of the signed-in driver was refused as signed out: 48 operation(s) completed (action 6, api_action 21, api_read 21).",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "session.honoured",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "the history holds no sync operation, so no import was attempted and there is no job to judge",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "sync_jobs.settle",
+      "status": "inconclusive",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    }
+  ],
+  "outcome": "violation",
+  "seed": 2621380107071571662,
+  "world": 1
+}

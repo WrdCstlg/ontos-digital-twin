@@ -1,0 +1,130 @@
+{
+  "schema": "prothesis.verdict/v1",
+  "run_id": "r_2026_09_28_10f9",
+  "profile": "api",
+  "commit": "820937d",
+  "verdict": "FAIL",
+  "budget": {
+    "wall_s": 300,
+    "used_s": 45,
+    "worlds_planned": 1,
+    "worlds_run": 1
+  },
+  "violations": [
+    {
+      "id": "v1",
+      "oracle": "api.read_your_writes",
+      "class": "consistency",
+      "severity": "high",
+      "phase": "DRIVE",
+      "first_seen_ms": 2787,
+      "explanation": "a client did not read back what the Ontology API had acknowledged (stale_read 2). First, at t+2787ms: submission 40 on person/hr:Person/E-0157 was acknowledged, and the next read found an object naming the earlier submission 11 as its last change. 21 submission(s) through the API, 21 acknowledged; 21 judged by the client's next read (19 saw their own write, 0 a later one, 0 of those by a write the history does not name), 0 not judged.",
+      "witness": {
+        "findings": [
+          {
+            "kind": "stale_read",
+            "key": "person/hr:Person/E-0157",
+            "action_op_id": 39,
+            "read_op_id": 41,
+            "acknowledged_submission": 40,
+            "read_submission": 11,
+            "acknowledged_note": "gate api 2621380107071571662/2/6",
+            "read_note": "gate api 2621380107071571662/5/1",
+            "t_ms": 2787
+          },
+          {
+            "kind": "stale_read",
+            "key": "person/hr:Person/E-0197",
+            "action_op_id": 44,
+            "read_op_id": 47,
+            "acknowledged_submission": 43,
+            "read_submission": 36,
+            "acknowledged_note": "gate api 2621380107071571662/3/4",
+            "read_note": "gate api 2621380107071571662/5/4",
+            "t_ms": 3061
+          }
+        ],
+        "first_seen_ms": 2787,
+        "key": "api",
+        "oracle_argv": [
+          "./bin/oracle-api"
+        ],
+        "oracle_definition": "C:\\AI Projects\\ontos-canfail\\gate\\.prothesis\\oracles\\api.read_your_writes.yaml",
+        "phase": "DRIVE",
+        "stderr_path": "C:\\AI Projects\\ontos-canfail\\gate\\.prothesis\\runs\\r_2026_09_28_10f9\\world-0001\\oracles\\api.read_your_writes.stderr.log"
+      },
+      "minimal_repro": null,
+      "shrink": {
+        "attempted": false,
+        "faults_before": 0,
+        "faults_after": 0,
+        "ops_before": 0,
+        "ops_after": 0,
+        "surviving_faults": []
+      },
+      "causal_timeline": [
+        {
+          "t_ms": -18793,
+          "event": "phase",
+          "detail": "BOOT begins (window -18793..-1 ms)"
+        },
+        {
+          "t_ms": -1,
+          "event": "phase",
+          "detail": "SEED begins (window -1..0 ms)"
+        },
+        {
+          "t_ms": 0,
+          "event": "phase",
+          "detail": "DRIVE begins (window 0..3000 ms)"
+        },
+        {
+          "t_ms": 0,
+          "event": "phase",
+          "detail": "PERTURB begins (window 0..3000 ms)"
+        },
+        {
+          "t_ms": 2787,
+          "event": "oracle",
+          "detail": "api.read_your_writes (consistency) reported a violation in DRIVE: a client did not read back what the Ontology API had acknowledged (stale_read 2). First, at t+2787ms: submission 40 on person/hr:Person/E-0157 was acknowledged, and the next …"
+        },
+        {
+          "t_ms": 3000,
+          "event": "phase",
+          "detail": "HEAL begins (window 3000..3102 ms)"
+        },
+        {
+          "t_ms": 3102,
+          "event": "phase",
+          "detail": "QUIESCE begins (window 3102..5131 ms)"
+        },
+        {
+          "t_ms": 5131,
+          "event": "phase",
+          "detail": "ASSERT begins (window 5131..5131 ms)"
+        }
+      ],
+      "suspect": null
+    }
+  ],
+  "coverage": {
+    "new_templates": 0,
+    "cum_templates": 0,
+    "new_states": 0,
+    "cum_states": 0
+  },
+  "coverage_delta_vs_baseline": null,
+  "oracle_lock": {
+    "status": "ok",
+    "manifest_sha": "sha256:dbf08316a1156b4d9855022619f03be0cccdf84c6270c8fb9c90aad4a01397c4",
+    "executables_moved": [
+      "actions.delivered",
+      "actions.durable",
+      "api.read_your_writes",
+      "jobs.lease_lapse",
+      "session.honoured",
+      "sync_jobs.settle"
+    ]
+  },
+  "artifacts": ".prothesis/runs/r_2026_09_28_10f9/"
+}
