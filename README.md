@@ -300,6 +300,7 @@ Run from `app/`.
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
 | `npm test` | Vitest suite |
+| `npm run test:mysql` | Server tests on a real MySQL 8.4 (see [Testing](#testing)) |
 | `npm run db:generate` | Generate a SQL migration into `db/migrations` after a schema change |
 | `npm run db:migrate` | Apply pending migrations with drizzle-kit |
 | `npm run db:push` | Push the schema straight to MySQL, bypassing migrations — prototyping only |
@@ -603,14 +604,39 @@ client-side graph analytics. The `semanticEngine.test.ts` cases are **live integ
 tests**: they start the engine daemon themselves from the local binary, so they need the
 binary in place (see [Semantic engine](#semantic-engine)) but not a daemon already running.
 
-Router tests call tRPC procedures with a mock context and a mocked database, and
+Router tests call tRPC procedures with a mock context and an in-memory database, and
 `bootRoutes.test.ts` does the same for the plain HTTP routes. They check permissions,
-workspace scoping and responses, but no test runs SQL against a real MySQL; the CI
-Docker job covers that by booting the full stack and smoke-testing login and the seeded
-graph. A few React components have render tests; pages do not.
+workspace scoping and responses. A few React components have render tests; pages do not.
 
 CI has no `app/.env`. To run the suite as CI does, point dotenv at a missing file:
 `DOTENV_CONFIG_PATH=does-not-exist.env npm test`.
+
+### On a real MySQL
+
+The in-memory database imitates SQL: it has no row locks, no clock of its own, and it
+refuses `GROUP BY`. `npm run test:mysql` runs `api/**/*.mysql.test.ts` against a MySQL 8.4
+server instead, and checks what only a real one can:
+
+- the migrations build the database `db/schema.ts` describes (its tables, columns, defaults,
+  indexes and foreign keys) and run again as a no-op, so a schema change committed without
+  its migration fails;
+- concurrent workers never claim the same job, leases run out on the database's clock, and a
+  worker that lost its lease cannot write over the one that took the job;
+- the routes that group and count return only the caller's workspace's rows.
+
+`ONTOS_TEST_DATABASE_URL` names the server, without a database. The tests create
+`ontos_test` there, empty it between tests and drop it at the end; they refuse to empty any
+other database. A throwaway server will do:
+
+```bash
+docker run -d --name ontos-test-mysql -e MYSQL_ROOT_PASSWORD=test -p 127.0.0.1:33306:3306 mysql:8.4
+ONTOS_TEST_DATABASE_URL=mysql://root:test@127.0.0.1:33306 npm run test:mysql
+docker rm -f ontos-test-mysql
+```
+
+CI runs them in a job of their own against the MySQL image `compose.yaml` pins. The Docker
+job still boots the full stack and smoke-tests login, the seeded graph and an import run by
+the worker.
 
 ---
 
