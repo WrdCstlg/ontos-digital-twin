@@ -5,14 +5,16 @@
  * key at once, let exactly the limit through, and none deadlocks. Every pool
  * counts on the database's clock, whatever its sessions' time zone. A check
  * waits its turn behind a transaction that holds its row, for a bounded time.
- * And the routes answer 503, never 401 or 429, when the limit cannot be
- * counted, while the limit holds across replicas.
+ * The sweep deletes only rows idle for a day. And the routes answer 503, never
+ * 401 or 429, when the limit cannot be counted or the database cannot be
+ * reached, while the limit holds across replicas.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import mysql from "mysql2/promise";
 import { sql } from "drizzle-orm";
 import { users, workspaceMembers, workspaces } from "@db/schema";
 import { closeDb, getDb } from "../../queries/connection";
+import { env } from "../../lib/env";
 import { hashPassword } from "../../lib/password";
 import {
   LIMIT_TIMEOUT_MS,
@@ -278,6 +280,25 @@ describe("the routes, when the limit cannot be counted, and across replicas", ()
     for (let i = 0; i < 5; i++) await expect(login("wrong")).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     for (let i = 0; i < 5; i++) expect((await elsewhere.check(EMAIL)).allowed).toBe(true);
     await expect(login(PASSWORD)).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+  });
+
+  it("with the database unreachable, signing in and the Ontology API answer 503, never 401 or 429", async () => {
+    const { token } = await createToken(1, { name: "Ada", userId: 7, userRole: "admin", memberRole: "admin" }, { name: "CI", role: "viewer", scopes: ["read"] });
+    const saved = env.databaseUrl;
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await closeDb();
+    env.databaseUrl = "mysql://root:none@127.0.0.1:1/none";
+    try {
+      await expect(login(PASSWORD)).rejects.toMatchObject(unavailable);
+      const res = await publicApi.request("/ontology", { headers: { authorization: `Bearer ${token}` } });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("5");
+    } finally {
+      await closeDb();
+      env.databaseUrl = saved;
+      warned.mockRestore();
+    }
+    await expect(login(PASSWORD)).resolves.toMatchObject({ id: 7 });
   });
 
   it("the Ontology API answers 503 with retry-after, and holds a token to 300 a minute across replicas", async () => {
