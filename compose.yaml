@@ -10,6 +10,7 @@
 #   app     the Ontos server and web client, on ${ONTOS_PORT:-3000}
 #   worker  runs background jobs (CSV imports) from the queue in MySQL
 #   engine-worker  the workers' semantic engine, which their replicas share
+#   engine-host    one engine per workspace (profile engine-host; not used yet)
 #
 # Images are pinned by digest so a rebuild months from now produces the same
 # stack. Bump the tag and digest together.
@@ -157,8 +158,40 @@ services:
     volumes:
       - shacl-exchange-worker:/exchange:ro
 
+  # The engine host: one open-ontologies engine per workspace, each with a
+  # persistent store in the engine-data volume, started on demand and stopped
+  # when idle. Nothing uses it yet (the app and the worker still use engine and
+  # engine-worker; README, Engine host), so it starts only with its profile:
+  #   docker compose --profile engine-host up -d engine-host
+  # It refuses to start without ENGINE_HOST_TOKEN in .env.
+  engine-host:
+    profiles: ["engine-host"]
+    build: *app-build
+    command: ["node", "dist/engineHost.js"]
+    restart: unless-stopped
+    # tini as PID 1: it passes SIGTERM on and reaps any process Node leaves.
+    init: true
+    # On SIGTERM the host stops every engine, each within 10 s, then exits.
+    stop_grace_period: 30s
+    environment:
+      NODE_ENV: production
+      ENGINE_HOST_TOKEN: ${ENGINE_HOST_TOKEN:-}
+      ENGINE_HOST_BIND: 0.0.0.0
+      ENGINE_HOST_PORT: "8086"
+    volumes:
+      - engine-data:/var/lib/ontos-engine
+    healthcheck:
+      # The image's own healthcheck probes the web server on 3000.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8086/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
 volumes:
   db-data:
+  # The engine host's stores, one directory per workspace.
+  engine-data:
   # A small in-memory directory shared by app and engine. The engine takes SHACL
   # shapes only as a file path, so the two containers need one place both can
   # see. uid/gid 1000 is the `node` user the app image runs as, so the app can
