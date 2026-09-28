@@ -128,6 +128,11 @@ export default function Insights() {
     }
   };
 
+  // Acknowledging takes a finding off everyone's open list: an editor's or above.
+  const canAcknowledge =
+    trpc.insights.capabilities.useQuery(undefined, { retry: false, staleTime: 5 * 60_000, refetchOnWindowFocus: false }).data
+      ?.canAcknowledge ?? false;
+
   const ackMutation = trpc.insights.acknowledge.useMutation({
     onSuccess: (_data, vars) => {
       setPendingAck((s) => {
@@ -432,7 +437,7 @@ export default function Insights() {
                   insight={insight}
                   isNew={newIds.has(insight.id)}
                   onTrace={openTrace}
-                  onAcknowledge={acknowledge}
+                  onAcknowledge={canAcknowledge ? acknowledge : undefined}
                   onWatch={(row) => {
                     setWatch(row);
                     setWatchRule(row.ruleId ?? 'control-without-evidence-90d');
@@ -451,7 +456,7 @@ export default function Insights() {
       </div>
 
       {/* ── Trace drawer ───────────────────────────────────── */}
-      <TraceDrawer target={trace} onClose={() => setTrace(null)} onAcknowledge={acknowledge} />
+      <TraceDrawer target={trace} onClose={() => setTrace(null)} onAcknowledge={canAcknowledge ? acknowledge : undefined} />
 
       {/* ── Watch rule dialog ──────────────────────────────── */}
       <Dialog open={watch !== null} onOpenChange={(o) => !o && setWatch(null)}>

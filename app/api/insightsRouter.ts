@@ -12,7 +12,8 @@ import {
   auditLog,
 } from "@db/schema";
 import type { KgEdge, KgNode } from "@db/schema";
-import { createRouter, workspaceQuery, workspaceMutation } from "./middleware";
+import { createRouter, EDITOR_ROLES, workspaceQuery, workspaceMutation, workspaceOntologistMutation } from "./middleware";
+import { hasWorkspaceRole } from "./services/workspaceGuard";
 import { getDb } from "./queries/connection";
 import { scanRateLimiter } from "./lib/rateLimit";
 import { actorLabelFor, writeAudit } from "./services/audit";
@@ -531,7 +532,13 @@ export const insightsRouter = createRouter({
         .limit(input?.limit ?? 50);
     }),
 
-  acknowledge: workspaceMutation
+  /** What the caller may do with insights: the client is not told its workspace role. */
+  capabilities: workspaceQuery.query(({ ctx }) => ({
+    canAcknowledge: hasWorkspaceRole(ctx.membership, ctx.user, EDITOR_ROLES),
+  })),
+
+  /** Acknowledging takes an open finding off everyone's list, so it is an editor's or above. */
+  acknowledge: workspaceOntologistMutation
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;
@@ -542,7 +549,10 @@ export const insightsRouter = createRouter({
         .where(and(eq(insights.id, input.id), eq(insights.workspaceId, ws.id)))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: `Insight ${input.id} not found` });
-      await db.update(insights).set({ status: "acknowledged" }).where(eq(insights.id, input.id));
+      await db
+        .update(insights)
+        .set({ status: "acknowledged" })
+        .where(and(eq(insights.id, input.id), eq(insights.workspaceId, ws.id)));
       await writeAudit({
         workspaceId: ws.id,
         actor: actorLabelFor(ctx.user),

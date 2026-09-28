@@ -11,6 +11,7 @@ import {
   actionSubmissions,
   actionTypeVersions,
   connectors,
+  insights,
   iotConnectors,
   jobs,
   kgNodes,
@@ -154,6 +155,24 @@ describe("broker connectors are managed by the workspace's admins, and only its 
     expect(await caps("editor")).toEqual({ canManageBrokers: false, canIngest: true });
     expect(await caps("ontologist")).toEqual({ canManageBrokers: false, canIngest: true });
     expect(await caps("admin")).toEqual({ canManageBrokers: true, canIngest: true });
+  });
+});
+
+describe("findings are acknowledged by editors and above, in their own workspace", () => {
+  const finding = (id: number, workspaceId: number) => ({ id, workspaceId, type: "anomaly", severity: "risk", ruleId: "r1", title: `Risk ${id}`, summary: null, evidenceJson: {}, status: "open", createdAt: at });
+
+  it("a viewer cannot take a finding off the open list; an editor can, and only their workspace's", async () => {
+    put(insights, [finding(1, B.id), finding(2, A.id)]);
+    await expect(inB(mockViewerUser, "viewer").insights.acknowledge({ id: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(rows(insights).map((r) => r.status)).toEqual(["open", "open"]);
+    await inB(mockViewerUser, "editor").insights.acknowledge({ id: 1 });
+    await expect(inB(mockViewerUser, "editor").insights.acknowledge({ id: 2 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(rows(insights).map((r) => r.status)).toEqual(["acknowledged", "open"]);
+  });
+
+  it("and the client is told which, from the workspace role", async () => {
+    const can = async (role: "viewer" | "editor" | "ontologist" | "admin") => (await inB(mockViewerUser, role).insights.capabilities()).canAcknowledge;
+    expect([await can("viewer"), await can("editor"), await can("ontologist"), await can("admin")]).toEqual([false, true, true, true]);
   });
 });
 
