@@ -617,3 +617,54 @@ it or another client read less than 30 s before.
 | `session.honoured` violated in the database world | The API answered 401 when it could not check a token. A bug in its principal resolution. |
 | Many `api_action`s fail with HTTP 429 | The pacing does not keep a client under the per-token limit. A finding in the driver. |
 | Exit 4 | The lock was not taken after this commit. |
+
+# Pre-registration 10: every world judges an import
+
+Written on 2026-09-28, before any world ran with the anchor import, and
+committed with it. The maintainer, on OBS-GATE-007's first item for decision:
+"if it doesn't judge anything what kind of gate is that. This needs to be
+resolved or described."
+
+## What changes
+
+- **Driver** (`cmd/ontosload`, which the lock does not cover): a profile whose
+  mix imports (`sync` or `sync_bulk`) now begins with an anchor import.
+  - Before any client starts, the driver runs one `sync` of the first runnable
+    CSV mapping that is not a bulk fixture, and follows it to the end.
+  - It is recorded as an ordinary `sync` of process 0.
+  - It gets two attempts, a second apart. If neither succeeds, or the drive
+    ends first, the driver refuses (exit 2), and its log says why.
+- **Nothing else changes:** no oracle, covered config key, fault or mix. The
+  lock stands.
+
+## Why
+
+`sync_jobs.settle` answers inconclusive when no import ran end to end, and it
+is right to refuse to judge nothing. OBS-GATE-007 and -009 found three ways a
+world ran no import:
+- in a fault-free `api` world, which drives about 3 s and gives `sync` one pick
+  in 17, no sync was picked;
+- the syncs picked failed at the audit writer's deadlock (fixed in #14);
+- a worker-restart world finished none of its imports within the drive.
+
+What must change is the world, not the oracle.
+
+## Predictions
+
+| World | Prediction |
+|---|---|
+| Every world of pre-registrations 1 to 9 | `sync_jobs.settle` judges at least one import that ran end to end: it is never inconclusive for "no sync operation" or "none completed ok". Every other oracle, and every verdict, is as that world's pre-registration says. |
+| Any world, on a stack that cannot run the anchor import | The driver refuses with `the anchor import did not succeed…` or `the drive ended before the anchor import finished…`, and the world is INCONCLUSIVE with that reason in `driver.log`. Not expected on a healthy stack. |
+
+The anchor takes about a second of a fault-free world's three, so that world
+makes fewer other operations. The `api` world still counts only if
+`api.read_your_writes` judged a read (pre-registration 9).
+
+## What would make it come out differently
+
+| Outcome | What it would mean |
+|---|---|
+| `sync_jobs.settle` inconclusive with the anchor's `ok` in the history | The oracle does not count the anchor. A finding in the driver's reading of the oracle. |
+| The driver refuses because the anchor did not succeed | On a fault-free stack, imports are broken: a finding in Ontos. In a fault world, the fault began before the anchor finished, and the fault windows need moving. |
+| A verdict of pre-registrations 1 to 9 changes otherwise | The anchor changed a world by more than one import. A finding in the driver. |
+| Exit 4 | The lock moved. It should not have. |

@@ -37,6 +37,10 @@
 //	      definite answer, with {"found", "submissionId" (the submission its
 //	      source names as its last change), "gateNote"}.
 //
+// A profile whose mix imports begins with an anchor import: one `sync` of a
+// small CSV mapping, followed to the end before any client starts, so every
+// such world has an import to judge (anchorImport, Pre-registration 10).
+//
 // At QUIESCE the harness writes {"cmd":"stop"} on stdin and closes it. The
 // driver then stops issuing operations, ends the ones still following a job as
 // info, flushes the history and exits, well inside the drain deadline.
@@ -418,6 +422,11 @@ func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]i
 			return fmt.Errorf("the plan needs %s, but Ontos has no runnable CSV mapping for it", m.Op)
 		}
 	}
+	if planUses(pl, opSync) || planUses(pl, opSyncBulk) {
+		if err := anchorImport(ctx, pools, c, h, stop, counts, log); err != nil {
+			return err
+		}
+	}
 	var remaining atomic.Int64
 	remaining.Store(int64(pl.Ops))
 	var wg sync.WaitGroup
@@ -455,6 +464,47 @@ func runProfile(ctx context.Context, pl *plan, seed uint64, pools map[string][]i
 	wg.Wait()
 	log.printf("profile run finished (stopped=%v)", stop.fired())
 	return nil
+}
+
+// anchorAttempts bounds the anchor import: one transient failure (a slow
+// worker, a deadlock retried away) gets a second chance.
+const anchorAttempts = 2
+
+// anchorImport runs one import of a CSV mapping that is not a bulk fixture, and
+// follows it to the end, before any client starts. Every world whose mix
+// imports then holds at least one import that ran end to end, so
+// sync_jobs.settle always has a job to judge; without it a short drive could
+// pick no sync, or finish none, and the world judged nothing. It is recorded as
+// an ordinary `sync` of process 0. An anchor that does not succeed is an error:
+// a world that cannot run one import before its faults is no world to judge
+// by, and the driver says so rather than leave the oracle nothing to judge.
+// See Pre-registration 10.
+func anchorImport(ctx context.Context, pools map[string][]int64, c *client, h *history, stop *stopSignal,
+	counts *outcomeCounts, log *logger) error {
+	pool := pools[opSync]
+	if len(pool) == 0 {
+		return fmt.Errorf("the anchor import needs a CSV mapping that is not a bulk fixture, and Ontos has none")
+	}
+	mapping := pool[0]
+	key := "mapping/" + strconv.FormatInt(mapping, 10)
+	var last string
+	for attempt := 1; attempt <= anchorAttempts; attempt++ {
+		var got result
+		if doOp(h, counts, 0, 0, opSync, key, func() result { got = c.sync(ctx, mapping, stop); return got }) == schema.HistoryOK {
+			log.printf("anchor import: mapping %d succeeded as job %s", mapping, got.value)
+			return nil
+		}
+		last = got.err
+		log.printf("anchor import: attempt %d of %d on mapping %d did not succeed: %s", attempt, anchorAttempts, mapping, last)
+		if stop.fired() {
+			return fmt.Errorf("the drive ended before the anchor import finished: %s", last)
+		}
+		select {
+		case <-time.After(time.Second):
+		case <-stop.done:
+		}
+	}
+	return fmt.Errorf("the anchor import did not succeed in %d attempts: %s", anchorAttempts, last)
 }
 
 // runOperations executes a replay plan verbatim: one sequential worker per

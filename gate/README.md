@@ -57,7 +57,7 @@ receiver.
 |---|---|
 | `prothesis.yaml` | Nodes (`app`, `engine`, `db`, workers `worker-a` and `worker-b` with their engines, and `sink`, the receiver for action webhooks), health probes, driver, fault policy, oracles, profiles |
 | `compose.gate.yaml` | Images only, `restart: "no"`, every node on a `127.0.0.1` port |
-| `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, submits the gate-annotate action with `actions.submit`, or through the Ontology API with an API token per client and reads the person back, writes the history, honours the stdin drain |
+| `cmd/ontosload` | The driver: signs in once, queues imports with `mapping.runSync` and follows each job to its end, submits the gate-annotate action with `actions.submit`, or through the Ontology API with an API token per client and reads the person back, writes the history, honours the stdin drain. A profile that imports begins with one anchor import followed to its end, so every such world has an import to judge; if the anchor cannot succeed, the driver refuses and says why (Pre-registration 10) |
 | `cmd/oracle-sync-jobs` | The `sync_jobs.settle` oracle: after the world goes quiet, no sync job may still be queued or running |
 | `cmd/oracle-actions` | Two oracles on action types. `actions.durable`: every acknowledged action is still applied, every submission has one audit entry, every edit traces to an applied submission, and each person's latest gate note is in place. `actions.delivered`: every side effect of an applied action is delivered |
 | `cmd/oracle-session` | The `session.honoured` oracle: the driver's session is valid all world, so no operation may be refused as signed out (HTTP 401) |
