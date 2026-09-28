@@ -17,5 +17,8 @@ build/
 # Test coverage
 coverage/
 .nyc_output/
+# Playwright report and per-test output
+playwright-report/
+test-results/
 # Logs
 *.log
