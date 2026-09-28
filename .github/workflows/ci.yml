@@ -86,6 +86,13 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
+      mosquitto:
+        # An MQTT broker for the IoT consumer's tests: a persistent session
+        # handed from one consumer to the next. Its image's own configuration
+        # takes anonymous clients on 1883; it listens only on the runner.
+        image: eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
+        ports:
+          - 127.0.0.1:1883:1883
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -122,6 +129,8 @@ jobs:
           ONTOS_TEST_DATABASE_URL: mysql://root:ci-throwaway@127.0.0.1:3306
           # The zone the service's TZ puts its sessions in: setup fails if not.
           ONTOS_TEST_SESSION_TIME_ZONE: "+05:00"
+          # Set, the broker tests run, and fail if it does not answer.
+          ONTOS_TEST_MQTT_URL: mqtt://127.0.0.1:1883
 
   docker:
     name: Docker stack boots and serves
