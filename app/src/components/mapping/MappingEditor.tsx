@@ -151,6 +151,12 @@ export function MappingEditor({
     [properties.data, form.classIri],
   );
 
+  // A blocking check is switched back to warn only by those who define the
+  // shapes (ontologists and admins); anyone who may edit can switch it on.
+  const canRelaxShacl =
+    trpc.mapping.capabilities.useQuery(undefined, { retry: false, staleTime: 5 * 60_000, refetchOnWindowFocus: false }).data
+      ?.canRelaxShaclCheck ?? false;
+
   const saveMutation = trpc.mapping.upsertMapping.useMutation({
     onError: (err) => {
       setSaving(false);
@@ -343,6 +349,9 @@ export function MappingEditor({
 
   const mappedColumns = new Set([...Object.keys(form.fields), ...form.links.map((l) => l.column)]);
   const syncActive = form.mappingId != null && activeMappingIds.has(form.mappingId);
+  // A mapping saved as blocking stays so unless this person may relax it.
+  const savedShaclMode = mappings.find((m) => m.id === form.mappingId)?.shaclMode ?? 'warn';
+  const shaclLocked = savedShaclMode === 'block' && !canRelaxShacl;
 
   return (
     <section className="overflow-hidden rounded-xl border border-border-hairline bg-bg-panel">
@@ -422,15 +431,21 @@ export function MappingEditor({
         </button>
         <label
           className={cn(
-            'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 font-mono text-[11.5px] transition-colors',
+            'inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 font-mono text-[11.5px] transition-colors',
+            shaclLocked ? 'cursor-not-allowed' : 'cursor-pointer',
             form.shaclMode === 'block' ? 'border-risk/50 bg-risk/10 text-risk' : 'border-border-hairline text-text-muted hover:text-text-primary',
           )}
-          title="Block: an import whose rows break the class's SHACL shapes (a Violation) imports nothing. If the engine cannot check them, the import is tried twice more over a few seconds, then fails, and can be run again. Warn: it imports and records what the shapes report."
+          title={
+            shaclLocked
+              ? 'This mapping blocks imports that break its SHACL shapes. Only ontologists and admins can switch it back to warn.'
+              : "Block: an import whose rows break the class's SHACL shapes (a Violation) imports nothing. If the engine cannot check them, the import is tried twice more over a few seconds, then fails, and can be run again. Warn: it imports and records what the shapes report."
+          }
         >
           <input
             type="checkbox"
             className="size-3.5 accent-current"
             checked={form.shaclMode === 'block'}
+            disabled={shaclLocked}
             onChange={(e) => setForm((f) => ({ ...f, shaclMode: e.target.checked ? 'block' : 'warn' }))}
             aria-label="Block imports that fail SHACL"
           />

@@ -4,11 +4,13 @@ import { TRPCError } from "@trpc/server";
 import { connectors, jobs, mappings, ontologyModules, syncJobs, type Connector } from "@db/schema";
 import {
   createRouter,
+  ONTOLOGIST_ROLES,
   workspaceQuery,
   workspaceAdminMutation,
   workspaceOntologistMutation,
   workspaceOntologistQuery,
 } from "./middleware";
+import { hasWorkspaceRole } from "./services/workspaceGuard";
 import { getDb } from "./queries/connection";
 import {
   connectorEndpoint,
@@ -60,6 +62,11 @@ function storedSqlConfig(conn: Connector): SqlConnectorConfig | null {
 /* ── router ──────────────────────────────────────────────────── */
 
 export const mappingRouter = createRouter({
+  /** What the caller may do with mappings: the client is not told its workspace role. */
+  capabilities: workspaceQuery.query(({ ctx }) => ({
+    canRelaxShaclCheck: hasWorkspaceRole(ctx.membership, ctx.user, ONTOLOGIST_ROLES),
+  })),
+
   listConnectors: workspaceQuery.query(async ({ ctx }) => {
     const ws = ctx.workspace;
     const db = getDb();
@@ -240,6 +247,15 @@ export const mappingRouter = createRouter({
           .limit(1);
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${id} not found` });
         modeWas = existing.shaclMode;
+        // Switching a blocking check off lets imports that break the class's
+        // shapes in: that is for those who define the shapes. Anyone who may
+        // edit the mapping may switch it on.
+        if (modeWas === "block" && input.shaclMode === "warn" && !hasWorkspaceRole(ctx.membership, ctx.user, ONTOLOGIST_ROLES)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only ontologists and admins can switch a mapping's SHACL check from block to warn",
+          });
+        }
         await db
           .update(mappings)
           .set({
