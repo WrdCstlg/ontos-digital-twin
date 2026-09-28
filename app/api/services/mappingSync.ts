@@ -233,7 +233,10 @@ export type ImportShaclCheck =
    * or null when there are none.
    */
   | { kind: "checked"; report: ExplainedShaclReport; refusal: ExplainedShaclReport | null }
-  /** Not checked just now (the engine away or busy with another graph, a timeout); a later try may be. */
+  /**
+   * Not checked just now: the engine away, busy past the wait for it, or lost
+   * to another process mid-check; a timeout. A later try may be.
+   */
   | { kind: "unchecked"; reason: string }
   /** The engine answered that it cannot check this import (data it cannot parse, shapes it cannot read). */
   | { kind: "uncheckable"; reason: string };
@@ -247,7 +250,8 @@ const IRI_BATCH = 1000;
  * typed as the ontology declares, and the links they make, to another row or
  * to a node already in the graph, with that node's class, so links and
  * sh:class resolve (the import drops a link to anything else, and so does the
- * check). Only the rows' own results count.
+ * check). Only the rows' own results count. `signal` is the job's: aborted,
+ * it stops the check, and the waiting for the engine, at once.
  */
 export async function checkImportShacl(
   workspaceId: number,
@@ -255,6 +259,7 @@ export async function checkImportShacl(
   columnMap: ColumnMap,
   moduleKey: string,
   rows: Record<string, string>[],
+  signal?: AbortSignal,
 ): Promise<ImportShaclCheck> {
   const db = getDb();
   const [targetClass] = await db
@@ -329,20 +334,27 @@ export async function checkImportShacl(
   const dataTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId), modulePrefixes(mods));
   let raw: ShaclValidationResult;
   try {
-    raw = await semanticEngine.exclusive(async () => {
-      await semanticEngine.clearStore();
-      await semanticEngine.loadTurtle(dataTtl);
-      return semanticEngine.validateShacl(shapesTtl);
-    });
+    raw = await semanticEngine.exclusive(
+      async () => {
+        await semanticEngine.clearStore();
+        await semanticEngine.loadTurtle(dataTtl);
+        return semanticEngine.validateShacl(shapesTtl);
+      },
+      { signal },
+    );
   } catch (err) {
+    // An interrupted job stops here: it is not an import that went unchecked.
+    if (signal?.aborted) interrupted(signal);
     const reason = err instanceof Error ? err.message : String(err);
     return err instanceof EngineRequestError ? { kind: "uncheckable", reason } : { kind: "unchecked", reason };
   }
 
-  // The engine holds one graph, and the lock around clear, load and validate
-  // is this process's: another process using the same engine can load its own
-  // graph in between. A report that did not look at exactly the nodes of this
-  // class loaded here was taken on some other graph, or on none.
+  // The engine holds one graph. The lock around clear, load and validate keeps
+  // out every process that takes it, but not one that does not (the app, or a
+  // worker given an engine it takes for its own), and a request already sent
+  // when the lock was lost cannot be called back. A report that did not look
+  // at exactly the nodes of this class loaded here was taken on some other
+  // graph, or on none.
   const expected = nodes.filter((n) => n.classIri === m.classIri).length;
   if (raw.focusNodes !== expected) {
     return {
@@ -425,7 +437,7 @@ export async function runMappingSync(
   const moduleKey =
     (await db.select().from(ontologyModules).where(eq(ontologyModules.id, m.moduleId)).limit(1))[0]?.key ?? "custom";
 
-  const shacl = await checkImportShacl(workspaceId, m, columnMap, moduleKey, rows);
+  const shacl = await checkImportShacl(workspaceId, m, columnMap, moduleKey, rows, signal);
   const shaclReport = shacl.kind === "checked" ? shacl.report : null;
   const shaclNotChecked = shacl.kind === "unchecked" || shacl.kind === "uncheckable" ? shacl.reason : null;
   if (shaclNotChecked) console.warn(`[mappingSync] mapping ${m.id}: SHACL not checked: ${shaclNotChecked}`);

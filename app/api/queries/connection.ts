@@ -31,12 +31,12 @@ export function getDb(): AppDatabase {
 }
 
 /**
- * A connection of the pool's for the caller alone, for what must stay on one
- * session (a named lock). Release it, or destroy it if it may be broken.
+ * A connection of its own, outside the pool, for what must stay on one session
+ * and may change it (a named lock sets its session's idle limit). The caller
+ * closes it; nothing it does reaches a pooled connection.
  */
-export async function getPoolConnection(): Promise<mysql.PoolConnection> {
-  getDb();
-  return pool!.getConnection();
+export function openConnection(): Promise<mysql.Connection> {
+  return mysql.createConnection({ uri: env.databaseUrl, enableKeepAlive: true, keepAliveInitialDelay: 10000 });
 }
 
 export async function closeDb(): Promise<void> {
