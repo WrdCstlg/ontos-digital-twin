@@ -1,0 +1,83 @@
+
+run                           branch                         sha     profile  fault                         verdict ops inOutage a503 a401
+---                           ------                         ---     -------  -----                         ------- --- -------- ---- ----
+36371049416/r_2026_09_28_f61e ci/keep-gate-bundles           ebbc055 api      -                             PASS     62        0    0    0
+36375025596/r_2026_09_28_7555 ci/keep-gate-bundles           9a1506f api      -                             PASS     70        0    0    0
+36376669631/r_2026_09_28_d926 master                         7cafb14 api      -                             PASS     60        0    0    0
+36376688410/r_2026_09_28_b77c test/real-mysql                a9b9ed3 api      -                             PASS     71        0    0    0
+36376690059/r_2026_09_28_90c7 fix/engine-lock-across-workers 443c934 api      -                             PASS     76        0    0    0
+36378451731/r_2026_09_28_86c2 test/real-mysql                452637a api      -                             PASS     76        0    0    0
+36378454812/r_2026_09_28_a177 fix/audit-chain-deadlock       1757a77 api      -                             PASS     70        0    0    0
+36378771702/r_2026_09_28_089d fix/engine-lock-across-workers 3f32d86 api      -                             PASS     63        0    0    0
+36378913706/r_2026_09_28_1a75 docs/gate-observations-007-008 002c896 api      -                             PASS     74        0    0    0
+36371049416/r_2026_09_28_df35 ci/keep-gate-bundles           ebbc055 api      proc.restart(app)@4000..10000 PASS    308      123    0    0
+36375025596/r_2026_09_28_bec0 ci/keep-gate-bundles           9a1506f api      proc.restart(app)@4000..10000 PASS    306      134    0    0
+36376669631/r_2026_09_28_54c2 master                         7cafb14 api      proc.restart(app)@4000..10000 PASS    302      121    0    0
+36376688410/r_2026_09_28_bf66 test/real-mysql                a9b9ed3 api      proc.restart(app)@4000..10000 PASS    276      146    0    0
+36376690059/r_2026_09_28_a7c0 fix/engine-lock-across-workers 443c934 api      proc.restart(app)@4000..10000 PASS    305      134    0    0
+36378451731/r_2026_09_28_6e4f test/real-mysql                452637a api      proc.restart(app)@4000..10000 PASS    306      146    0    0
+36378454812/r_2026_09_28_48d8 fix/audit-chain-deadlock       1757a77 api      proc.restart(app)@4000..10000 PASS    304      136    0    0
+36378771702/r_2026_09_28_7fc8 fix/engine-lock-across-workers 3f32d86 api      proc.restart(app)@4000..10000 PASS    288      148    0    0
+36378913706/r_2026_09_28_d6d1 docs/gate-observations-007-008 002c896 api      proc.restart(app)@4000..10000 PASS    307      132    0    0
+36371049416/r_2026_09_28_5434 ci/keep-gate-bundles           ebbc055 api      proc.restart(db)@5000..12000  PASS    303      100   49    0
+36375025596/r_2026_09_28_6486 ci/keep-gate-bundles           9a1506f api      proc.restart(db)@5000..12000  PASS    296      109   48    0
+36376669631/r_2026_09_28_979c master                         7cafb14 api      proc.restart(db)@5000..12000  PASS    296      107   39    0
+36376688410/r_2026_09_28_17ea test/real-mysql                a9b9ed3 api      proc.restart(db)@5000..12000  PASS    289      118   38    0
+36376690059/r_2026_09_28_6e98 fix/engine-lock-across-workers 443c934 api      proc.restart(db)@5000..12000  PASS    296       99   44    0
+36378451731/r_2026_09_28_3a7d test/real-mysql                452637a api      proc.restart(db)@5000..12000  PASS    236       79   24    0
+36378454812/r_2026_09_28_4c54 fix/audit-chain-deadlock       1757a77 api      proc.restart(db)@5000..12000  PASS    312      105   54    0
+36378771702/r_2026_09_28_9a8a fix/engine-lock-across-workers 3f32d86 api      proc.restart(db)@5000..12000  PASS    256       87   33    0
+36378913706/r_2026_09_28_75f4 docs/gate-observations-007-008 002c896 api      proc.restart(db)@5000..12000  PASS    267       89   40    0
+36371049416/r_2026_09_28_ab93 ci/keep-gate-bundles           ebbc055 sessions proc.restart(db)@5000..12000  PASS    533      187   85    0
+36375025596/r_2026_09_28_854e ci/keep-gate-bundles           9a1506f sessions proc.restart(db)@5000..12000  PASS    545      160    0    0
+36376669631/r_2026_09_28_8dec master                         7cafb14 sessions proc.restart(db)@5000..12000  PASS    790      288  114    0
+36376688410/r_2026_09_28_620b test/real-mysql                a9b9ed3 sessions proc.restart(db)@5000..12000  PASS    972      381    0    0
+36376690059/r_2026_09_28_c4aa fix/engine-lock-across-workers 443c934 sessions proc.restart(db)@5000..12000  PASS    731      203  116    0
+36378451731/r_2026_09_28_e8b9 test/real-mysql                452637a sessions proc.restart(db)@5000..12000  PASS    614      207   61    0
+36378454812/r_2026_09_28_a649 fix/audit-chain-deadlock       1757a77 sessions proc.restart(db)@5000..12000  PASS    768      265  104    0
+36378771702/r_2026_09_28_bfb6 fix/engine-lock-across-workers 3f32d86 sessions proc.restart(db)@5000..12000  PASS    262        0    0    0
+36378913706/r_2026_09_28_3d9d docs/gate-observations-007-008 002c896 sessions proc.restart(db)@5000..12000  PASS    781      291  137    0
+
+
+
+
+run               sha     profile  fault                         rywJudged ryw session http500 deadlocks
+---               ---     -------  -----                         --------- --- ------- ------- ---------
+r_2026_09_28_f61e ebbc055 api      -                                    23 ok  ok            1         1
+r_2026_09_28_7555 9a1506f api      -                                    29 ok  ok            0         0
+r_2026_09_28_d926 7cafb14 api      -                                    25 ok  ok            0         0
+r_2026_09_28_b77c a9b9ed3 api      -                                    28 ok  ok            0         0
+r_2026_09_28_90c7 443c934 api      -                                    30 ok  ok            0         0
+r_2026_09_28_86c2 452637a api      -                                    30 ok  ok            0         0
+r_2026_09_28_a177 1757a77 api      -                                    28 ok  ok            0         0
+r_2026_09_28_089d 3f32d86 api      -                                    26 ok  ok            0         0
+r_2026_09_28_1a75 002c896 api      -                                    32 ok  ok            0         0
+r_2026_09_28_df35 ebbc055 api      proc.restart(app)@4000..10000       129 ok  ok            0         0
+r_2026_09_28_bec0 9a1506f api      proc.restart(app)@4000..10000       121 ok  ok            0         0
+r_2026_09_28_54c2 7cafb14 api      proc.restart(app)@4000..10000       117 ok  ok            1         0
+r_2026_09_28_bf66 a9b9ed3 api      proc.restart(app)@4000..10000       106 ok  ok            0         0
+r_2026_09_28_a7c0 443c934 api      proc.restart(app)@4000..10000       118 ok  ok            0         0
+r_2026_09_28_6e4f 452637a api      proc.restart(app)@4000..10000       127 ok  ok            0         0
+r_2026_09_28_48d8 1757a77 api      proc.restart(app)@4000..10000       127 ok  ok            0         0
+r_2026_09_28_7fc8 3f32d86 api      proc.restart(app)@4000..10000       114 ok  ok            0         0
+r_2026_09_28_d6d1 002c896 api      proc.restart(app)@4000..10000       121 ok  ok            0         0
+r_2026_09_28_5434 ebbc055 api      proc.restart(db)@5000..12000        101 ok  ok            0         0
+r_2026_09_28_6486 9a1506f api      proc.restart(db)@5000..12000        105 ok  ok            1         0
+r_2026_09_28_979c 7cafb14 api      proc.restart(db)@5000..12000        101 ok  ok            0         0
+r_2026_09_28_17ea a9b9ed3 api      proc.restart(db)@5000..12000         99 ok  ok            1         0
+r_2026_09_28_6e98 443c934 api      proc.restart(db)@5000..12000        101 ok  ok            0         0
+r_2026_09_28_3a7d 452637a api      proc.restart(db)@5000..12000         86 ok  ok            0         0
+r_2026_09_28_4c54 1757a77 api      proc.restart(db)@5000..12000        105 ok  ok            0         0
+r_2026_09_28_9a8a 3f32d86 api      proc.restart(db)@5000..12000         91 ok  ok            0         0
+r_2026_09_28_75f4 002c896 api      proc.restart(db)@5000..12000         94 ok  ok            0         0
+r_2026_09_28_ab93 ebbc055 sessions proc.restart(db)@5000..12000          0 ok  ok           14        11
+r_2026_09_28_854e 9a1506f sessions proc.restart(db)@5000..12000          0 ok  ok           10        10
+r_2026_09_28_8dec 7cafb14 sessions proc.restart(db)@5000..12000          0 ok  ok           20        16
+r_2026_09_28_620b a9b9ed3 sessions proc.restart(db)@5000..12000          0 ok  ok            3         3
+r_2026_09_28_c4aa 443c934 sessions proc.restart(db)@5000..12000          0 ok  ok           17        13
+r_2026_09_28_e8b9 452637a sessions proc.restart(db)@5000..12000          0 ok  ok            7         5
+r_2026_09_28_a649 1757a77 sessions proc.restart(db)@5000..12000          0 ok  ok            1         0
+r_2026_09_28_bfb6 3f32d86 sessions proc.restart(db)@5000..12000          0 ok  ok           14        14
+r_2026_09_28_3d9d 002c896 sessions proc.restart(db)@5000..12000          0 ok  ok           19        13
+
+
