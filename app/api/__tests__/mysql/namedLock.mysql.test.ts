@@ -3,12 +3,13 @@
  * what the scripted session in namedLock.test.ts can only imitate. Sessions
  * exclude each other. A holder whose session is killed loses the lock at once:
  * its task is stopped, another session takes the lock, and the holder's result
- * is refused. A wait called off leaves the lock free. And two engine clients
- * given one lock never run their tasks at once.
+ * is refused. A holder that goes quiet keeps the others out only for its
+ * session's idle limit. A wait called off leaves the lock free. And two engine
+ * clients given one lock never run their tasks at once.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import mysql from "mysql2/promise";
-import { lockName, LockLost, LockUnavailable, withNamedLock } from "../../lib/namedLock";
+import { lockName, LockLost, LockUnavailable, LOCK_SESSION_IDLE_SECONDS, withNamedLock } from "../../lib/namedLock";
 import { openConnection } from "../../queries/connection";
 import { testDatabase } from "./database";
 import { installEngineLock } from "../../services/engineLock";
@@ -96,6 +97,38 @@ describe("a named lock on a real MySQL", () => {
     await expect(a).rejects.toBeInstanceOf(LockLost);
     await admin.query("SELECT RELEASE_LOCK(?)", [name]);
   });
+
+  it("holds it on a session whose idle limit is its own, and whose statements no server-wide limit cuts short", async () => {
+    const name = testLock("session");
+    const settings = await withNamedLock(openConnection, name, opts, async () => {
+      const [rows] = await admin.query<mysql.RowDataPacket[]>(
+        `SELECT v.VARIABLE_NAME AS name, v.VARIABLE_VALUE AS value
+           FROM performance_schema.variables_by_thread v JOIN performance_schema.threads t ON t.THREAD_ID = v.THREAD_ID
+          WHERE t.PROCESSLIST_ID = ? AND v.VARIABLE_NAME IN ('wait_timeout', 'max_execution_time')`,
+        [await holderOf(name)],
+      );
+      return Object.fromEntries(rows.map((r) => [r.name, Number(r.value)]));
+    });
+    expect(settings).toEqual({ wait_timeout: LOCK_SESSION_IDLE_SECONDS, max_execution_time: 0 });
+  });
+
+  it("is freed by MySQL when its holder goes quiet without closing its session, once the session's idle limit passes", async () => {
+    const name = testLock("frozen");
+    // A holder frozen after taking it, as a paused process's would be: its
+    // session stays open and says nothing. Here with a 2 s idle limit.
+    const frozen = await mysql.createConnection(process.env.DATABASE_URL!);
+    frozen.on("error", () => undefined);
+    await frozen.query("SET SESSION wait_timeout = 2");
+    const [[{ got }]] = await frozen.query<mysql.RowDataPacket[]>("SELECT GET_LOCK(?, 0) AS got", [name]);
+    expect(Number(got)).toBe(1);
+
+    const waitFrom = Date.now();
+    expect(await withNamedLock(openConnection, name, { ...opts, waitSeconds: 15 }, async () => "in")).toBe("in");
+    const waited = Date.now() - waitFrom;
+    expect(waited).toBeGreaterThan(1_000);
+    expect(waited).toBeLessThan(12_000);
+    frozen.destroy();
+  }, 20_000);
 
   it("stops waiting at once when the wait is called off, and leaves the lock free for the next session", async () => {
     const name = testLock("called-off");

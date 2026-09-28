@@ -46,6 +46,17 @@ export const LOCK_SESSION_IDLE_SECONDS = 30;
 const DEFAULT_HEARTBEAT_MS = 5_000;
 /** How long a statement other than the wait may take before the session is given up. */
 const STATEMENT_MS = 10_000;
+/**
+ * How long the heartbeat's check may go unanswered before the task is told to
+ * stop. Kept short: until the task is stopped it may still send the engine
+ * requests, and a session lost without a sound (the database gone and back,
+ * its connection not yet noticed) may already have freed the lock.
+ */
+const HEARTBEAT_ANSWER_MS = 3_000;
+/** How long opening the lock's session may take. */
+const CONNECT_MS = 10_000;
+/** MySQL's longest lock name. A longer one is an error GET_LOCK answers every time. */
+const MAX_LOCK_NAME = 64;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const reasonOf = (signal: AbortSignal) => (signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
@@ -102,13 +113,23 @@ export async function withNamedLock<T>(
   task: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const { signal } = opts;
+  // Mistakes in the call, not a lock to wait for: never worth a retry.
+  if (name.length === 0 || name.length > MAX_LOCK_NAME) throw new Error(`a lock name has 1 to ${MAX_LOCK_NAME} characters (lockName makes one): '${name}'`);
+  const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  if (!(heartbeatMs > 0 && heartbeatMs + HEARTBEAT_ANSWER_MS < (LOCK_SESSION_IDLE_SECONDS * 1000) / 2)) {
+    throw new Error(`a heartbeat every ${heartbeatMs} ms would let the session idle out (${LOCK_SESSION_IDLE_SECONDS} s)`);
+  }
   const calledOff = () => new LockUnavailable(`the wait for lock ${name} was called off: ${message(signal?.reason)}`);
   if (signal?.aborted) throw calledOff();
 
   let conn: LockConnection;
+  const connecting = connect();
   try {
-    conn = await connect();
+    conn = await bounded(connecting, CONNECT_MS, () => new Error(`no connection in ${CONNECT_MS} ms`), signal);
   } catch (err) {
+    // A connection that opens after all is closed at once: its session would hold nothing.
+    connecting.then((late) => late.destroy(), () => undefined);
+    if (signal?.aborted) throw calledOff();
     throw new LockUnavailable(`could not reach the database for lock ${name}: ${message(err)}`);
   }
 
@@ -135,8 +156,10 @@ export async function withNamedLock<T>(
   try {
     let granted: unknown;
     try {
+      // A server-wide max_execution_time would cut the wait short: it applies
+      // to SELECT, and GET_LOCK is asked for in one.
       await bounded(
-        conn.query("SET SESSION wait_timeout = ?", [LOCK_SESSION_IDLE_SECONDS]),
+        conn.query("SET SESSION wait_timeout = ?, max_execution_time = 0", [LOCK_SESSION_IDLE_SECONDS]),
         STATEMENT_MS,
         () => new Error(`no answer in ${STATEMENT_MS} ms`),
         signal,
@@ -158,6 +181,7 @@ export async function withNamedLock<T>(
       throw new LockUnavailable(`could not ask for lock ${name}: ${message(err)}`);
     }
     // 1 granted; 0 the wait ran out; NULL an error.
+    if (granted === null || granted === undefined) throw new LockUnavailable(`MySQL could not take lock ${name}: GET_LOCK answered NULL, an error`);
     if (Number(granted) !== 1) throw new LockUnavailable(`lock ${name} stayed held elsewhere for ${opts.waitSeconds} s`);
     // The session can end between the grant and here, taking the lock with it.
     if (ended !== null) throw new LockLost(`lost lock ${name} as it was granted: ${ended}`);
@@ -169,7 +193,7 @@ export async function withNamedLock<T>(
     const heartbeat = setInterval(() => {
       if (beating || ended !== null) return;
       beating = true;
-      bounded(conn.query("SELECT IS_USED_LOCK(?) = CONNECTION_ID() AS mine", [name]), STATEMENT_MS, () => new Error(`no answer in ${STATEMENT_MS} ms`))
+      bounded(conn.query("SELECT IS_USED_LOCK(?) = CONNECTION_ID() AS mine", [name]), HEARTBEAT_ANSWER_MS, () => new Error(`no answer in ${HEARTBEAT_ANSWER_MS} ms`))
         .then((r) => {
           if (Number(firstValue(r, "mine")) !== 1) sessionEnded("MySQL no longer counts it as this session's");
         })
@@ -178,7 +202,7 @@ export async function withNamedLock<T>(
         // A session that did end says so by its `end` or `error`.
         .catch((err) => stopTask(new Error(`could not confirm lock ${name} is still held: checking its session failed: ${message(err)}`)))
         .finally(() => (beating = false));
-    }, opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS);
+    }, heartbeatMs);
 
     let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     try {

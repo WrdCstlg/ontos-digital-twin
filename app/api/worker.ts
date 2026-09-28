@@ -83,7 +83,8 @@ async function shutdown(signal: string) {
   stopping = true;
   console.log(`[worker] ${signal}: finishing the current job (up to 5 s), then exiting`);
   // A job still running after the grace period is aborted and goes back to the
-  // queue, so another worker (or this one, restarted) picks it up.
+  // queue, so another worker (or this one, restarted) picks it up. One with an
+  // engine request on its way ends when the engine has answered it.
   await worker.stop(5000);
   server.close();
   await closeDb().catch(() => undefined);

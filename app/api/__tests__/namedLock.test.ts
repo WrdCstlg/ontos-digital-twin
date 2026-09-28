@@ -25,7 +25,7 @@ describe("withNamedLock", () => {
 
     expect(result).toBe(42);
     expect(conn.calls).toEqual([
-      `SET SESSION wait_timeout = ? [${LOCK_SESSION_IDLE_SECONDS}]`,
+      `SET SESSION wait_timeout = ?, max_execution_time = 0 [${LOCK_SESSION_IDLE_SECONDS}]`,
       'SELECT GET_LOCK(?, ?) AS granted ["ontos:engine:x",60]',
       'SELECT RELEASE_LOCK(?) AS released ["ontos:engine:x"]',
     ]);
@@ -35,16 +35,88 @@ describe("withNamedLock", () => {
     expect(LOCK_SESSION_IDLE_SECONDS).toBeLessThanOrEqual(60);
   });
 
-  it("does not run the task when the lock stays held elsewhere, and says so", async () => {
-    for (const refused of [0, null]) {
+  it("does not run the task when the lock stays held elsewhere, or MySQL cannot take it, and says which", async () => {
+    for (const [refused, why] of [
+      [0, "lock l stayed held elsewhere for 5 s"],
+      [null, "MySQL could not take lock l: GET_LOCK answered NULL, an error"],
+    ] as const) {
       const conn = fakeLockConnection({ get: refused });
       const task = vi.fn(async () => 1);
       const run = withNamedLock(async () => conn, "l", { ...opts, waitSeconds: 5 }, task);
       await expect(run).rejects.toBeInstanceOf(LockUnavailable);
-      await expect(run).rejects.toThrow("lock l stayed held elsewhere for 5 s");
+      await expect(run).rejects.toThrow(why);
       expect(task).not.toHaveBeenCalled();
       expect(conn.end).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("refuses, without asking MySQL, a name it would refuse and a heartbeat too slow to keep the session: mistakes, never worth a retry", async () => {
+    const connect = vi.fn(async () => fakeLockConnection());
+    for (const [name, heartbeatMs] of [["", undefined], ["x".repeat(65), undefined], ["l", 20_000], ["l", 0]] as const) {
+      const run = withNamedLock(connect, name, { ...opts, heartbeatMs }, async () => 1);
+      await expect(run).rejects.toThrow();
+      await expect(run).rejects.not.toBeInstanceOf(LockUnavailable);
+    }
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  describe("bounds every statement, so a session that stops answering cannot hold the task, the lock or the process", () => {
+    const withFakeTime = async (f: () => Promise<void>) => {
+      vi.useFakeTimers();
+      try {
+        await f();
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+
+    it("gives up on a session that does not open in time, and closes it if it opens later", () =>
+      withFakeTime(async () => {
+        const conn = fakeLockConnection();
+        let open!: (c: typeof conn) => void;
+        const run = withNamedLock(() => new Promise((resolve) => (open = resolve)), "l", opts, async () => 1);
+        const refused = expect(run).rejects.toThrow(new LockUnavailable("could not reach the database for lock l: no connection in 10000 ms"));
+        await vi.advanceTimersByTimeAsync(10_000);
+        await refused;
+        open(conn);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(conn.destroy).toHaveBeenCalledTimes(1);
+        expect(conn.calls).toEqual([]);
+      }));
+
+    it("stops the task when a heartbeat goes unanswered for 3 s", () =>
+      withFakeTime(async () => {
+        const conn = fakeLockConnection({ heartbeatHangs: true });
+        let stoppedAt: number | null = null;
+        const run = withNamedLock(async () => conn, "l", { ...opts, holdMs: 60_000, heartbeatMs: 1_000 }, (signal) => {
+          signal.addEventListener("abort", () => (stoppedAt = Date.now()));
+          return untilStopped(signal);
+        });
+        const outcome = expect(run).rejects.toThrow("could not confirm lock l is still held: checking its session failed: no answer in 3000 ms");
+        const start = Date.now();
+        await vi.advanceTimersByTimeAsync(4_000);
+        await outcome;
+        expect(stoppedAt! - start).toBe(4_000);
+      }));
+
+    it("refuses the task's result when the release never answers, and destroys the session", () =>
+      withFakeTime(async () => {
+        const conn = fakeLockConnection({ releaseHangs: true });
+        const run = withNamedLock(async () => conn, "l", opts, async () => "a result");
+        const outcome = expect(run).rejects.toThrow(new LockLost("lost lock l while its task ran: releasing it failed: no answer in 10000 ms"));
+        await vi.advanceTimersByTimeAsync(10_000);
+        await outcome;
+        expect(conn.destroy).toHaveBeenCalledTimes(1);
+      }));
+
+    it("destroys a session whose closing never finishes, and keeps the task's result", () =>
+      withFakeTime(async () => {
+        const conn = fakeLockConnection({ endHangs: true });
+        const run = withNamedLock(async () => conn, "l", opts, async () => "a result");
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(run).resolves.toBe("a result");
+        expect(conn.destroy).toHaveBeenCalledTimes(1);
+      }));
   });
 
   it("releases the lock when the task fails, and passes the task's error on", async () => {
@@ -163,8 +235,9 @@ describe("withNamedLock", () => {
       new LockUnavailable("the wait for lock l was called off: worker stopping"),
     );
     expect(task).not.toHaveBeenCalled();
+    // Called off without waiting for the session; closed when it opens.
+    await vi.waitFor(() => expect(conn.destroy).toHaveBeenCalledTimes(1));
     expect(statements(conn)).not.toContain("SELECT GET_LOCK(?,");
-    expect(conn.destroy).toHaveBeenCalledTimes(1);
   });
 
   it("stops the task when the caller's signal aborts, and still releases the lock", async () => {

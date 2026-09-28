@@ -87,8 +87,9 @@ services:
     image: ontos-app:${ONTOS_GATE_TAG:?set ONTOS_GATE_TAG to the image tag under test}
     restart: "no"
     command: ["node", "dist/worker.js"]
-    # As in ../compose.yaml: time for the worker's 5 s grace on SIGTERM.
-    stop_grace_period: 15s
+    # As in ../compose.yaml: time for the worker's 5 s grace on SIGTERM, and for
+    # an engine request its job has on its way to answer.
+    stop_grace_period: 45s
     environment:
       NODE_ENV: production
       DATABASE_URL: mysql://ontos:gate-db-password@db:3306/ontos
@@ -133,8 +134,9 @@ services:
     image: ontos-app:${ONTOS_GATE_TAG:?set ONTOS_GATE_TAG to the image tag under test}
     restart: "no"
     command: ["node", "dist/worker.js"]
-    # As in ../compose.yaml: time for the worker's 5 s grace on SIGTERM.
-    stop_grace_period: 15s
+    # As in ../compose.yaml: time for the worker's 5 s grace on SIGTERM, and for
+    # an engine request its job has on its way to answer.
+    stop_grace_period: 45s
     environment:
       NODE_ENV: production
       DATABASE_URL: mysql://ontos:gate-db-password@db:3306/ontos
