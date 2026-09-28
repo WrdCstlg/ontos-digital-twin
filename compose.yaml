@@ -8,7 +8,8 @@
 #   engine  open-ontologies semantic engine (OWL-RL, SHACL, SPARQL over Oxigraph)
 #   init    one-shot: migrations, first-boot demo seed, admin account
 #   app     the Ontos server and web client, on ${ONTOS_PORT:-3000}
-#   worker  runs background jobs (CSV imports) from the queue in MySQL
+#   worker  runs background jobs (CSV imports) from the queue in MySQL, and the
+#           IoT broker connections (the app runs neither in production)
 #   engine-worker  the workers' semantic engine, which their replicas share
 #   engine-host    one engine per workspace (profile engine-host; not used yet)
 #
@@ -111,7 +112,9 @@ services:
   # within the app, so the worker has an engine apart from the app's. Replicas
   # of this service (--scale worker=N) share engine-worker: each engine task
   # takes a MySQL named lock, one per engine and database, that every replica
-  # takes too (api/services/engineLock.ts).
+  # takes too (api/services/engineLock.ts). It also connects to the IoT
+  # brokers: of several workers, only the one holding the IoT lease in MySQL
+  # does, and another takes over if it stops.
   worker:
     build: *app-build
     command: ["node", "dist/worker.js"]
