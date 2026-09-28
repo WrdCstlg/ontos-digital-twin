@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Connector } from "@db/schema";
-import { publicConnector } from "../services/connectorView";
+import { displayUrl, publicConnector, withoutUserinfo } from "../services/connectorView";
 
 const connector = (type: Connector["type"], configJson: Record<string, unknown> | null): Connector => ({
   id: 3,
@@ -61,8 +61,23 @@ describe("publicConnector shows a connector's settings by name, and nothing else
     expect(shown("erp.acme.corp/api?token=T-1")).toBe("erp.acme.corp/api");
     expect(shown("erp.acme.corp/api#access_token=T-1")).toBe("erp.acme.corp/api");
     expect(shown("svc:pa55@erp")).toBe("(hidden)");
-    expect(shown("ftp://svc:pa55@files.acme.corp/x")).toBe("(hidden)");
     expect(shown("erp.acme.corp/api")).toBe("erp.acme.corp/api");
+    // Another scheme with a host: its scheme, host and path, still without the userinfo.
+    expect(shown("ftp://svc:pa55@files.acme.corp/x?t=1")).toBe("ftp://files.acme.corp/x");
+  });
+
+  it("shows a broker's address without the login mqtt.js would read from it", () => {
+    expect(displayUrl("mqtts://svc-ontos:SENTINEL-PW@broker.example:8883")).toBe("mqtts://broker.example:8883");
+    expect(displayUrl("mqtt://localhost:1883")).toBe("mqtt://localhost:1883");
+    expect(displayUrl("wss://svc:pw@hub.example/mqtt?sig=S")).toBe("wss://hub.example/mqtt");
+    expect(displayUrl("mqtts://svc:pw@")).toBe("(hidden)");
+  });
+
+  it("leaves the user name and password out of every URL a message quotes", () => {
+    expect(withoutUserinfo("connect mqtts://svc:SENTINEL-PW@broker.example:8883 failed; retry https://u:p@h.example/x")).toBe(
+      "connect mqtts://broker.example:8883 failed; retry https://h.example/x",
+    );
+    expect(withoutUserinfo("Connection refused: Not authorized")).toBe("Connection refused: Not authorized");
   });
 
   it("carries the connector's known columns only, so a column added later does not reach clients unseen", () => {

@@ -101,6 +101,17 @@ export function IotConnectorsModal({
   // Queries & Mutations
   const connectors = trpc.iot.listConnectors.useQuery(undefined, { enabled: open });
   const webhookConfig = trpc.iot.getWebhookConfig.useQuery(undefined, { enabled: open });
+  // Brokers (and their credentials) are a workspace admin's; sending telemetry
+  // writes twin state, an editor's or above. Controls a role cannot use are
+  // left out rather than refused on click; the API refuses them either way.
+  const caps = trpc.iot.capabilities.useQuery(undefined, {
+    enabled: open,
+    retry: false,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const canManageBrokers = caps.data?.canManageBrokers ?? false;
+  const canIngest = caps.data?.canIngest ?? false;
   const upsertConnector = trpc.iot.upsertConnector.useMutation({
     onSuccess: () => {
       toast.success('IoT Broker connection saved');
@@ -121,6 +132,7 @@ export function IotConnectorsModal({
       toast.success('Broker connector removed');
       utils.iot.listConnectors.invalidate();
     },
+    onError: (err) => toast.error(err.message),
   });
   const ingestMutation = trpc.iot.ingestTelemetry.useMutation({
     onSuccess: (res) => {
@@ -221,18 +233,21 @@ export function IotConnectorsModal({
             <div className="flex items-center justify-between">
               <div className="text-xs text-muted-foreground">
                 Persistent MQTT 3.1.1/5.0 connections subscribing to live device telemetry.
+                {!canManageBrokers && ' Brokers are managed by workspace admins.'}
               </div>
-              <Button
-                size="sm"
-                variant={showAddForm ? 'outline' : 'default'}
-                onClick={() => setShowAddForm(!showAddForm)}
-                className="gap-1.5"
-              >
-                {showAddForm ? 'Cancel' : <><Plus className="w-3.5 h-3.5" /> Add Broker</>}
-              </Button>
+              {canManageBrokers && (
+                <Button
+                  size="sm"
+                  variant={showAddForm ? 'outline' : 'default'}
+                  onClick={() => setShowAddForm(!showAddForm)}
+                  className="gap-1.5"
+                >
+                  {showAddForm ? 'Cancel' : <><Plus className="w-3.5 h-3.5" /> Add Broker</>}
+                </Button>
+              )}
             </div>
 
-            {showAddForm && (
+            {showAddForm && canManageBrokers && (
               <form onSubmit={handleAddSubmit} className="border border-border/80 rounded-lg p-4 bg-muted/30 space-y-3">
                 <div className="font-medium text-sm">Configure External IoT Broker</div>
                 <div className="grid grid-cols-2 gap-3">
@@ -355,7 +370,11 @@ export function IotConnectorsModal({
                 <Server className="w-8 h-8 mx-auto text-muted-foreground/60" />
                 <p>No active IoT brokers configured yet.</p>
                 <p className="text-xs">
-                  Click <strong>Add Broker</strong> above or send data via the <strong>HTTP Webhook</strong> tab.
+                  {canManageBrokers ? (
+                    <>Click <strong>Add Broker</strong> above or send data via the <strong>HTTP Webhook</strong> tab.</>
+                  ) : (
+                    <>A workspace admin can add one, or data can arrive through the <strong>HTTP Webhook</strong>.</>
+                  )}
                 </p>
               </div>
             ) : (
@@ -395,24 +414,28 @@ export function IotConnectorsModal({
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          title={c.status === 'connected' ? 'Disconnect' : 'Connect'}
-                          onClick={() => toggleConnector.mutate({ id: c.id, enable: c.status !== 'connected' })}
-                        >
-                          <Power className={`w-4 h-4 ${c.status === 'connected' ? 'text-emerald-500' : 'text-muted-foreground'}`} />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          title="Delete"
-                          onClick={() => deleteConnector.mutate({ id: c.id })}
-                        >
-                          <Trash2 className="w-4 h-4 text-muted-foreground hover:text-red-500" />
-                        </Button>
-                      </div>
+                      {canManageBrokers && (
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title={c.status === 'connected' ? 'Disconnect' : 'Connect'}
+                            aria-label={c.status === 'connected' ? `Disconnect ${c.name}` : `Connect ${c.name}`}
+                            onClick={() => toggleConnector.mutate({ id: c.id, enable: c.status !== 'connected' })}
+                          >
+                            <Power className={`w-4 h-4 ${c.status === 'connected' ? 'text-emerald-500' : 'text-muted-foreground'}`} />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title="Delete"
+                            aria-label={`Delete ${c.name}`}
+                            onClick={() => deleteConnector.mutate({ id: c.id })}
+                          >
+                            <Trash2 className="w-4 h-4 text-muted-foreground hover:text-red-500" />
+                          </Button>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -492,14 +515,17 @@ export function IotConnectorsModal({
             </div>
 
             <div className="flex justify-between items-center pt-1">
-              <span className="text-[11px] text-muted-foreground">
-                Payload resolves device ID to twin, updates state, logs time-series, and checks insights.
+              <span id="ingest-note" className="text-[11px] text-muted-foreground">
+                {canIngest
+                  ? 'Payload resolves device ID to twin, updates state, logs time-series, and checks insights.'
+                  : 'Sending telemetry changes twin state, so it takes the editor role or above.'}
               </span>
               <Button
                 size="sm"
                 className="gap-1.5"
                 onClick={handleSendSimulator}
-                disabled={ingestMutation.isPending}
+                disabled={ingestMutation.isPending || !canIngest}
+                aria-describedby="ingest-note"
               >
                 {ingestMutation.isPending ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                 Send Test Ingest

@@ -16,14 +16,15 @@ function isPlain(v: unknown): v is string | number | boolean {
 }
 
 /**
- * Where a connector points, and nothing that could let someone in: an http(s)
- * URL's origin and path. A user name or password, the query string and the
+ * Where a connector points, and nothing that could let someone in: a URL's
+ * scheme, host and path. A user name or password, the query string and the
  * fragment are dropped, since tokens and signatures travel there (?api_key=,
- * #access_token=, an Azure SAS ?sig=). Anything that is not an http(s) URL
- * ("svc:pw@host" parses as a scheme and a path) is cut at its first ? or #,
- * and hidden if what remains could hold a user name or password.
+ * #access_token=, an Azure SAS ?sig=, mqtts://user:password@broker). Anything
+ * that is not a URL with a host ("svc:pw@host" parses as a scheme and a path)
+ * is cut at its first ? or #, and hidden if what remains could hold a user
+ * name or password.
  */
-function displayUrl(url: string): string {
+export function displayUrl(url: string): string {
   let u: URL | null = null;
   try {
     u = new URL(url);
@@ -31,8 +32,14 @@ function displayUrl(url: string): string {
     // not a URL: handled below
   }
   if (u && (u.protocol === "http:" || u.protocol === "https:")) return `${u.origin}${u.pathname}`;
+  if (u && u.host) return `${u.protocol}//${u.host}${u.pathname}`;
   const head = url.split(/[?#]/, 1)[0];
   return head.includes("@") ? "(hidden)" : head;
+}
+
+/** A message with the user name and password left out of every URL it quotes. */
+export function withoutUserinfo(text: string): string {
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]*@/gi, "$1");
 }
 
 /** A connector's settings as clients see them. */
