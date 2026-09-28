@@ -168,13 +168,69 @@ export function moduleToTurtle(
   return lines.join("\n");
 }
 
+/** Each datatype property's declared range, by the IRI a node's props use it under (fin:amount → xsd:decimal). */
+export type DatatypeRanges = ReadonlyMap<string, string>;
+
+export function datatypeRanges(properties: Pick<OntologyProperty, "iri" | "kind" | "rangeDatatype">[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const p of properties) {
+    if (p.kind !== "datatype" || !p.rangeDatatype) continue;
+    out.set(p.iri, p.rangeDatatype.startsWith("xsd:") ? p.rangeDatatype : `xsd:${p.rangeDatatype}`);
+  }
+  return out;
+}
+
+const INTEGER = /^[+-]?\d+$/;
+const DOUBLE = /^([+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?|[+-]?INF|NaN)$/;
+const TZ = "(Z|[+-]\\d{2}:\\d{2})?";
+/** XML Schema's lexical space for the datatypes an ontology here declares, after whitespace is collapsed. */
+const LEXICAL: Record<string, RegExp> = {
+  "xsd:string": /^[\s\S]*$/,
+  "xsd:decimal": /^[+-]?(\d+(\.\d*)?|\.\d+)$/,
+  "xsd:integer": INTEGER,
+  "xsd:int": INTEGER,
+  "xsd:long": INTEGER,
+  "xsd:short": INTEGER,
+  "xsd:nonNegativeInteger": /^\+?\d+$|^-0+$/,
+  "xsd:positiveInteger": /^\+?0*[1-9]\d*$/,
+  "xsd:double": DOUBLE,
+  "xsd:float": DOUBLE,
+  "xsd:boolean": /^(true|false|1|0)$/,
+  "xsd:date": new RegExp(`^-?\\d{4,}-\\d{2}-\\d{2}${TZ}$`),
+  "xsd:dateTime": new RegExp(`^-?\\d{4,}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?${TZ}$`),
+  "xsd:time": new RegExp(`^\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?${TZ}$`),
+  "xsd:gYear": new RegExp(`^-?\\d{4,}${TZ}$`),
+  "xsd:anyURI": /^\S*$/,
+};
+
+/**
+ * The literal for a value of a property with a declared range: the value
+ * typed as declared, when its lexical form is one the datatype allows (the
+ * form is collapsed first, as XML Schema does, except for strings). Otherwise
+ * null, and the value is typed from its own shape, as it always was, so a
+ * value that does not fit its declared type is still reported by SHACL.
+ */
+function declaredLiteral(value: unknown, declared: string | undefined): string | null {
+  if (!declared || !(declared in LEXICAL) || (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean")) return null;
+  const raw = String(value);
+  const lexical = declared === "xsd:string" ? raw : raw.trim();
+  return LEXICAL[declared].test(lexical) ? `"${escapeTurtleLiteral(lexical)}"^^${declared}` : null;
+}
+
 /**
  * Converts knowledge graph nodes and edges into Turtle instance data.
+ *
+ * Imports store every value as it came, a string, so without `ranges` a
+ * value is typed from its shape alone: "1234.56" became xsd:string, and a
+ * property declared xsd:decimal failed SHACL whatever its data. With the
+ * workspace's declared ranges (datatypeRanges), a value that fits its
+ * property's range is typed as declared.
  */
 export function knowledgeGraphToTurtle(
   nodes: KgNode[],
   edges: KgEdge[],
   prefixMap: Map<string, string> = buildPrefixMap(),
+  ranges?: DatatypeRanges,
 ): string {
   const lines: string[] = [];
   lines.push(serializePrefixes(prefixMap));
@@ -211,7 +267,10 @@ export function knowledgeGraphToTurtle(
         const predIri = key.includes(":") ? key : `${n.moduleKey}:${key}`;
         const formattedPred = formatIri(predIri, prefixMap);
 
-        if (typeof value === "number") {
+        const typed = declaredLiteral(value, ranges?.get(predIri));
+        if (typed) {
+          lines.push(`  ${formattedPred} ${typed} ;`);
+        } else if (typeof value === "number") {
           const type = Number.isInteger(value) ? "xsd:integer" : "xsd:decimal";
           lines.push(`  ${formattedPred} "${value}"^^${type} ;`);
         } else if (typeof value === "boolean") {
