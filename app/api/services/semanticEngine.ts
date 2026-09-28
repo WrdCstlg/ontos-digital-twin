@@ -169,8 +169,10 @@ export class SemanticEngineClient {
       }, signal);
     })();
     // The next task waits for this one, and for the one before it even when
-    // this one stopped waiting early.
-    this.queue = Promise.allSettled([previous, run]);
+    // this one stopped waiting early. Settled to nothing: the settled values
+    // would hold every task's result, each chained to the one before it, for
+    // the life of the process.
+    this.queue = Promise.allSettled([previous, run]).then(() => undefined);
     return run;
   }
 
@@ -534,7 +536,9 @@ export class SemanticEngineClient {
         child: r.child?.replace(/^<|>$/g, "") ?? "",
         ancestor: r.ancestor?.replace(/^<|>$/g, "") ?? "",
       }));
-    } catch {
+    } catch (err) {
+      // A task told to stop stops: an empty list would read as a result.
+      if (this.currentTaskSignal()?.aborted) throw err;
       // If SPARQL query fails, inferred list stays empty
     }
 
@@ -554,8 +558,9 @@ export class SemanticEngineClient {
           issues.push(`Unsatisfiable/inconsistent class detected: ${row.c}`);
         }
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      // As above: "no issues" from a stopped task would read as consistent.
+      if (this.currentTaskSignal()?.aborted) throw err;
     }
 
     const durationMs = Date.now() - started;

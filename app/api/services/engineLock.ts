@@ -15,22 +15,25 @@ export const ENGINE_LOCK_WAIT_SECONDS = 180;
 /** How long an engine task may hold the engine before it is told to stop. */
 export const ENGINE_LOCK_HOLD_MS = 120_000;
 
-const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
+/** The ways a URL names this host itself. */
+const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)$/i;
 
 /**
  * Which engine a URL reaches, for telling processes that share one from those
  * that do not. ENGINE_LOCK_KEY, when set, names it outright: processes that
  * reach one engine by different URLs (a name and an address, say) set the
- * same key. Otherwise the URL, normalised; an engine on loopback is this
- * host's own, so the host's name is part of it.
+ * same key. Otherwise the URL, normalised. An engine on loopback is this
+ * host's own, however the URL spells loopback, so it is named by the host.
  */
 export function engineIdentity(engineUrl: string, explicitKey?: string, hostname = os.hostname()): string {
   const key = explicitKey?.trim();
   if (key) return `key ${key}`;
   const u = new URL(engineUrl);
   const port = u.port || (u.protocol === "https:" ? "443" : "80");
-  const where = `${u.protocol}//${u.hostname}:${port}${u.pathname.replace(/\/+$/, "")}`;
-  return LOOPBACK.test(u.hostname) ? `${where} on ${hostname.toLowerCase()}` : where;
+  const path = u.pathname.replace(/\/+$/, "");
+  return LOOPBACK.test(u.hostname)
+    ? `${u.protocol}//loopback:${port}${path} on ${hostname.toLowerCase()}`
+    : `${u.protocol}//${u.hostname}:${port}${path}`;
 }
 
 /**

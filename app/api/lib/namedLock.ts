@@ -61,15 +61,18 @@ export function lockName(scope: string, key: string): string {
 }
 
 /**
- * Settles as `p` does, or rejects when `ms` pass or `signal` aborts. mysql2
- * never settles a statement on a connection closed from this side, so a wait
- * is never left to it alone.
+ * Settles as `p` does, or rejects when `ms` pass or `signal` aborts (at once,
+ * if it already has). A peer that has gone quiet never answers, and a
+ * statement on a connection closed from this side settles only when the
+ * server notices, so no wait is left to the statement alone.
  */
 function bounded<T>(p: Promise<T>, ms: number, timedOut: () => Error, signal?: AbortSignal): Promise<T> {
   p.catch(() => undefined);
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(timedOut()), ms);
     const onAbort = () => reject(reasonOf(signal!));
+    // A listener added to a signal that has already aborted never fires.
+    if (signal?.aborted) onAbort();
     signal?.addEventListener("abort", onAbort, { once: true });
     p.then(resolve, reject).finally(() => {
       clearTimeout(timer);
@@ -170,7 +173,10 @@ export async function withNamedLock<T>(
         .then((r) => {
           if (Number(firstValue(r, "mine")) !== 1) sessionEnded("MySQL no longer counts it as this session's");
         })
-        .catch((err) => sessionEnded(`checking its session failed: ${message(err)}`))
+        // Unanswered is not proof the lock is gone (a slow network, a busy
+        // server): the task is stopped to be safe, and the release decides.
+        // A session that did end says so by its `end` or `error`.
+        .catch((err) => stopTask(new Error(`could not confirm lock ${name} is still held: checking its session failed: ${message(err)}`)))
         .finally(() => (beating = false));
     }, opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS);
 
@@ -184,6 +190,8 @@ export async function withNamedLock<T>(
       clearInterval(heartbeat);
     }
 
+    // Only a release MySQL confirms shows the lock was held throughout: then
+    // the task's outcome stands, whatever a heartbeat left unanswered.
     phase = "done";
     let released: unknown = null;
     if (ended === null) {
