@@ -57,7 +57,9 @@ jobs:
       - name: Test
         run: npm --prefix app test
         env:
-          # The engine tests spawn the daemon from this binary themselves.
+          # The engine tests spawn the daemon from this binary themselves, and
+          # the engine host's live tests their engines. With CI set, a missing
+          # binary fails the host's live tests rather than skipping them.
           OPEN_ONTOLOGIES_BIN: ${{ github.workspace }}/bin/open-ontologies
 
       - name: Build
@@ -153,6 +155,12 @@ jobs:
 
       - name: Build and start the stack
         run: docker compose up --detach --build
+
+      # The app image carries the engine binary for the engine host. Its
+      # self-test starts one scratch engine from it, loads three triples,
+      # checks them with SHACL and runs a reasoning dry run.
+      - name: The engine host's self-test passes in the app image
+        run: docker compose run --rm --no-deps app node dist/engineHost.js --self-test
 
       - name: Wait for the app to report healthy
         run: |

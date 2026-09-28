@@ -218,6 +218,7 @@ required; `docker compose` refuses to start without them.
 | `SECRETS_KEY_PREVIOUS` | no | When rotating `SECRETS_KEY`, the old key: the next start re-seals what it sealed under the new one. Remove it afterwards. |
 | `ALLOW_DEMO_LOGIN` | no | `true` re-enables persona login. Local demos only — see [Signing in](#signing-in). |
 | `ALLOWED_ORIGINS` | no | Cross-origin allowlist. The bundled client is same-origin and needs nothing here. |
+| `ENGINE_HOST_TOKEN` | no | Only for the `engine-host` service (profile `engine-host`, not used yet), which refuses to start without it. See [Engine host](#engine-host-not-used-yet). |
 
 ### Application
 
@@ -245,6 +246,7 @@ required; `docker compose` refuses to start without them.
 | `OPEN_ONTOLOGIES_BIN` | no | — | Explicit path to the engine binary |
 | `ACTION_WEBHOOK_ALLOW_PRIVATE` | no | `false` | `true` lets action webhooks reach loopback and private addresses (for receivers inside your network) |
 | `VITE_APP_ID` | no | — | Application identifier exposed to the browser |
+| `ENGINE_HOST_*` | no | — | The engine host's settings: see [Engine host](#engine-host-not-used-yet) |
 
 ---
 
@@ -293,6 +295,92 @@ in-process subclass walker, and SHACL validation is skipped — see
 
 ---
 
+## Engine host (not used yet)
+
+`dist/engineHost.js` is the service that runs one semantic engine per workspace. Nothing
+uses it yet: the app and the worker still use `engine` and `engine-worker`, and moving
+their reads and writes over is a later change.
+
+It keeps one open-ontologies process per workspace, each with a persistent RocksDB store
+of its own in `ENGINE_HOST_DATA_DIR/ws-<id>`, and it is the only process that starts them.
+
+- An engine starts on the first request for its workspace, and stops after
+  `ENGINE_HOST_IDLE_MS` without one; its store stays on disk. At most
+  `ENGINE_HOST_MAX_ENGINES` run: to start another, the least recently used idle one stops.
+  An engine with a request in flight is never stopped.
+- An engine that exits starts again on a later request, after 1, 2, 4 … up to 60 s.
+- A store whose RocksDB `LOCK` another process holds is `locked`: its requests get 503,
+  and the host never resets or deletes it. Three other failed opens in a row mark a store
+  `corrupt`, kept in its `host.json`; only a reset clears that.
+- Each store has an **incarnation**, a random id that changes with every reset. Updates
+  and loads name it in `x-ontos-incarnation`, so a writer working from an old store cannot
+  write into its replacement.
+- The host answers `/health` itself. An engine answers nothing, its own `/health`
+  included, while it works on a long request; the host never waits on one for this.
+- A request past its route's timeout gets 504. The engine keeps working on it and counts as
+  busy until it answers; at twice the timeout the host stops it.
+- Scratch engines (in memory) validate data that is in no store yet: each serves one
+  request at a time and is emptied before and after it.
+
+| Route (bearer token, but `/health`) | Does |
+|---|---|
+| `GET /health` | The host's own liveness |
+| `GET /v1/workspaces/{id}/status` | Answers at once: `cold`, `starting`, `ready`, `busy`, `failed`, `locked` or `corrupt`, with the pid, incarnation, last start, and requests in flight |
+| `POST /v1/workspaces/{id}/query` | `{"query"}`: the engine's answer. `x-engine-busy-ms` says how long the engine was already busy with others |
+| `POST /v1/workspaces/{id}/update` | `{"query"}`: a SPARQL UPDATE of at most 2 MiB, the most the engine reads. Needs the incarnation |
+| `POST /v1/workspaces/{id}/load` | Turtle, N-Triples or TriG, by content type, of any size up to `ENGINE_HOST_LOAD_MAX_BYTES`: streamed to a file under the data root, which the engine loads. Needs the incarnation |
+| `POST /v1/workspaces/{id}/shacl` | Shapes (Turtle): the SHACL report over the whole store |
+| `POST /v1/workspaces/{id}/reason` | `{"profile"}`: a reasoning dry run through the engine's MCP endpoint. Counts and samples; the store is not changed |
+| `POST /v1/workspaces/{id}/reset` | Empties the store; answers its new incarnation |
+| `DELETE /v1/workspaces/{id}` | Stops the engine and deletes the store |
+| `POST /v1/scratch/validate` | `{"data", "shapes"}` (Turtle): the SHACL report of the data alone, on a scratch engine |
+
+Errors are `{"error": {"code", "message"}}`. A 4xx says asking again will not help: 422
+the engine refused (the engine's message), 409 a stale incarnation or a corrupt store, 413
+a body too large. A 5xx says a later try may pass: 503 with `retry-after` for a locked,
+failed or busy engine, 504 a timeout. `app/api/services/engineHostClient.ts` is a typed
+client for every route, which splits its errors the same way. A SHACL report's `conforms`
+is `null` when no shape's target selected anything (the engine's own answer).
+
+```bash
+docker compose --profile engine-host up -d engine-host   # needs ENGINE_HOST_TOKEN in .env
+cd app && npm run build
+ENGINE_HOST_DEV=true node dist/engineHost.js             # no token, loopback only, stores in .ontos-engines/
+node dist/engineHost.js --self-test                      # a scratch engine: load, SHACL, dry-run reasoning
+```
+
+`--self-test` proves the engine binary runs where the host does: CI runs it in the app
+image, which carries the binary from the digest-pinned engine image.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ENGINE_HOST_TOKEN` | — | Bearer token for every route but `/health`, 32+ characters. Required, unless `ENGINE_HOST_DEV=true` |
+| `ENGINE_HOST_DEV` | `false` | Local development: no token, and loopback only |
+| `ENGINE_HOST_BIND` / `ENGINE_HOST_PORT` | `127.0.0.1` / `8086` | Where the host listens |
+| `ENGINE_HOST_DATA_DIR` | `.ontos-engines` (the image: `/var/lib/ontos-engine`) | The stores; the host refuses a directory it did not make |
+| `ENGINE_HOST_BIN` | `OPEN_ONTOLOGIES_BIN`, then `bin/` (the image: `/usr/local/bin/open-ontologies`) | The engine binary |
+| `ENGINE_HOST_MAX_ENGINES` | `16` | Workspace engines running at once |
+| `ENGINE_HOST_IDLE_MS` | `600000` | An engine idle this long stops |
+| `ENGINE_HOST_START_TIMEOUT_MS` | `10000` | An engine must be ready within this, plus 15 s per million triples in its store |
+| `ENGINE_HOST_SCRATCH_ENGINES` | `2` | Scratch engines |
+| `ENGINE_HOST_SCRATCH_WAIT_MS` | `10000` | How long a scratch validation waits for a free one before 503 |
+| `ENGINE_HOST_LOAD_MAX_BYTES` | `2147483648` | Largest load body (413 beyond) |
+| `ENGINE_HOST_SCRATCH_MAX_BYTES` | `67108864` | Largest scratch validation body |
+| `ENGINE_HOST_QUERY_TIMEOUT_MS`, `_UPDATE_`, `_LOAD_`, `_SHACL_`, `_REASON_`, `_SCRATCH_` | 30 s, 60 s, 10 min, 5 min, 5 min, 2 min | Each route's timeout |
+| `ENGINE_HOST_URL` | `http://127.0.0.1:8086` | For the client: where the host is (it sends `ENGINE_HOST_TOKEN`) |
+
+**One host per data root.** Two hosts must not share a data root. A later change enforces
+that with a lock in MySQL. Until then RocksDB's `LOCK` is the safety net: a second host
+cannot open a store the first holds, reports it `locked`, and never resets or deletes it.
+
+**Stopping.** On SIGTERM the host stops taking requests, lets those in flight finish for up
+to 5 s, stops every engine and exits; its next start reopens each store from disk. A host
+killed outright leaves no engines behind in a container or on Windows, but on Linux
+outside a container its engines keep running and holding their stores: until they are
+stopped, the next host reports those workspaces `locked`.
+
+---
+
 ## Scripts
 
 Run from `app/`.
@@ -300,7 +388,7 @@ Run from `app/`.
 | Command | Description |
 |---|---|
 | `npm run dev` | Vite dev server + API on port 3000 |
-| `npm run build` | Production build → `dist/public` (client) and `dist/boot.js` (server) |
+| `npm run build` | Production build → `dist/public` (client), `dist/boot.js` (server), `dist/worker.js` and `dist/engineHost.js` |
 | `npm run build:db` | Bundle the bootstrap and seed scripts → `dist/db/` |
 | `npm run db:bootstrap` | Migrate, seed an empty database, provision the admin account |
 | `npm start` | Serve the production build |
@@ -337,12 +425,15 @@ app/
 │   ├── queries/             Database access helpers
 │   ├── services/            Business logic
 │   │   ├── semanticEngine.ts    open-ontologies client (reasoning, SHACL, SPARQL)
+│   │   ├── engineHost/          The engine host: supervisor, routes, scratch pool, MCP client
+│   │   ├── engineHostClient.ts  Typed client for the engine host
 │   │   ├── rdfBridge.ts         Schema/instance ⇄ Turtle serialization
 │   │   ├── explainableShacl.ts  Justification trees and remediation guidance
 │   │   ├── nlq.ts               Natural language → SQL translation
 │   │   ├── twinModels.ts        DTDL model definitions
 │   │   └── audit.ts             Hash-linked audit chain
 │   ├── boot.ts              App entry: middleware, health, SPARQL, tRPC mount
+│   ├── engineHost.ts        Engine host entry: one engine per workspace (not used yet)
 │   ├── middleware.ts        Procedure builders (public/authed/ontologist/admin)
 │   └── *Router.ts           ontology, graph, mapping, insights, nlq, twin, dashboard, admin
 ├── contracts/               Types and constants shared by client and server
@@ -612,6 +703,13 @@ ingestion, DTDL v3 export, workspace isolation, the semantic-engine lock, and th
 client-side graph analytics. The `semanticEngine.test.ts` cases are **live integration
 tests**: they start the engine daemon themselves from the local binary, so they need the
 binary in place (see [Semantic engine](#semantic-engine)) but not a daemon already running.
+
+The engine host's supervisor policy (limits, idle stops, backoff, `locked` against
+`corrupt`) is tested on fake engine processes and a fake clock, its routes on fake engines
+over HTTP, and its MCP client on a fake server. `engineHostLive.test.ts` and
+`engineHostClient.test.ts` then run the host, and its client, on the real binary
+(`OPEN_ONTOLOGIES_BIN`), each test with a data root of its own. Without a binary they are
+skipped, except in CI, where they fail.
 
 Router tests call tRPC procedures with a mock context and a mocked or in-memory database,
 and `bootRoutes.test.ts` does the same for the plain HTTP routes. They check permissions,
