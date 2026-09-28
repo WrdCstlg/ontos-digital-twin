@@ -1,9 +1,6 @@
 import { useRef } from 'react';
-import gsap from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { useGSAP } from '@gsap/react';
-
-gsap.registerPlugin(ScrollTrigger, useGSAP);
+import { motion, useScroll, useTransform, type MotionValue } from 'framer-motion';
+import { useMediaQuery, usePrefersReducedMotion } from '@/components/home/motion';
 
 const SILOS = [
   {
@@ -23,50 +20,45 @@ const SILOS = [
   },
 ];
 
+/** The scroll timeline, in its own units: where each step starts and ends (0 to END). */
+const END = 1.05;
+const at = (from: number, to: number) => [from / END, to / END];
+
+/** A value that runs from `a` to `b` over [from, to] of the timeline, or holds `b` when nothing moves. */
+function useStep<T extends number | string>(p: MotionValue<number>, from: number, to: number, a: T, b: T, moving: boolean) {
+  const v = useTransform(p, at(from, to), [a, b] as T[]);
+  return moving ? v : b;
+}
+
 /**
  * Problem section — sticky copy left; right shows three silo cards that
- * scatter, then get connected by self-drawing iris edges on scroll.
+ * scatter, then get connected by self-drawing iris edges on scroll. On a wide
+ * screen the stage holds still while the page scrolls 140% of the viewport
+ * past it, and the timeline follows the scroll; on a narrow one, or with
+ * reduced motion, the connected cluster is shown as it ends.
  */
 export function ProblemSection() {
-  const root = useRef<HTMLElement>(null);
+  const track = useRef<HTMLDivElement>(null);
+  const wide = useMediaQuery('(min-width: 1024px)');
+  const reduced = usePrefersReducedMotion();
+  const moving = wide && !reduced;
 
-  useGSAP(
-    () => {
-      const mm = gsap.matchMedia();
-      mm.add('(min-width: 1024px)', () => {
-        const tl = gsap.timeline({
-          scrollTrigger: {
-            trigger: '.problem-stage',
-            start: 'top 20%',
-            end: '+=140%',
-            scrub: 0.6,
-            pin: true,
-          },
-        });
-        // Phase 2: walls dissolve, edges draw themselves
-        tl.to('.silo-wall', { opacity: 0, filter: 'blur(6px)', duration: 0.35 }, 0.3)
-          .fromTo(
-            '.silo-edge path',
-            { strokeDashoffset: 320 },
-            { strokeDashoffset: 0, duration: 0.45, stagger: 0.12, ease: 'none' },
-            0.32,
-          )
-          .fromTo('.silo-edge-label', { opacity: 0 }, { opacity: 1, duration: 0.2 }, 0.55)
-          // Phase 3: connected cluster lifts + glows, caption appears
-          .to('.silo-stack', { y: -20, scale: 1.02, duration: 0.3, ease: 'power2.out' }, 0.7)
-          .to('.silo-card', { boxShadow: '0 0 44px -12px rgba(99,102,241,0.35)', duration: 0.3 }, 0.7)
-          .fromTo('.silo-caption', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.25 }, 0.8);
-        return () => {
-          tl.scrollTrigger?.kill();
-          tl.kill();
-        };
-      });
-    },
-    { scope: root },
-  );
+  const { scrollYProgress: p } = useScroll({ target: track, offset: ['start 20%', 'end end'] });
+  // Walls dissolve, edges draw themselves (the second 0.12 later), their labels appear.
+  const wallOpacity = useStep(p, 0.3, 0.65, 1, 0, moving);
+  const wallBlur = useStep(p, 0.3, 0.65, 'blur(0px)', 'blur(6px)', moving);
+  const edge1 = useStep(p, 0.32, 0.77, 320, 0, moving);
+  const edge2 = useStep(p, 0.44, 0.89, 320, 0, moving);
+  const labelOpacity = useStep(p, 0.55, 0.75, 0, 1, moving);
+  // The connected cluster lifts and glows, and the caption appears.
+  const stackY = useStep(p, 0.7, 1.0, 0, -20, moving);
+  const stackScale = useStep(p, 0.7, 1.0, 1, 1.02, moving);
+  const glow = useStep(p, 0.7, 1.0, '0px 0px 0px 0px rgba(99,102,241,0)', '0px 0px 44px -12px rgba(99,102,241,0.35)', moving);
+  const captionOpacity = useStep(p, 0.8, END, 0, 1, moving);
+  const captionY = useStep(p, 0.8, END, 12, 0, moving);
 
   return (
-    <section ref={root} className="relative mx-auto max-w-[1200px] px-6 py-28">
+    <section className="relative mx-auto max-w-[1200px] px-6 py-28">
       <div className="grid gap-14 lg:grid-cols-[40%_1fr]">
         {/* Sticky copy */}
         <div className="lg:sticky lg:top-28 lg:self-start">
@@ -81,67 +73,77 @@ export function ProblemSection() {
           </p>
         </div>
 
-        {/* Animated silo cards */}
-        <div className="problem-stage relative">
-          <div className="silo-stack relative space-y-6">
-            {/* dashed silo walls */}
-            <div
-              className="silo-wall pointer-events-none absolute -left-4 top-0 h-full w-px"
-              style={{
-                backgroundImage: 'repeating-linear-gradient(to bottom, #334155 0 6px, transparent 6px 12px)',
-              }}
-              aria-hidden
-            />
-            {SILOS.map((s, i) => (
-              <div
-                key={s.name}
-                className="silo-card relative rounded-xl border border-border-hairline bg-bg-panel p-5"
+        {/* Animated silo cards: the track is the scroll the stage holds still through */}
+        <div ref={track} className={moving ? 'relative pb-[140vh]' : 'relative'}>
+          <div className={moving ? 'sticky top-[20vh]' : undefined}>
+            <motion.div className="relative space-y-6" style={{ y: stackY, scale: stackScale }}>
+              {/* dashed silo walls */}
+              <motion.div
+                className="pointer-events-none absolute -left-4 top-0 h-full w-px"
                 style={{
-                  transform: `rotate(${i === 1 ? 1.6 : -1.6}deg)`,
-                  boxShadow: '0 0 0 0 rgba(0,0,0,0)',
+                  backgroundImage: 'repeating-linear-gradient(to bottom, #334155 0 6px, transparent 6px 12px)',
+                  opacity: wallOpacity,
+                  filter: wallBlur,
                 }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="size-2 rounded-full" style={{ backgroundColor: s.color }} />
-                  <span className="font-mono text-[12px] font-medium" style={{ color: s.color }}>
-                    {s.name}
-                  </span>
-                </div>
-                <pre className="mt-3 overflow-x-auto rounded-lg bg-bg-inset p-3 font-mono text-[11.5px] leading-relaxed text-text-secondary">
-                  {s.rows.join('\n')}
-                </pre>
-              </div>
-            ))}
+                aria-hidden
+              />
+              {SILOS.map((s, i) => (
+                <motion.div
+                  key={s.name}
+                  className="relative rounded-xl border border-border-hairline bg-bg-panel p-5"
+                  style={{ rotate: i === 1 ? 1.6 : -1.6, boxShadow: glow }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="size-2 rounded-full" style={{ backgroundColor: s.color }} />
+                    <span className="font-mono text-[12px] font-medium" style={{ color: s.color }}>
+                      {s.name}
+                    </span>
+                  </div>
+                  <pre className="mt-3 overflow-x-auto rounded-lg bg-bg-inset p-3 font-mono text-[11.5px] leading-relaxed text-text-secondary">
+                    {s.rows.join('\n')}
+                  </pre>
+                </motion.div>
+              ))}
 
-            {/* iris edges drawing between cards */}
-            <svg className="silo-edge pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
-              <path
-                d="M 30 120 C -30 190, -30 260, 30 330"
-                fill="none"
-                stroke="#818CF8"
-                strokeWidth="1.5"
-                strokeDasharray="320"
-                strokeDashoffset="320"
-              />
-              <path
-                d="M 30 330 C -30 400, -30 470, 30 540"
-                fill="none"
-                stroke="#818CF8"
-                strokeWidth="1.5"
-                strokeDasharray="320"
-                strokeDashoffset="320"
-              />
-            </svg>
-            <div className="silo-edge-label pointer-events-none absolute -left-2 top-[200px] -rotate-90 font-mono text-[10px] text-iris-bright opacity-0">
-              hr:Person —signs→ legal:Contract
-            </div>
-            <div className="silo-edge-label pointer-events-none absolute -left-2 top-[430px] -rotate-90 font-mono text-[10px] text-iris-bright opacity-0">
-              cmp:Control —monitors→ fin:Transaction
-            </div>
+              {/* iris edges drawing between cards */}
+              <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+                <motion.path
+                  d="M 30 120 C -30 190, -30 260, 30 330"
+                  fill="none"
+                  stroke="#818CF8"
+                  strokeWidth="1.5"
+                  strokeDasharray="320"
+                  style={{ strokeDashoffset: edge1 }}
+                />
+                <motion.path
+                  d="M 30 330 C -30 400, -30 470, 30 540"
+                  fill="none"
+                  stroke="#818CF8"
+                  strokeWidth="1.5"
+                  strokeDasharray="320"
+                  style={{ strokeDashoffset: edge2 }}
+                />
+              </svg>
+              <motion.div
+                className="pointer-events-none absolute -left-2 top-[200px] -rotate-90 font-mono text-[10px] text-iris-bright"
+                style={{ opacity: labelOpacity }}
+              >
+                hr:Person —signs→ legal:Contract
+              </motion.div>
+              <motion.div
+                className="pointer-events-none absolute -left-2 top-[430px] -rotate-90 font-mono text-[10px] text-iris-bright"
+                style={{ opacity: labelOpacity }}
+              >
+                cmp:Control —monitors→ fin:Transaction
+              </motion.div>
+            </motion.div>
+            <motion.p
+              className="mt-8 text-center font-mono text-[12px] uppercase tracking-[0.12em] text-iris-bright"
+              style={{ opacity: captionOpacity, y: captionY }}
+            >
+              One graph. Every function.
+            </motion.p>
           </div>
-          <p className="silo-caption mt-8 text-center font-mono text-[12px] uppercase tracking-[0.12em] text-iris-bright opacity-0">
-            One graph. Every function.
-          </p>
         </div>
       </div>
     </section>

@@ -138,4 +138,4 @@ Please do not open public issues for vulnerabilities — see [SECURITY.md](SECUR
 ## License
 
 By contributing, you agree that your contributions are licensed under the
-[Apache License 2.0](LICENSE).
+[GNU Affero General Public License v3.0 only](LICENSE) (AGPL-3.0-only).

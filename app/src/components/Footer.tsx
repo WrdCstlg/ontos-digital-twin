@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { StatusDot } from '@/components/ui/status-dot';
+import { LICENSE_NAME, SOURCE_URL } from '@/lib/source';
 
 const PRODUCT_LINKS = [
   { label: 'Platform', href: '/#platform' },
@@ -77,9 +78,19 @@ export function Footer() {
           </div>
         </div>
 
-        {/* Bottom bar */}
+        {/* Bottom bar. AGPL section 13: every visitor is offered the source, here as on sign-in and in the app. */}
         <div className="mt-14 flex flex-col items-start justify-between gap-3 border-t border-border-hairline pt-6 sm:flex-row sm:items-center">
-          <span className="text-[13px] text-text-muted">© 2025 Ontos Systems</span>
+          <span className="text-[13px] text-text-muted">
+            © 2026 Senan Sumrein and Pierce Partners ·{' '}
+            <a
+              href={SOURCE_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-text-secondary underline underline-offset-2 transition-colors hover:text-text-primary"
+            >
+              Source code ({LICENSE_NAME})
+            </a>
+          </span>
           <span className="font-mono text-[11.5px] text-text-muted">
             Demo build — fictional Acme Corp data
           </span>

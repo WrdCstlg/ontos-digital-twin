@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   MapIcon,
   Menu,
+  Code2,
   PanelLeftClose,
   PanelLeftOpen,
   PencilRuler,
@@ -25,6 +26,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { LICENSE_NAME, SOURCE_URL } from '@/lib/source';
 import { StatusDot, type StatusKind } from '@/components/ui/status-dot';
 import { trpc } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
@@ -409,6 +411,21 @@ export function AppShell() {
               </span>
             )}
           </div>
+          {/* AGPL section 13: every user is offered the source of what they are using. */}
+          <a
+            href={SOURCE_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Source code (${LICENSE_NAME})`}
+            title={rail ? `Source code (${LICENSE_NAME})` : undefined}
+            className={cn(
+              'flex items-center gap-2 rounded-lg px-2 py-1 text-text-muted transition-colors hover:bg-bg-panel-raised hover:text-text-primary',
+              rail && 'justify-center px-0',
+            )}
+          >
+            <Code2 className="size-3.5" />
+            {!rail && <span className="text-[11.5px]">Source code · {LICENSE_NAME}</span>}
+          </a>
           <button
             type="button"
             onClick={() => setCollapsed((c) => !c)}

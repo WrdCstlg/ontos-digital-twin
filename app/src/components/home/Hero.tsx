@@ -1,76 +1,43 @@
-import { Suspense, lazy, useRef, useState } from 'react';
+import { Suspense, lazy, useRef } from 'react';
 import { Link } from 'react-router';
-import gsap from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { SplitText } from 'gsap/SplitText';
-import { useGSAP } from '@gsap/react';
+import { motion, useScroll, useTransform } from 'framer-motion';
 import { ArrowRight } from 'lucide-react';
-
-gsap.registerPlugin(ScrollTrigger, SplitText, useGSAP);
+import { EXPO_OUT, usePrefersReducedMotion } from '@/components/home/motion';
 
 const HeroGraph = lazy(() => import('@/components/home/HeroGraph'));
 
-function usePrefersReducedMotion() {
-  const [reduced] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-  );
-  return reduced;
-}
+const HEADLINE = ['Your enterprise already has the data.', 'Ontos gives it meaning.'];
 
 /**
  * Hero — "The Living Graph". Full-viewport R3F constellation behind a
- * centered content column; GSAP SplitText headline entrance; scroll-driven
- * scale/fade (hero is pinned by the page for 160vh equivalent).
+ * centered content column; a word-by-word headline entrance; scroll-driven
+ * scale/fade as the hero leaves. With reduced motion, everything is still.
  */
 export function Hero() {
   const root = useRef<HTMLElement>(null);
   const reduced = usePrefersReducedMotion();
 
-  useGSAP(
-    () => {
-      if (reduced) return;
+  // The content scales and fades as the hero scrolls away, and the scroll
+  // hint fades over the first 120 px.
+  const { scrollYProgress } = useScroll({ target: root, offset: ['start start', 'end 35%'] });
+  const { scrollY } = useScroll();
+  const contentScale = useTransform(scrollYProgress, [0, 1], [1, 0.92]);
+  const contentOpacity = useTransform(scrollYProgress, [0, 1], [1, 0]);
+  const hintOpacity = useTransform(scrollY, [0, 120], [1, 0]);
 
-      // H1 word-level split entrance
-      const split = new SplitText('.hero-h1 .line', { type: 'words' });
-      gsap.from(split.words, {
-        y: 40,
-        rotation: 2,
-        opacity: 0,
-        duration: 0.9,
-        stagger: 0.07,
-        ease: 'expo.out',
-        delay: 0.3,
-      });
-      gsap.from('.hero-rise', {
-        y: 24,
-        opacity: 0,
-        duration: 0.8,
-        stagger: 0.12,
-        ease: 'expo.out',
-        delay: 1.0,
-      });
-
-      // Scroll-driven: content scales/fades as the hero scrolls away
-      gsap.to('.hero-content', {
-        scale: 0.92,
-        opacity: 0,
-        ease: 'none',
-        scrollTrigger: {
-          trigger: root.current,
-          start: 'top top',
-          end: 'bottom 35%',
-          scrub: true,
-        },
-      });
-      gsap.to('.hero-scroll-hint', {
-        opacity: 0,
-        scrollTrigger: { trigger: root.current, start: 'top top', end: '+=120', scrub: true },
-      });
-
-      return () => split.revert();
-    },
-    { scope: root },
-  );
+  // Rise in after the headline: each element staggered by 0.12 s.
+  let rise = 0;
+  const riseIn = () => {
+    const i = rise++;
+    return reduced
+      ? {}
+      : {
+          initial: { y: 24, opacity: 0 },
+          animate: { y: 0, opacity: 1 },
+          transition: { duration: 0.8, delay: 1.0 + i * 0.12, ease: EXPO_OUT },
+        };
+  };
+  let word = 0;
 
   return (
     <section ref={root} className="relative -mt-16 flex min-h-[100dvh] items-center justify-center overflow-hidden bg-bg-void">
@@ -104,19 +71,47 @@ export function Hero() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_55%_45%_at_50%_55%,rgba(7,11,20,0.72),transparent_75%)]" />
 
       {/* Content */}
-      <div className="hero-content relative z-10 mx-auto flex max-w-[840px] flex-col items-center px-6 pb-28 pt-32 text-center">
-        <p className="hero-rise text-[11px] font-medium uppercase tracking-[0.14em] text-iris-bright">
+      <motion.div
+        className="relative z-10 mx-auto flex max-w-[840px] flex-col items-center px-6 pb-28 pt-32 text-center"
+        style={reduced ? undefined : { scale: contentScale, opacity: contentOpacity }}
+      >
+        <motion.p {...riseIn()} className="text-[11px] font-medium uppercase tracking-[0.14em] text-iris-bright">
           Business-Function Ontology Platform · v1.0
-        </p>
-        <h1 className="hero-h1 mt-6 font-display text-[44px] font-bold leading-[1.05] tracking-[-0.03em] text-text-primary sm:text-[60px] lg:text-[72px]">
-          <span className="line block">Your enterprise already has the data.</span>
-          <span className="line block text-gradient-iris">Ontos gives it meaning.</span>
+        </motion.p>
+        <h1
+          className="mt-6 font-display text-[44px] font-bold leading-[1.05] tracking-[-0.03em] text-text-primary sm:text-[60px] lg:text-[72px]"
+          aria-label={HEADLINE.join(' ')}
+        >
+          {HEADLINE.map((line, li) => (
+            <span key={line} className={li === 1 ? 'block text-gradient-iris' : 'block'} aria-hidden>
+              {line.split(' ').map((w, wi, words) => {
+                const i = word++;
+                return (
+                  <span key={wi}>
+                    <motion.span
+                      className="inline-block"
+                      {...(reduced
+                        ? {}
+                        : {
+                            initial: { y: 40, rotate: 2, opacity: 0 },
+                            animate: { y: 0, rotate: 0, opacity: 1 },
+                            transition: { duration: 0.9, delay: 0.3 + i * 0.07, ease: EXPO_OUT },
+                          })}
+                    >
+                      {w}
+                    </motion.span>
+                    {wi < words.length - 1 ? ' ' : null}
+                  </span>
+                );
+              })}
+            </span>
+          ))}
         </h1>
-        <p className="hero-rise mt-6 max-w-[560px] text-[17px] leading-relaxed text-text-secondary">
+        <motion.p {...riseIn()} className="mt-6 max-w-[560px] text-[17px] leading-relaxed text-text-secondary">
           Model HR, Legal, Compliance, Finance, and Logistics as versioned ontologies. Map real data onto them.
           Watch a living knowledge graph surface the risks, gaps, and redundancies your silos were hiding.
-        </p>
-        <div className="hero-rise mt-9 flex flex-wrap items-center justify-center gap-4">
+        </motion.p>
+        <motion.div {...riseIn()} className="mt-9 flex flex-wrap items-center justify-center gap-4">
           <Link
             to="/app"
             className="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-iris-deep to-iris px-6 py-3 text-[15px] font-medium text-white shadow-[0_0_32px_-8px_rgba(99,102,241,0.6)] transition-transform duration-150 hover:scale-[1.02]"
@@ -134,10 +129,13 @@ export function Hero() {
           >
             Explore the architecture
           </a>
-        </div>
+        </motion.div>
 
         {/* Stat strip */}
-        <div className="hero-rise mt-16 flex items-stretch gap-0 rounded-xl border border-border-hairline bg-bg-panel/40 backdrop-blur">
+        <motion.div
+          {...riseIn()}
+          className="mt-16 flex items-stretch gap-0 rounded-xl border border-border-hairline bg-bg-panel/40 backdrop-blur"
+        >
           {[
             ['5', 'ontology modules'],
             ['10M+', 'edge scale target'],
@@ -151,15 +149,19 @@ export function Hero() {
               </div>
             </div>
           ))}
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
 
       {/* Scroll indicator */}
-      <div className="hero-scroll-hint absolute bottom-6 left-1/2 z-10 -translate-x-1/2" aria-hidden>
+      <motion.div
+        className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2"
+        style={reduced ? undefined : { opacity: hintOpacity }}
+        aria-hidden
+      >
         <div className="relative h-12 w-px overflow-hidden bg-border-hairline">
           <span className="absolute left-0 top-0 h-2 w-px animate-[scrolldot_1.8s_ease-in-out_infinite] bg-iris-bright" />
         </div>
-      </div>
+      </motion.div>
       <style>{`@keyframes scrolldot { 0% { transform: translateY(-8px); opacity: 0 } 30% { opacity: 1 } 100% { transform: translateY(48px); opacity: 0 } }`}</style>
     </section>
   );

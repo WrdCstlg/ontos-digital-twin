@@ -1,7 +1,7 @@
 # Ontos
 
 [![CI](https://github.com/WrdCstlg/ontos-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/WrdCstlg/ontos-digital-twin/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Hono 4](https://img.shields.io/badge/Hono-4-E36002?logo=hono&logoColor=white)](https://hono.dev/)
@@ -238,6 +238,8 @@ required; `docker compose` refuses to start without them.
 | `ALLOW_DEMO_LOGIN` | no | `true` re-enables persona login. Local demos only — see [Signing in](#signing-in). |
 | `ALLOWED_ORIGINS` | no | Cross-origin allowlist. The bundled client is same-origin and needs nothing here. |
 | `ENGINE_HOST_TOKEN` | no | For the `engine-host` service (profile `engine-host`), which refuses to start without it, and for the app and worker to reach it (`ENGINE_HOST_URL`). See [Engine host](#engine-host). |
+| `VITE_SOURCE_URL` | no | Build-time. Where the app's **Source code** link points. A deployment that runs a modified Ontos must set it to where that version's source is published (see [License](#license)). Rebuild after changing it: `docker compose up --build`. |
+| `VITE_SOURCE_COMMIT` | no | Build-time. The commit the image is built from, so that without `VITE_SOURCE_URL` the link points at that version upstream. |
 
 ### Application
 
@@ -268,6 +270,8 @@ required; `docker compose` refuses to start without them.
 | `ONTOS_IOT_CONSUMER` | no | on in the worker; in the web process, as `ONTOS_EMBEDDED_WORKER` | Whether a process runs the IoT consumer. Of those that do, only the one holding its lease connects to brokers, so `true` on several adds standbys, not connections. The Docker stack runs it in the worker |
 | `IOT_MQTT_VERSION` | no | `4` (MQTT 3.1.1) | `5` connects the `IOT_BROKER_URL` broker with MQTT 5.0 |
 | `VITE_APP_ID` | no | — | Application identifier exposed to the browser |
+| `VITE_SOURCE_URL` | no | this repository | Read when the client is built. Where the app's "Source code" link points; a deployment that runs a modified Ontos must set it to where that version's source is published (see [License](#license)). |
+| `VITE_SOURCE_COMMIT` | no | — | Read when the client is built. The commit it is built from: without `VITE_SOURCE_URL`, the link points at that commit upstream. |
 | `ENGINE_HOST_*` | no | — | The engine host's settings: see [Engine host](#engine-host) |
 
 ---
@@ -1043,3 +1047,18 @@ These are tracked, known behaviours rather than surprises:
   on. Run `docker compose down -v` to start clean.
 - The largest client bundles are the vendor chunks: Three.js at ~890 kB (~240 kB gzipped)
   for the landing page's 3D graph, and Cytoscape and React at ~560 kB each.
+
+## License
+
+Copyright 2026 Senan Sumrein and Pierce Partners.
+
+Ontos is free software: you can redistribute it and/or modify it under the terms of the
+[GNU Affero General Public License](LICENSE), version 3 only (AGPL-3.0-only), as published
+by the Free Software Foundation. It is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the license for more details.
+
+If you run a modified version for others over a network, section 13 requires that you
+offer them its source. Set `VITE_SOURCE_URL` to where you publish it when you build the
+client (it is a build argument for Docker). The app's **Source code** link, on the landing
+page, the sign-in page and in the sidebar, then points there.

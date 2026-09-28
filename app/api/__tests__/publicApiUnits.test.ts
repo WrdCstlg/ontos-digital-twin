@@ -181,6 +181,11 @@ describe("generateTypeScriptSdk", () => {
     expect(sdk).not.toMatch(/^import /m);
   });
 
+  it("says it is Ontos's, under the AGPL, as everything Ontos serves is", () => {
+    expect(sdk.split("\n")[0]).toBe("// SPDX-License-Identifier: AGPL-3.0-only");
+    expect(sdk).toContain("GNU Affero General Public License v3.0 only");
+  });
+
   it("gives callers types that catch mistakes at compile time", () => {
     const usage = `
 const client = new OntosClient({ baseUrl: "https://ontos.example", token: "t" });
