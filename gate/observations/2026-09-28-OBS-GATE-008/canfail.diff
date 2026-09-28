@@ -1,0 +1,21 @@
+diff --git a/app/api/publicApiRoutes.ts b/app/api/publicApiRoutes.ts
+index 60f3633..7b515c2 100644
+--- a/app/api/publicApiRoutes.ts
++++ b/app/api/publicApiRoutes.ts
+@@ -187,9 +187,16 @@ publicApi.get("/objects", async (c) => {
+   if (refused) return refused;
+   const iri = c.req.query("iri");
+   if (!iri || iri.length > MAX_IRI) return fail(c, 400, "invalid_query", `Give the object's IRI: ?iri=… (at most ${MAX_IRI} characters).`);
++  // CAN-FAIL CHECK (pre-registration 9), scratch worktree only: answer from a
++  // copy of each object kept for 30 s.
++  const key = `${c.var.model.workspace.id} ${iri}`;
++  const kept = staleCopies.get(key);
++  if (kept && Date.now() - kept.at < 30_000) return c.json(kept.object);
+   const object = await getObject(c.var.model, iri);
++  if (object) staleCopies.set(key, { at: Date.now(), object });
+   return object ? c.json(object) : fail(c, 404, "not_found", `No object ${iri}.`);
+ });
++const staleCopies = new Map<string, { at: number; object: object }>();
+ 
+ publicApi.get("/objects/:prefix/:localName", async (c) => {
+   const refused = needScope(c, "read");
