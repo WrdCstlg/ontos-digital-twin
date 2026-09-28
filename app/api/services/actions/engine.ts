@@ -101,12 +101,12 @@ export function scopeOf(moduleScope: unknown): string[] {
 /**
  * Whether this person may submit an action of `minRole` in `moduleKey`. A
  * system administrator always may; anyone else needs the role in the workspace
- * (or as their account role) and, if their membership is scoped to modules,
- * the action's module among them.
+ * (the account's own role does not count: the workspace decides) and, if their
+ * membership is scoped to modules, the action's module among them.
  */
 export function checkSubmitter(s: Submitter, minRole: ActionRole, moduleKey: string): Problem | null {
   if (s.userRole === "admin") return null;
-  const rank = Math.max(rankOf(s.memberRole), rankOf(s.userRole));
+  const rank = rankOf(s.memberRole);
   if (rank < RANK[minRole]) {
     return { code: "forbidden_role", message: `Submitting this action needs the ${minRole} role or higher` };
   }

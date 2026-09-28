@@ -99,6 +99,14 @@ describe("mappings belong to a workspace through their connector", () => {
 describe("broker connectors are managed by the workspace's admins, and only its own", () => {
   const upsert = (id?: number) => ({ id, name: "Mine", brokerType: "mqtt" as const, endpointUrl: "mqtts://mine.example:8883", authType: "none" as const, connectNow: true });
 
+  it("the workspace role decides: an account-level editor who is a viewer here cannot feed a broker", async () => {
+    const accountEditor = { ...mockViewerUser, role: "editor" } as User;
+    await expect(inB(accountEditor, "viewer").iot.ingestTelemetry({ points: [] })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await inB(accountEditor, "viewer").iot.capabilities()).toEqual({ canManageBrokers: false, canIngest: false });
+    // A platform admin's account role still counts, as it must to administer the platform.
+    expect(await inB(mockAdminUser, "viewer").iot.capabilities()).toEqual({ canManageBrokers: true, canIngest: true });
+  });
+
   it("a viewer can neither save, connect, delete nor feed a broker", async () => {
     const viewer = inB(mockViewerUser, "viewer");
     await expect(viewer.iot.upsertConnector(upsert())).rejects.toMatchObject({ code: "FORBIDDEN" });

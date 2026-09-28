@@ -93,6 +93,12 @@ describe("creating a token", () => {
     await expect(createToken(1, creator, { name: "x", role: "editor", scopes: ["read"] })).rejects.toBeInstanceOf(TokenRefused);
     await expect(createToken(1, creator, { name: "x", role: "viewer", scopes: [] })).rejects.toBeInstanceOf(TokenRefused);
   });
+
+  it("measures the creator by their role in this workspace, not their account's", async () => {
+    // An account-level ontologist who is a viewer here mints a viewer's tokens at most.
+    const creator = { name: "O", userId: 2, userRole: "ontologist", memberRole: "viewer" };
+    await expect(createToken(1, creator, { name: "x", role: "editor", scopes: ["read"] })).rejects.toBeInstanceOf(TokenRefused);
+  });
 });
 
 describe("seeing and revoking tokens", () => {

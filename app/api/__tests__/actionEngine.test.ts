@@ -75,7 +75,9 @@ describe("checkSubmitter", () => {
   it("lets a system admin through, and holds others to the role and the module scope", () => {
     expect(checkSubmitter({ userRole: "admin", memberRole: "viewer", moduleScope: ["legal"] }, "admin", "hr")).toBeNull();
     expect(checkSubmitter({ userRole: "user", memberRole: "viewer", moduleScope: null }, "editor", "hr")?.code).toBe("forbidden_role");
-    expect(checkSubmitter({ userRole: "ontologist", memberRole: "viewer", moduleScope: null }, "ontologist", "hr")).toBeNull();
+    // The workspace role decides: an account-level ontologist who is a viewer here is a viewer.
+    expect(checkSubmitter({ userRole: "ontologist", memberRole: "viewer", moduleScope: null }, "ontologist", "hr")?.code).toBe("forbidden_role");
+    expect(checkSubmitter({ userRole: "viewer", memberRole: "ontologist", moduleScope: null }, "ontologist", "hr")).toBeNull();
     expect(checkSubmitter({ userRole: "user", memberRole: "editor", moduleScope: ["legal"] }, "editor", "hr")?.code).toBe("forbidden_scope");
     expect(checkSubmitter({ userRole: "user", memberRole: "editor", moduleScope: '["hr"]' }, "editor", "hr")).toBeNull();
     expect(checkSubmitter({ userRole: "user", memberRole: "editor", moduleScope: [] }, "editor", "finance")).toBeNull();
