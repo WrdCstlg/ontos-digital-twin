@@ -28,6 +28,8 @@ export type LimitTable = {
   down?: Error;
   /** Set, the first statement matching `match` fails with `error`. */
   failing?: { match: RegExp; error: Error };
+  /** Called before each statement runs, to change the rows as another process would meanwhile. */
+  onStatement?: (sql: string) => void;
   /** Every statement run, in order. */
   log?: { sql: string; values: unknown[]; timeout?: number }[];
   /** Every connection handed out, and how it ended. */
@@ -39,7 +41,11 @@ const STATEMENTS = {
   read: /^SELECT hits, TIMESTAMPDIFF\(MICROSECOND, '1970-01-01 00:00:00', UTC_TIMESTAMP\(6\)\) DIV 1000 AS now FROM rate_limit_windows WHERE bucket = \? AND subject = \? FOR UPDATE$/,
   write: /^UPDATE rate_limit_windows SET hits = \? WHERE bucket = \? AND subject = \?$/,
   delete: /^DELETE FROM rate_limit_windows WHERE bucket = \? AND subject = \?$/,
+  idle: /^SELECT bucket, subject FROM rate_limit_windows WHERE updatedAt < NOW\(3\) - INTERVAL \? HOUR ORDER BY updatedAt LIMIT \?$/,
+  deleteIfIdle: /^DELETE FROM rate_limit_windows WHERE bucket = \? AND subject = \? AND updatedAt < NOW\(3\) - INTERVAL \? HOUR$/,
 };
+
+const HOUR = 3_600_000;
 
 function connection(table: LimitTable) {
   const state = { released: false, destroyed: false };
@@ -60,6 +66,7 @@ function connection(table: LimitTable) {
     const sql = opts.sql.replace(/\s+/g, " ").trim();
     const v = opts.values ?? [];
     (table.log ??= []).push({ sql, values: v, timeout: opts.timeout });
+    table.onStatement?.(sql);
     if (table.failing?.match.test(sql)) {
       const { error } = table.failing;
       table.failing = undefined;
@@ -97,6 +104,25 @@ function connection(table: LimitTable) {
       const had = read(key) ? 1 : 0;
       write(key, null);
       return ok(had);
+    }
+    if (STATEMENTS.idle.test(sql)) {
+      const cutoff = now() - Number(v[0]) * HOUR;
+      const idle = [...table.rows]
+        .filter(([, row]) => row.updatedAt < cutoff)
+        .sort(([, a], [, b]) => a.updatedAt - b.updatedAt)
+        .slice(0, Number(v[1]))
+        .map(([key]) => {
+          const [bucket, subject] = key.split("/");
+          return { bucket, subject };
+        });
+      return [idle];
+    }
+    if (STATEMENTS.deleteIfIdle.test(sql)) {
+      const key = `${v[0]}/${v[1]}`;
+      const row = read(key);
+      if (!row || row.updatedAt >= now() - Number(v[2]) * HOUR) return ok(0);
+      write(key, null);
+      return ok(1);
     }
     throw new Error(`memoryRateLimits: unsupported statement: ${sql}`);
   }

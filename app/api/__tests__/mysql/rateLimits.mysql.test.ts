@@ -14,7 +14,14 @@ import { sql } from "drizzle-orm";
 import { users, workspaceMembers, workspaces } from "@db/schema";
 import { closeDb, getDb } from "../../queries/connection";
 import { hashPassword } from "../../lib/password";
-import { LIMIT_TIMEOUT_MS, RateLimitUnavailable, RateLimiter, authRateLimiter, limitSubject } from "../../lib/rateLimit";
+import {
+  LIMIT_TIMEOUT_MS,
+  RateLimitUnavailable,
+  RateLimiter,
+  authRateLimiter,
+  limitSubject,
+  sweepIdleRateLimits,
+} from "../../lib/rateLimit";
 import { appRouter } from "../../router";
 import { publicApi, publicApiRateLimiter } from "../../publicApiRoutes";
 import { createToken } from "../../services/publicApi/tokens";
@@ -193,6 +200,43 @@ describe("one limiter", () => {
     expect(err).toBeInstanceOf(RateLimitUnavailable);
     expect((err as RateLimitUnavailable).cause).toMatchObject({ code: "ECONNREFUSED" });
     expect(Date.now() - started).toBeLessThan(LIMIT_TIMEOUT_MS + 1_000);
+  });
+});
+
+describe("the sweep of idle rows", () => {
+  const limiter = new RateLimiter("sweep", { windowMs: 60_000, max: 5 });
+  /** Moves a row's last use back by `interval`, as if no request had come since. */
+  const idleFor = (key: string, interval: string) =>
+    getDb().execute(
+      sql`update rate_limit_windows set updatedAt = now(3) - interval ${sql.raw(interval)} where bucket = 'sweep' and subject = ${limitSubject(key)}`,
+    );
+  const left = async () => (await rowsOf("sweep")).map((r) => r.subject).sort();
+
+  it("deletes only the rows idle for a day, oldest first and a batch at a time", async () => {
+    for (const key of ["3 days", "2 days", "25 hours", "23 hours", "fresh"]) await limiter.check(key);
+    await idleFor("3 days", "3 day");
+    await idleFor("2 days", "2 day");
+    await idleFor("25 hours", "25 hour");
+    await idleFor("23 hours", "23 hour");
+
+    expect(await sweepIdleRateLimits({ batch: 2 })).toBe(2);
+    expect(await left()).toEqual(["25 hours", "23 hours", "fresh"].map(limitSubject).sort());
+    expect(await sweepIdleRateLimits({ batch: 2 })).toBe(1);
+    expect(await sweepIdleRateLimits()).toBe(0);
+    expect(await left()).toEqual(["23 hours", "fresh"].map(limitSubject).sort());
+  });
+
+  it("keeps a row a request used again, however long it had been idle: every write marks it used", async () => {
+    await limiter.check("back");
+    await idleFor("back", "2 day");
+    await limiter.check("back");
+    expect(await sweepIdleRateLimits()).toBe(0);
+
+    // A release that changes the log marks it too.
+    await idleFor("back", "2 day");
+    await limiter.release("back");
+    expect(await sweepIdleRateLimits()).toBe(0);
+    expect(await left()).toEqual([limitSubject("back")]);
   });
 });
 

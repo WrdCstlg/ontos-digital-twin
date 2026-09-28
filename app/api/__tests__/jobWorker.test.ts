@@ -48,6 +48,7 @@ function fakeQueue(claims: ClaimResult[], opts: { renew?: boolean; failOutcome?:
       calls.registered++;
     }),
     heartbeat: vi.fn(async () => undefined),
+    sweep: vi.fn(async () => 0),
   };
   return { q, calls, drained: () => pending.length === 0 };
 }
@@ -184,6 +185,67 @@ describe("JobWorker", () => {
     await w.stop(1000);
     expect(calls.complete).toEqual([{ id: 13, result: { ok: true } }]);
     expect(w.status().state).toBe("stopped");
+  });
+
+  it("sweeps idle rate-limit rows on its heartbeat, at most once per sweepMs and one sweep at a time", async () => {
+    const { q } = fakeQueue([]);
+    const starts: number[] = [];
+    let inFlight = 0;
+    let most = 0;
+    q.sweep = vi.fn(async () => {
+      starts.push(Date.now());
+      most = Math.max(most, ++inFlight);
+      await new Promise((r) => setTimeout(r, 40));
+      inFlight--;
+      return 3;
+    });
+    const lines: string[] = [];
+    const w = new JobWorker({ id: "w-test", handlers: {}, queue: q, pollMs: 5, heartbeatMs: 10, sweepMs: 60, log: (l) => lines.push(l) });
+    workers.push(w);
+    w.start();
+
+    await until(() => starts.length >= 3);
+    expect(most).toBe(1);
+    // Heartbeats every 10 ms; sweeps start no sooner than 60 ms apart.
+    for (let i = 1; i < starts.length; i++) expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(59);
+    expect(lines).toContain("deleted 3 rate-limit rows idle for a day");
+  });
+
+  it("logs a failed sweep, goes on running jobs, and sweeps again later", async () => {
+    const { q, calls } = fakeQueue([]);
+    q.sweep = vi.fn(async () => Promise.reject(new Error("connect ECONNREFUSED")));
+    const lines: string[] = [];
+    const w = new JobWorker({ id: "w-test", handlers: { "test.kind": { run: async () => ({}) } }, queue: q, pollMs: 5, heartbeatMs: 10, sweepMs: 20, log: (l) => lines.push(l) });
+    workers.push(w);
+    w.start();
+
+    await until(() => vi.mocked(q.sweep).mock.calls.length >= 2);
+    expect(lines).toContain("sweep failed: connect ECONNREFUSED");
+    vi.mocked(q.claim).mockResolvedValueOnce({ kind: "claimed", job: makeJob({ id: 16 }) });
+    await until(() => calls.complete.length === 1);
+    expect(w.status().state).toBe("running");
+  });
+
+  it("on stop, lets a sweep under way finish, and starts no other", async () => {
+    const { q } = fakeQueue([]);
+    let finish: () => void = () => undefined;
+    q.sweep = vi.fn(() => new Promise<number>((resolve) => (finish = () => resolve(0))));
+    const w = new JobWorker({ id: "w-test", handlers: {}, queue: q, pollMs: 5, heartbeatMs: 10, sweepMs: 10, log: () => {} });
+    workers.push(w);
+    w.start();
+    await until(() => vi.mocked(q.sweep).mock.calls.length === 1);
+
+    let stopped = false;
+    const stopping = w.stop(50).then(() => {
+      stopped = true;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stopped).toBe(false);
+    finish();
+    await stopping;
+    expect(w.status().state).toBe("stopped");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(q.sweep).toHaveBeenCalledOnce();
   });
 
   it("on stop, aborts a job still running after the grace period and sends it back to the queue", async () => {

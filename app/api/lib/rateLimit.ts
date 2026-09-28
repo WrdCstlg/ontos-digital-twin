@@ -150,7 +150,7 @@ const sameLog = (a: readonly number[], b: readonly number[]) => a.length === b.l
 type Statement = (sql: string, values?: unknown[]) => Promise<unknown>;
 
 function timedOut(waitingFor: string): Error {
-  return Object.assign(new Error(`timed out waiting for ${waitingFor} (${LIMIT_TIMEOUT_MS} ms)`), { code: "ETIMEDOUT" });
+  return Object.assign(new Error(`timed out waiting for ${waitingFor}`), { code: "ETIMEDOUT" });
 }
 
 /** A connection from the pool before `deadline`. One that comes later goes straight back. */
@@ -300,6 +300,40 @@ export class RateLimiter {
       throw new RateLimitUnavailable(this.bucket, err);
     }
   }
+}
+
+/** The most idle rows one sweep deletes. */
+export const SWEEP_BATCH = 500;
+
+/** A sweep, every wait and delete included, stops after this long; the next one goes on. */
+const SWEEP_TIMEOUT_MS = 10_000;
+
+const IDLE_ROWS = "SELECT bucket, subject FROM rate_limit_windows WHERE updatedAt < NOW(3) - INTERVAL ? HOUR ORDER BY updatedAt LIMIT ?";
+const DELETE_IF_IDLE = "DELETE FROM rate_limit_windows WHERE bucket = ? AND subject = ? AND updatedAt < NOW(3) - INTERVAL ? HOUR";
+
+/**
+ * Deletes the rows no request has touched for IDLE_HOURS, oldest first, at
+ * most `batch` of them: every time they hold has left its window. The worker
+ * calls it every minute (services/jobs/worker.ts). It returns how many it
+ * deleted.
+ *
+ * It reads the idle rows without locking them, then deletes each by its key,
+ * and only if it is still idle once locked, so a row a check has just used
+ * stays. A DELETE through the updatedAt index would lock index entries before
+ * rows, the reverse of a check's order, and could deadlock with one.
+ */
+export async function sweepIdleRateLimits(opts: { batch?: number; pool?: () => Pool } = {}): Promise<number> {
+  const batch = opts.batch ?? SWEEP_BATCH;
+  const pool = (opts.pool ?? getPool)();
+  return withConnection(pool, Date.now() + SWEEP_TIMEOUT_MS, async (run) => {
+    const idle = (await run(IDLE_ROWS, [IDLE_HOURS, batch])) as RowDataPacket[];
+    let deleted = 0;
+    for (const { bucket, subject } of idle) {
+      const result = (await run(DELETE_IF_IDLE, [bucket, subject, IDLE_HOURS])) as ResultSetHeader;
+      deleted += result.affectedRows;
+    }
+    return deleted;
+  });
 }
 
 /**

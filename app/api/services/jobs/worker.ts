@@ -1,6 +1,7 @@
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import type { Job } from "@db/schema";
+import { sweepIdleRateLimits } from "../../lib/rateLimit";
 import * as queue from "./queue";
 
 /** A failure that retrying cannot fix, such as a job whose target was deleted. */
@@ -31,6 +32,8 @@ export type QueueOps = {
   fail: typeof queue.failJobAttempt;
   register: typeof queue.registerWorker;
   heartbeat: typeof queue.workerHeartbeat;
+  /** Housekeeping beside the queue: deletes rate-limit rows idle for a day, a batch at a time. */
+  sweep: () => Promise<number>;
 };
 
 const mysqlQueue: QueueOps = {
@@ -40,6 +43,7 @@ const mysqlQueue: QueueOps = {
   fail: queue.failJobAttempt,
   register: queue.registerWorker,
   heartbeat: queue.workerHeartbeat,
+  sweep: () => sweepIdleRateLimits(),
 };
 
 export type WorkerOptions = {
@@ -51,6 +55,8 @@ export type WorkerOptions = {
   pollMs?: number;
   /** How often the worker's row in `workers` is refreshed. */
   heartbeatMs?: number;
+  /** How often, at the most, a heartbeat also sweeps (QueueOps.sweep). */
+  sweepMs?: number;
   queue?: Partial<QueueOps>;
   log?: (line: string) => void;
 };
@@ -80,6 +86,7 @@ export class JobWorker {
   private readonly leaseSeconds: number;
   private readonly pollMs: number;
   private readonly heartbeatMs: number;
+  private readonly sweepMs: number;
   private readonly version: string | null;
   private readonly log: (line: string) => void;
 
@@ -88,6 +95,8 @@ export class JobWorker {
   private loopDone: Promise<void> = Promise.resolve();
   private wake: (() => void) | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private sweeping: Promise<void> | null = null;
+  private lastSweepAt = 0;
   private succeeded = 0;
   private failed = 0;
   private lastLoopAt = 0;
@@ -100,6 +109,7 @@ export class JobWorker {
     this.leaseSeconds = opts.leaseSeconds ?? queue.DEFAULT_LEASE_SECONDS;
     this.pollMs = opts.pollMs ?? 1000;
     this.heartbeatMs = opts.heartbeatMs ?? 5000;
+    this.sweepMs = opts.sweepMs ?? 60_000;
     this.version = opts.version ?? null;
     this.log = opts.log ?? ((line) => console.log(`[worker ${this.id}] ${line}`));
   }
@@ -133,6 +143,8 @@ export class JobWorker {
     }
     await this.loopDone;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    // A sweep under way finishes (its statements are bounded) before the pool closes.
+    await this.sweeping;
     this.state = "stopped";
     await this.beat();
   }
@@ -159,6 +171,28 @@ export class JobWorker {
       });
     } catch (err) {
       this.lastError = message(err);
+    }
+    if (this.state === "running" && !this.sweeping && Date.now() - this.lastSweepAt >= this.sweepMs) {
+      this.lastSweepAt = Date.now();
+      this.sweeping = this.sweep().finally(() => {
+        this.sweeping = null;
+      });
+      await this.sweeping;
+    }
+  }
+
+  /**
+   * Housekeeping beside the queue, one sweep at a time: rate-limit rows idle
+   * for a day go, a batch per sweep. A failed sweep is logged, and the next
+   * one tries again.
+   */
+  private async sweep(): Promise<void> {
+    try {
+      const deleted = await this.q.sweep();
+      if (deleted > 0) this.log(`deleted ${deleted} rate-limit rows idle for a day`);
+    } catch (err) {
+      this.lastError = message(err);
+      this.log(`sweep failed: ${this.lastError}`);
     }
   }
 
