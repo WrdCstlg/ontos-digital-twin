@@ -15,8 +15,12 @@ export const ENGINE_LOCK_WAIT_SECONDS = 180;
 /** How long an engine task may hold the engine before it is told to stop. */
 export const ENGINE_LOCK_HOLD_MS = 120_000;
 
-/** The ways a URL names this host itself. */
-const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)$/i;
+/**
+ * The ways a URL's host (as URL parses it) names this host itself: localhost
+ * and its subdomains, with or without the root's dot; 127/8, also mapped into
+ * IPv6 (URL writes [::ffff:127.0.0.1] as [::ffff:7f00:1]); ::1; and 0.0.0.0.
+ */
+const LOOPBACK = /^((.+\.)?localhost\.?|127(\.\d{1,3}){3}|\[::1\]|\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]|0\.0\.0\.0)$/i;
 
 /**
  * Which engine a URL reaches, for telling processes that share one from those
@@ -38,10 +42,15 @@ export function engineIdentity(engineUrl: string, explicitKey?: string, hostname
 
 /**
  * The lock the processes sharing an engine take. MySQL lock names are the
- * server's, so the name holds the database too: deployments whose databases
- * share a server never wait for each other.
+ * server's, so without ENGINE_LOCK_KEY the name holds the database too:
+ * deployments whose databases share a server never wait for each other. The
+ * key names the engine by itself, whatever the database: processes of two
+ * databases that share one engine set the same key, and must, or they would
+ * clear and load it under each other. (Separate engines that one name reaches
+ * on each host, in turn, get a key per host.)
  */
 export function engineLockName(databaseUrl: string, engineUrl: string, explicitKey?: string, hostname?: string): string {
+  if (explicitKey?.trim()) return lockName("engine", engineIdentity(engineUrl, explicitKey, hostname));
   let database = databaseUrl;
   try {
     database = decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\//, ""));

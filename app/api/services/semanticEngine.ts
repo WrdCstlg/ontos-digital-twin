@@ -98,8 +98,27 @@ function httpFailure(what: string, res: Response): Error {
  */
 export type EngineLock = <T>(task: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal) => Promise<T>;
 
-/** The signal of the exclusive() task a call runs in. Every engine request made in the task carries it. */
-const taskSignal = new AsyncLocalStorage<AbortSignal>();
+/** An exclusive() task, as the engine requests made in it see it. */
+type EngineTask = {
+  /** Aborts when the task must stop. From then on the task sends the engine nothing. */
+  signal: AbortSignal;
+  /** A request the task sent timed out: the engine may still be at it. */
+  abandoned: boolean;
+};
+
+/** The exclusive() task a call runs in. */
+const currentTask = new AsyncLocalStorage<EngineTask>();
+
+/** The signal of a task nothing tells to stop. */
+const NEVER = new AbortController().signal;
+
+/**
+ * How long a task waits, after a request of its timed out, for the engine to
+ * answer one more query before it lets the engine go. The engine goes on with
+ * a request its client gave up on, and its store takes one writer at a time,
+ * so a query it answers began after that request's write had ended.
+ */
+const SETTLE_MS = 30_000;
 
 /** Resolves once `p` settles, or rejects as soon as `signal` aborts. */
 function untilSettled(p: Promise<unknown>, signal?: AbortSignal): Promise<void> {
@@ -147,25 +166,28 @@ export class SemanticEngineClient {
    * a clear → load → query/validate/reason sequence must not interleave with
    * another request's clear, so every such sequence runs through here.
    *
-   * Not re-entrant: a task must not call exclusive() again. It serialises within
-   * this process, and across processes too once shareWith() has given it a lock
-   * they all take. `signal` calls off the wait for a turn, and stops the task:
-   * every engine request the task makes is aborted with it, as it is when the
-   * shared lock is lost.
+   * It serialises within this process, and across processes too once
+   * shareWith() has given it a lock they all take. `signal` calls off the wait
+   * for a turn, and stops the task: from then on, as when the shared lock is
+   * lost, the task sends the engine nothing more (see runTask).
+   *
+   * Not re-entrant: a task that asked for its own turn would wait for ever,
+   * holding the lock. Called from inside a task, it throws.
    */
   public exclusive<T>(task: () => Promise<T>, opts: { signal?: AbortSignal } = {}): Promise<T> {
+    if (currentTask.getStore()) return Promise.reject(new Error("exclusive() is not re-entrant: this task already has the engine"));
     const { signal } = opts;
     const lock = this.sharedLock;
     const previous = this.queue;
     const run = (async () => {
       await untilSettled(previous, signal);
       signal?.throwIfAborted();
-      if (!lock) return signal ? taskSignal.run(signal, task) : task();
+      if (!lock) return this.runTask(task, signal ?? NEVER);
       return lock((held) => {
         // Another process may have loaded its own graph since this one's
         // last task, so what the store holds is no longer known.
         this.loadedWorkspaceId = null;
-        return taskSignal.run(held, task);
+        return this.runTask(task, held);
       }, signal);
     })();
     // The next task waits for this one, and for the one before it even when
@@ -176,15 +198,58 @@ export class SemanticEngineClient {
     return run;
   }
 
-  /** The signal of the exclusive() task this call runs in, if any: it aborts when the task must stop. */
-  public currentTaskSignal(): AbortSignal | undefined {
-    return taskSignal.getStore();
+  /**
+   * Runs `task` as the engine's current task, and ends only once the engine
+   * has done what the task asked of it. The engine goes on with a request its
+   * client gives up on, so ending sooner would let the next task (or the next
+   * holder of the shared lock) clear and load the store while the engine
+   * still writes this task's data into it. So a task told to stop sends
+   * nothing more, but lets the requests it has already sent answer or time
+   * out; and after one timed out, it waits, at most SETTLE_MS, for the engine
+   * to answer one more query.
+   */
+  private async runTask<T>(task: () => Promise<T>, signal: AbortSignal): Promise<T> {
+    const state: EngineTask = { signal, abandoned: false };
+    try {
+      return await currentTask.run(state, task);
+    } finally {
+      if (state.abandoned) await this.settle();
+    }
   }
 
-  /** A request's signal: its own timeout, and the exclusive() task's it runs in. */
-  private signalFor(timeoutMs: number): AbortSignal {
-    const task = taskSignal.getStore();
-    return task ? AbortSignal.any([task, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+  /** Waits, at most SETTLE_MS, for the engine to answer a query: any write it was doing has then ended. */
+  private async settle(): Promise<void> {
+    await fetch(`${this.baseUrl}/api/query`, {
+      method: "POST",
+      headers: this.getHeaders(),
+      body: JSON.stringify({ query: "ASK { ?s ?p ?o }" }),
+      signal: AbortSignal.timeout(SETTLE_MS),
+    })
+      .then((res) => res.arrayBuffer())
+      .catch(() => undefined);
+  }
+
+  /** The signal of the exclusive() task this call runs in, if any: it aborts when the task must stop. */
+  public currentTaskSignal(): AbortSignal | undefined {
+    return currentTask.getStore()?.signal;
+  }
+
+  /**
+   * Sends one request to the engine, bounded by its own timeout. In a task
+   * told to stop, it sends nothing and throws the reason. A request already
+   * sent is never cut short by the task's signal: the engine would go on
+   * with it regardless (see runTask), and one that times out marks the task.
+   */
+  private async send(path: string, init: { method: "GET" | "POST"; body?: string }, timeoutMs: number): Promise<Response> {
+    const task = currentTask.getStore();
+    task?.signal.throwIfAborted();
+    const signal = AbortSignal.timeout(timeoutMs);
+    try {
+      return await fetch(`${this.baseUrl}${path}`, { ...init, headers: this.getHeaders(), signal });
+    } catch (err) {
+      if (task && signal.aborted) task.abandoned = true;
+      throw err;
+    }
   }
 
   /**
@@ -246,11 +311,7 @@ export class SemanticEngineClient {
   public async checkHealth(): Promise<SemanticEngineHealth> {
     const start = Date.now();
     try {
-      const res = await fetch(`${this.baseUrl}/health`, {
-        method: "GET",
-        headers: this.getHeaders(),
-        signal: this.signalFor(2000),
-      });
+      const res = await this.send("/health", { method: "GET" }, 2000);
       if (!res.ok) {
         return {
           alive: false,
@@ -323,12 +384,7 @@ export class SemanticEngineClient {
   public async loadTurtle(turtle: string, baseIri?: string): Promise<{ ok: boolean; triplesLoaded: number }> {
     this.loadedWorkspaceId = null;
     await this.ensureEngineRunning();
-    const res = await fetch(`${this.baseUrl}/api/load-turtle`, {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify({ turtle, base: baseIri }),
-      signal: this.signalFor(15000),
-    });
+    const res = await this.send("/api/load-turtle", { method: "POST", body: JSON.stringify({ turtle, base: baseIri }) }, 15000);
     if (!res.ok) throw httpFailure("Failed to load Turtle", res);
     const data = (await res.json()) as { ok?: boolean; triples_loaded?: number; error?: string };
     if (data.error) throw new EngineRequestError(`Oxigraph load error: ${data.error}`);
@@ -342,12 +398,7 @@ export class SemanticEngineClient {
   public async clearStore(): Promise<boolean> {
     this.loadedWorkspaceId = null;
     await this.ensureEngineRunning();
-    const res = await fetch(`${this.baseUrl}/api/batch`, {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify([{ command: "clear", args: [] }]),
-      signal: this.signalFor(5000),
-    });
+    const res = await this.send("/api/batch", { method: "POST", body: JSON.stringify([{ command: "clear", args: [] }]) }, 5000);
     if (!res.ok) {
       throw new Error(`Failed to clear the engine store: HTTP ${res.status}`);
     }
@@ -359,12 +410,7 @@ export class SemanticEngineClient {
    */
   public async querySparql(sparqlQuery: string): Promise<SparqlResult> {
     await this.ensureEngineRunning();
-    const res = await fetch(`${this.baseUrl}/api/query`, {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify({ query: sparqlQuery }),
-      signal: this.signalFor(30000),
-    });
+    const res = await this.send("/api/query", { method: "POST", body: JSON.stringify({ query: sparqlQuery }) }, 30000);
     if (!res.ok) {
       throw new Error(`SPARQL query failed: HTTP ${res.status} ${res.statusText}`);
     }
@@ -386,12 +432,7 @@ export class SemanticEngineClient {
   public async updateSparql(sparqlUpdate: string): Promise<{ ok: boolean; affected: number }> {
     this.loadedWorkspaceId = null;
     await this.ensureEngineRunning();
-    const res = await fetch(`${this.baseUrl}/api/update`, {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify({ query: sparqlUpdate }),
-      signal: this.signalFor(30000),
-    });
+    const res = await this.send("/api/update", { method: "POST", body: JSON.stringify({ query: sparqlUpdate }) }, 30000);
     if (!res.ok) {
       throw new Error(`SPARQL update failed: HTTP ${res.status} ${res.statusText}`);
     }
@@ -436,12 +477,7 @@ export class SemanticEngineClient {
     fs.writeFileSync(shapesFile, shapesTurtle, "utf-8");
 
     try {
-      const res = await fetch(`${this.baseUrl}/api/batch`, {
-        method: "POST",
-        headers: this.getHeaders(),
-        body: JSON.stringify([{ command: "shacl", args: [shapesFile] }]),
-        signal: this.signalFor(30000),
-      });
+      const res = await this.send("/api/batch", { method: "POST", body: JSON.stringify([{ command: "shacl", args: [shapesFile] }]) }, 30000);
       if (!res.ok) throw httpFailure("SHACL validation request failed", res);
 
       const batch = (await res.json()) as BatchResp;
@@ -488,12 +524,7 @@ export class SemanticEngineClient {
     const health = await this.checkHealth();
     const engineVersion = health.version || "open-ontologies";
 
-    const res = await fetch(`${this.baseUrl}/api/batch`, {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify([{ command: "reason", args: ["--profile", profile] }]),
-      signal: this.signalFor(30000),
-    });
+    const res = await this.send("/api/batch", { method: "POST", body: JSON.stringify([{ command: "reason", args: ["--profile", profile] }]) }, 30000);
 
     if (!res.ok) {
       throw new Error(`Reasoning request failed: HTTP ${res.status}`);

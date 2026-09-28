@@ -17,8 +17,14 @@ export type LockScript = {
   /** The heartbeat's answer: 1 while the session holds the lock. */
   mine?: unknown;
   heartbeatFails?: boolean;
+  /** The heartbeat's check never answers. */
+  heartbeatHangs?: boolean;
   release?: unknown;
   releaseFails?: boolean;
+  /** RELEASE_LOCK never answers. */
+  releaseHangs?: boolean;
+  /** Closing the session never finishes. */
+  endHangs?: boolean;
 };
 
 export function fakeLockConnection(script: LockScript = {}) {
@@ -43,15 +49,17 @@ export function fakeLockConnection(script: LockScript = {}) {
       }
       if (sql.startsWith("SELECT IS_USED_LOCK")) {
         if (script.heartbeatFails) throw new Error("read ECONNRESET");
+        if (script.heartbeatHangs) return new Promise(() => undefined);
         return answer("mine", "mine" in script ? script.mine : 1);
       }
       if (sql.startsWith("SELECT RELEASE_LOCK")) {
         if (script.releaseFails) throw new Error("Connection lost: The server closed the connection.");
+        if (script.releaseHangs) return new Promise(() => undefined);
         return answer("released", "release" in script ? script.release : 1);
       }
       throw new Error(`unexpected statement: ${sql}`);
     }),
-    end: vi.fn(async () => emit("end")),
+    end: vi.fn(async () => (script.endHangs ? new Promise<void>(() => undefined) : emit("end"))),
     destroy: vi.fn(),
     on: vi.fn((event: "error" | "end", listener: (err?: unknown) => void) => {
       (listeners[event] ??= []).push(listener);

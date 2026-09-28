@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENGINE_LOCK_HOLD_MS, ENGINE_LOCK_WAIT_SECONDS, engineIdentity, engineLockName, installEngineLock } from "../services/engineLock";
 import { SemanticEngineClient } from "../services/semanticEngine";
 import { LockLost } from "../lib/namedLock";
-import { fakeLockConnection, untilStopped } from "./fakeLockConnection";
+import { fakeLockConnection } from "./fakeLockConnection";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -23,8 +23,20 @@ describe("which engine a process uses", () => {
   });
 
   it("and on loopback, the same however the URL spells loopback", () => {
-    const spellings = ["http://localhost:8085", "http://127.0.0.1:8085", "http://127.1.2.3:8085/", "http://[::1]:8085", "http://0.0.0.0:8085"];
+    const spellings = [
+      "http://localhost:8085",
+      "http://localhost.:8085",
+      "http://engine.localhost:8085",
+      "http://127.0.0.1:8085",
+      "http://127.1.2.3:8085/",
+      "http://[::1]:8085",
+      "http://[0:0:0:0:0:0:0:1]:8085",
+      "http://[::ffff:127.0.0.1]:8085",
+      "http://0.0.0.0:8085",
+    ];
     expect(new Set(spellings.map((u) => engineIdentity(u, undefined, "host-a"))).size).toBe(1);
+    expect(engineIdentity("http://localhost-engine:8085", undefined, "host-a")).not.toBe(engineIdentity("http://localhost:8085", undefined, "host-a"));
+    expect(engineIdentity("http://[::ffff:10.0.0.1]:8085", undefined, "host-a")).not.toBe(engineIdentity("http://localhost:8085", undefined, "host-a"));
   });
 
   it("and for an engine on loopback, which host it is on: each host's loopback is its own", () => {
@@ -55,6 +67,13 @@ describe("the engine lock's name", () => {
   it("fits MySQL's limit", () => {
     expect(engineLockName(`mysql://u:p@db/${"d".repeat(64)}`, `http://${"e".repeat(200)}:8085`).length).toBeLessThanOrEqual(64);
   });
+
+  it("is ENGINE_LOCK_KEY's alone when it is set: processes of two databases that share one engine must take turns", () => {
+    const shared = engineLockName("mysql://ontos:pw@db:3306/ontos", engine, "one-engine");
+    expect(engineLockName("mysql://ontos:pw@db:3306/ontos_staging", "http://10.0.0.5:8085", "one-engine")).toBe(shared);
+    expect(engineLockName("mysql://ontos:pw@db:3306/ontos", engine, "another-engine")).not.toBe(shared);
+    expect(engineLockName("mysql://ontos:pw@db:3306/ontos", engine)).not.toBe(shared);
+  });
 });
 
 describe("an engine given the lock", () => {
@@ -69,7 +88,7 @@ describe("an engine given the lock", () => {
     expect(ENGINE_LOCK_HOLD_MS).toBeGreaterThan(60_000);
   });
 
-  it("aborts the task's engine requests the moment the lock is lost, and refuses the task's result", async () => {
+  it("refuses the task's result when the lock is lost; the task sends nothing more, and its request in flight answers", async () => {
     const conn = fakeLockConnection();
     const engine = new SemanticEngineClient();
     installEngineLock(engine, { connect: async () => conn, name: "l" });
@@ -78,13 +97,36 @@ describe("an engine given the lock", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       requests.push(init!.signal!);
       conn.emit("end");
-      return untilStopped(init!.signal!);
+      return Response.json({ variables: [], results: [] });
     });
 
-    await expect(engine.exclusive(() => engine.querySparql("SELECT * WHERE { ?s ?p ?o }"))).rejects.toBeInstanceOf(LockLost);
+    const run = engine.exclusive(async () => {
+      await engine.querySparql("SELECT * WHERE { ?s ?p ?o }");
+      return engine.querySparql("SELECT * WHERE { ?s ?p ?o }");
+    });
+    await expect(run).rejects.toBeInstanceOf(LockLost);
     expect(requests).toHaveLength(1);
-    expect(requests[0].aborted).toBe(true);
-    expect(requests[0].reason).toBeInstanceOf(LockLost);
+    expect(requests[0].aborted).toBe(false);
+  });
+
+  it("keeps the lock until a request in flight has answered, even once its task is told to stop", async () => {
+    const conn = fakeLockConnection();
+    const engine = new SemanticEngineClient();
+    installEngineLock(engine, { connect: async () => conn, name: "l" });
+    vi.spyOn(engine, "ensureEngineRunning").mockResolvedValue(true);
+    let answer: ((r: Response) => void) | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const caller = new AbortController();
+
+    const run = engine.exclusive(() => engine.querySparql("SELECT * WHERE { ?s ?p ?o }"), { signal: caller.signal });
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    caller.abort(new Error("worker stopping"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(conn.calls.some((c) => c.startsWith("SELECT RELEASE_LOCK"))).toBe(false);
+
+    answer!(Response.json({ variables: [], results: [] }));
+    await expect(run).resolves.toEqual({ variables: [], results: [] });
+    expect(conn.calls.at(-1)).toBe('SELECT RELEASE_LOCK(?) AS released ["l"]');
   });
 
   it("stops waiting for the lock when the caller's signal aborts", async () => {

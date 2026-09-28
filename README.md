@@ -239,7 +239,7 @@ required; `docker compose` refuses to start without them.
 | `ALLOWED_ORIGINS` | no | — | Comma-separated CORS/CSRF allowlist for **cross-origin** callers. Production rejects any cross-origin request not listed; same-origin use is unaffected. |
 | `MIGRATIONS_DIR` | no | `./db/migrations` | Where `db:bootstrap` finds SQL migrations |
 | `OPEN_ONTOLOGIES_URL` | no | `http://127.0.0.1:8085` | Semantic engine base URL |
-| `ENGINE_LOCK_KEY` | no | — | Worker only: names the engine its replicas share, for the lock they take around its use. Unset, the engine URL names it (with the host's name for a loopback URL). Set the same key on workers that reach one engine by different URLs. |
+| `ENGINE_LOCK_KEY` | no | — | Worker only: names the engine its replicas share, for the lock they take around its use. Unset, the database and the engine URL name it (with the host's name for a loopback URL). Set, the key alone names it: set the same key on every worker that reaches one engine, by whatever URL and for whatever database on the same MySQL server. Separate engines reached by one name on different hosts need a key each. |
 | `OPEN_ONTOLOGIES_PORT` | no | `8085` | Port used when auto-starting the engine |
 | `OPEN_ONTOLOGIES_TOKEN` | no | — | Bearer token, if the engine requires one |
 | `OPEN_ONTOLOGIES_BIN` | no | — | Explicit path to the engine binary |
@@ -788,7 +788,11 @@ These are tracked, known behaviours rather than surprises:
   mapping blocks is retried, and one that warns is imported unchecked and says so. A
   check whose lock is lost midway (its database connection broke) is stopped and treated
   as unchecked in the same way, and so is an import whose report did not look at its own
-  graph. The lock holds only among workers whose `DATABASE_URL` reaches the same MySQL
+  graph. A check told to stop sends the engine nothing more, but holds it until the
+  engine has answered what it already sent: the engine goes on with a request its client
+  gives up on. A worker killed before then (sooner than `stop_grace_period`) frees the
+  lock with its connection, and a request of its may still write into the next
+  holder's store. The lock holds only among workers whose `DATABASE_URL` reaches the same MySQL
   server: named locks are a server's own, so a read replica behind a proxy has its own.
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that
