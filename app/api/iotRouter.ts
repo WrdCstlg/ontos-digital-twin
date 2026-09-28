@@ -2,8 +2,9 @@ import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { iotConnectors } from "@db/schema";
-import { createRouter, workspaceAdminMutation, workspaceOntologistMutation, workspaceQuery } from "./middleware";
+import { createRouter, EDITOR_ROLES, workspaceAdminMutation, workspaceOntologistMutation, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { displayUrl, withoutUserinfo } from "./services/connectorView";
 import { brokerConfigFrom, iotBrokerManager, unreadableBrokerSecretMessage } from "./services/iot/iotBrokerManager";
 import { credentialInputProblem, sealSecret, secretContext, SecretUnreadableError } from "./lib/secretBox";
 import { ingestTelemetry, sampleDeviceId, webhookWorkspaceId } from "./services/iot/iotIngestion";
@@ -25,7 +26,14 @@ async function ownConnector(id: number, workspaceId: number) {
   return row;
 }
 
-export const iotRouter = createRouter({  /** List all configured IoT connectors with live runtime status and stats. */
+export const iotRouter = createRouter({
+  /** What the caller may do with brokers and telemetry: the client is not told its workspace role. */
+  capabilities: workspaceQuery.query(({ ctx }) => ({
+    canManageBrokers: hasWorkspaceRole(ctx.membership, ctx.user, ["admin"]),
+    canIngest: hasWorkspaceRole(ctx.membership, ctx.user, EDITOR_ROLES),
+  })),
+
+  /** List all configured IoT connectors with live runtime status and stats. */
   listConnectors: workspaceQuery.query(async ({ ctx }) => {
     const ws = ctx.workspace;
     const db = getDb();
@@ -36,6 +44,10 @@ export const iotRouter = createRouter({  /** List all configured IoT connectors 
       .orderBy(desc(iotConnectors.createdAt));
 
     const liveStats = iotBrokerManager.getAllStats();
+    // A broker URL can carry its login (mqtt.js reads user:password@ from it):
+    // in full to the admins who manage brokers, to everyone else where it points.
+    const admin = hasWorkspaceRole(ctx.membership, ctx.user, ["admin"]);
+    const shownError = (e: string | null) => (e === null || admin ? e : withoutUserinfo(e));
 
     return rows.map((r) => {
       const live = liveStats[String(r.id)];
@@ -44,7 +56,7 @@ export const iotRouter = createRouter({  /** List all configured IoT connectors 
         id: r.id,
         name: r.name,
         brokerType: r.brokerType,
-        endpointUrl: r.endpointUrl,
+        endpointUrl: admin ? r.endpointUrl : displayUrl(r.endpointUrl),
         topicPattern: r.topicPattern,
         clientId: r.clientId,
         authType: r.authType,
@@ -54,7 +66,7 @@ export const iotRouter = createRouter({  /** List all configured IoT connectors 
         lastConnectedAt: live?.lastConnectedAt ?? r.lastConnectedAt,
         messageCount: live ? live.messageCount : r.messageCount,
         errorCount: live ? live.errorCount : r.errorCount,
-        lastError: live?.lastError ?? r.lastError,
+        lastError: shownError(live?.lastError ?? r.lastError),
         hasCert: Boolean(config.clientCert),
         createdAt: r.createdAt,
       };

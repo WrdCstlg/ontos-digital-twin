@@ -107,7 +107,8 @@ describe("broker connectors are managed by the workspace's admins, and only its 
 
   it("nor can an editor or ontologist manage one: brokers, and their credentials, are an admin's", async () => {
     for (const role of ["editor", "ontologist"] as const) {
-      const member = inB(mockOntologistUser, role);
+      // A plain account, so the membership alone decides (an account role would count too).
+      const member = inB(mockViewerUser, role);
       await expect(member.iot.upsertConnector(upsert()), role).rejects.toMatchObject({ code: "FORBIDDEN" });
       await expect(member.iot.toggleConnector({ id: 6, enable: false }), role).rejects.toMatchObject({ code: "FORBIDDEN" });
       await expect(member.iot.deleteConnector({ id: 6 }), role).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -132,6 +133,26 @@ describe("broker connectors are managed by the workspace's admins, and only its 
     await inB(mockAdminUser, "admin").iot.deleteConnector({ id: 6 });
     expect(stop).toHaveBeenCalledWith(6);
     expect(rows(iotConnectors).map((c) => c.id)).toEqual([5]);
+  });
+
+  it("a member who does not manage brokers sees where one points, never the login written into its URL", async () => {
+    const url = "mqtts://svc-ontos:SENTINEL-PW@broker.example:8883";
+    put(iotConnectors, [broker(5, A.id), { ...broker(6, B.id), endpointUrl: url, lastError: `connect ${url} refused` }]);
+    for (const role of ["viewer", "editor", "ontologist"] as const) {
+      const [c] = await inB(mockViewerUser, role).iot.listConnectors();
+      expect(c.endpointUrl, role).toBe("mqtts://broker.example:8883");
+      expect(c.lastError, role).toBe("connect mqtts://broker.example:8883 refused");
+    }
+    const [own] = await inB(mockAdminUser, "admin").iot.listConnectors();
+    expect(own.endpointUrl).toBe(url);
+  });
+
+  it("and the client is told what each role may do with brokers and telemetry", async () => {
+    const caps = (role: "viewer" | "editor" | "ontologist" | "admin") => inB(mockViewerUser, role).iot.capabilities();
+    expect(await caps("viewer")).toEqual({ canManageBrokers: false, canIngest: false });
+    expect(await caps("editor")).toEqual({ canManageBrokers: false, canIngest: true });
+    expect(await caps("ontologist")).toEqual({ canManageBrokers: false, canIngest: true });
+    expect(await caps("admin")).toEqual({ canManageBrokers: true, canIngest: true });
   });
 });
 
