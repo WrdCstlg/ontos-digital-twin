@@ -80,7 +80,9 @@ services:
         condition: service_started
 
   # Two workers, so a job whose worker is stopped, paused or killed has another
-  # worker to reclaim it. Each has its own engine, as in ../compose.yaml.
+  # worker to reclaim it. Each has its own engine, so neither ever waits for the
+  # lock that workers sharing one take (../compose.yaml shares one between its
+  # worker replicas).
   worker-a:
     image: ontos-app:${ONTOS_GATE_TAG:?set ONTOS_GATE_TAG to the image tag under test}
     restart: "no"
