@@ -62,7 +62,7 @@ graph TD
     Hono <-->|Drizzle ORM| MySQL[("MySQL 8.4<br/>graph, state, job queue, audit")]
     Hono <-->|SPARQL 1.1 / HTTP| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
     Worker["Worker(s)<br/>(Node 24)"] <-->|leases jobs| MySQL
-    Worker <-->|SHACL| EngineW["open-ontologies<br/>(the worker's own)"]
+    Worker <-->|SHACL| EngineW["open-ontologies<br/>(the workers', apart from the app's)"]
     Worker -->|action side effects| Hooks["Webhook receivers"]
 
     subgraph Compose ["Docker Compose stack"]
@@ -239,6 +239,7 @@ required; `docker compose` refuses to start without them.
 | `ALLOWED_ORIGINS` | no | — | Comma-separated CORS/CSRF allowlist for **cross-origin** callers. Production rejects any cross-origin request not listed; same-origin use is unaffected. |
 | `MIGRATIONS_DIR` | no | `./db/migrations` | Where `db:bootstrap` finds SQL migrations |
 | `OPEN_ONTOLOGIES_URL` | no | `http://127.0.0.1:8085` | Semantic engine base URL |
+| `ENGINE_LOCK_KEY` | no | — | Worker only: names the engine its replicas share, for the lock they take around its use. Unset, the engine URL names it (with the host's name for a loopback URL). Set the same key on workers that reach one engine by different URLs. |
 | `OPEN_ONTOLOGIES_PORT` | no | `8085` | Port used when auto-starting the engine |
 | `OPEN_ONTOLOGIES_TOKEN` | no | — | Bearer token, if the engine requires one |
 | `OPEN_ONTOLOGIES_BIN` | no | — | Explicit path to the engine binary |
@@ -777,12 +778,18 @@ These are tracked, known behaviours rather than surprises:
   import and SPARQL each clear the store and load what they need. The app runs those
   sequences one at a time under a lock, so they no longer interfere, but a slow
   reasoning run delays the next query. The app's lock lives in its process, so several app
-  replicas must not share one engine. Replicas of the worker may: they share
-  `engine-worker` in `compose.yaml`, and each engine task takes a MySQL named lock, one
-  per engine, that every replica takes too. Their imports' engine work therefore takes
+  replicas must not share one engine, and no worker may share the app's: a worker started
+  next to `npm run dev` needs its own `OPEN_ONTOLOGIES_URL`, since both default to
+  `127.0.0.1:8085`. Replicas of the worker may share one: they share `engine-worker` in
+  `compose.yaml`, and each engine task takes a MySQL named lock, one per engine and
+  database, that every replica takes too. Their imports' engine work therefore takes
   turns, which bounds how far adding workers speeds up SHACL checks of imports on one
-  engine. An import whose report still did not look at its own graph is treated as
-  unchecked.
+  engine. A check waits up to three minutes for its turn; past that, an import whose
+  mapping blocks is retried, and one that warns is imported unchecked and says so. A
+  check whose lock is lost midway (its database connection broke) is stopped and treated
+  as unchecked in the same way, and so is an import whose report did not look at its own
+  graph. The lock holds only among workers whose `DATABASE_URL` reaches the same MySQL
+  server: named locks are a server's own, so a read replica behind a proxy has its own.
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that
   has no hash yet will accept a known fixed bootstrap password and be upgraded to a real

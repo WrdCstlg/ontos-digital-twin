@@ -11,6 +11,7 @@ import { runMappingSync } from "../services/mappingSync";
 import { PermanentJobError } from "../services/jobs/worker";
 import { writeAudit } from "../services/audit";
 import { EngineRequestError, semanticEngine } from "../services/semanticEngine";
+import { LockLost, LockUnavailable } from "../lib/namedLock";
 import { appRouter } from "../router";
 import { createMockContext, mockOntologistUser, mockViewerUser, mockWorkspace } from "./testHarness";
 
@@ -100,6 +101,15 @@ describe("a mapping set to block on SHACL", () => {
     setUp("block", null);
     vi.mocked(semanticEngine.ensureEngineRunning).mockResolvedValue(false);
     expect((await run()).nodesUpserted).toBe(2);
+  });
+
+  it("imports nothing on a check whose engine lock was lost, and the import is retried", async () => {
+    setUp("block");
+    vi.mocked(semanticEngine.exclusive).mockRejectedValueOnce(new LockLost("lost lock ontos:engine:x while its task ran: its connection closed"));
+    const waiting = run();
+    await expect(waiting).rejects.toThrow(/could not be checked just now: lost lock ontos:engine:x/);
+    await expect(waiting).rejects.not.toBeInstanceOf(PermanentJobError);
+    expect(rows(kgNodes)).toEqual([]);
   });
 });
 
@@ -222,6 +232,34 @@ describe("a mapping set to warn, the default", () => {
     expect(result.nodesUpserted).toBe(2);
     expect(result.shacl).toBeNull();
     expect(vi.mocked(writeAudit).mock.calls[0][0].payload).toMatchObject({ shacl: null, shaclNotChecked: "the semantic engine is not running" });
+  });
+
+  it("imports unchecked when other workers keep the engine past the wait for it, and says so in its record", async () => {
+    setUp("warn");
+    const busy = "lock ontos:engine:x stayed held elsewhere for 180 s";
+    vi.mocked(semanticEngine.exclusive).mockRejectedValueOnce(new LockUnavailable(busy));
+    const result = await run();
+    expect(result.nodesUpserted).toBe(2);
+    expect(vi.mocked(writeAudit).mock.calls[0][0].payload).toMatchObject({ shacl: null, shaclNotChecked: busy });
+  });
+});
+
+describe("an import interrupted during its check", () => {
+  it("stops there, writing nothing, rather than importing unchecked: its job's signal reaches the wait for the engine", async () => {
+    for (const mode of ["warn", "block"] as const) {
+      setUp(mode);
+      const job = new AbortController();
+      vi.mocked(semanticEngine.exclusive).mockImplementationOnce(async (_task, opts) => {
+        expect(opts?.signal).toBe(job.signal);
+        job.abort(new Error("worker stopping"));
+        throw new LockUnavailable("the wait for lock l was called off: worker stopping");
+      });
+      const run = runMappingSync(WS, { syncJobId: 7, mappingId: 100 }, "Amara Okafor", job.signal);
+      await expect(run, mode).rejects.toThrow("import interrupted: worker stopping");
+      await expect(run, mode).rejects.not.toBeInstanceOf(PermanentJobError);
+      expect(rows(kgNodes), mode).toEqual([]);
+      expect(writeAudit, mode).not.toHaveBeenCalled();
+    }
   });
 });
 

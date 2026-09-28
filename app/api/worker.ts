@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { sql } from "drizzle-orm";
-import { closeDb, getDb, getPoolConnection } from "./queries/connection";
+import { closeDb, getDb, openConnection } from "./queries/connection";
+import { env } from "./lib/env";
 import { secretKey } from "./lib/secretBox";
-import { lockName, withNamedLock } from "./lib/namedLock";
+import { engineLockName, installEngineLock } from "./services/engineLock";
 import { jobHandlers } from "./services/jobs/handlers";
 import { JobWorker } from "./services/jobs/worker";
 import { semanticEngine } from "./services/semanticEngine";
@@ -13,16 +14,15 @@ import { semanticEngine } from "./services/semanticEngine";
  * MySQL, apart from the web app. Any number can run against one database.
  * Replicas may share one semantic engine (OPEN_ONTOLOGIES_URL; compose.yaml
  * gives every replica engine-worker): the engine holds one graph at a time, so
- * each engine task takes a MySQL named lock, one per engine, that every
- * replica takes too.
+ * each engine task takes a MySQL named lock, one per engine and database, that
+ * every replica takes too (services/engineLock.ts). The app never takes it, so
+ * a worker must not share the app's engine.
  *
  * GET /health on WORKER_PORT (default 3001) answers 200 while the job loop is
  * alive and the database answers, 503 otherwise.
  */
 
 const POLL_MS = 1000;
-/** How long an engine task waits for another replica's before its job is retried. */
-const ENGINE_LOCK_WAIT_SECONDS = 60;
 
 // SQL imports open the source's sealed password (lib/secretBox.ts): a
 // malformed SECRETS_KEY stops the worker here, before it takes any job.
@@ -33,8 +33,10 @@ try {
   process.exit(1);
 }
 
-const engineLock = lockName("engine", semanticEngine.getUrl());
-semanticEngine.shareWith((task) => withNamedLock(getPoolConnection, engineLock, ENGINE_LOCK_WAIT_SECONDS, task));
+installEngineLock(semanticEngine, {
+  connect: openConnection,
+  name: engineLockName(env.databaseUrl, semanticEngine.getUrl(), process.env.ENGINE_LOCK_KEY),
+});
 
 const worker = new JobWorker({
   handlers: jobHandlers,

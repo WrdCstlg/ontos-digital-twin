@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
@@ -90,10 +91,34 @@ function httpFailure(what: string, res: Response): Error {
   return res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429 ? new EngineRequestError(message) : new Error(message);
 }
 
-/** Runs a task while no other process that uses the same engine runs one (see shareWith). */
-export type EngineLock = <T>(task: () => Promise<T>) => Promise<T>;
+/**
+ * Runs a task while no other process that uses the same engine runs one (see
+ * shareWith). The task is handed a signal that aborts when it must stop: the
+ * lock lost, `signal` aborted, or the task held the engine too long.
+ */
+export type EngineLock = <T>(task: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal) => Promise<T>;
 
-class SemanticEngineClient {
+/** The signal of the exclusive() task a call runs in. Every engine request made in the task carries it. */
+const taskSignal = new AsyncLocalStorage<AbortSignal>();
+
+/** Resolves once `p` settles, or rejects as soon as `signal` aborts. */
+function untilSettled(p: Promise<unknown>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return p.then(
+    () => undefined,
+    () => undefined,
+  );
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.catch(() => undefined).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    });
+  });
+}
+
+export class SemanticEngineClient {
   private baseUrl: string;
   private token?: string;
   private binaryPath?: string;
@@ -124,29 +149,48 @@ class SemanticEngineClient {
    *
    * Not re-entrant: a task must not call exclusive() again. It serialises within
    * this process, and across processes too once shareWith() has given it a lock
-   * they all take.
+   * they all take. `signal` calls off the wait for a turn, and stops the task:
+   * every engine request the task makes is aborted with it, as it is when the
+   * shared lock is lost.
    */
-  public exclusive<T>(task: () => Promise<T>): Promise<T> {
+  public exclusive<T>(task: () => Promise<T>, opts: { signal?: AbortSignal } = {}): Promise<T> {
+    const { signal } = opts;
     const lock = this.sharedLock;
-    const run = this.queue.then(() =>
-      lock
-        ? lock(() => {
-            // Another process may have loaded its own graph since this one's
-            // last task, so what the store holds is no longer known.
-            this.loadedWorkspaceId = null;
-            return task();
-          })
-        : task(),
-    );
-    this.queue = run.catch(() => undefined);
+    const previous = this.queue;
+    const run = (async () => {
+      await untilSettled(previous, signal);
+      signal?.throwIfAborted();
+      if (!lock) return signal ? taskSignal.run(signal, task) : task();
+      return lock((held) => {
+        // Another process may have loaded its own graph since this one's
+        // last task, so what the store holds is no longer known.
+        this.loadedWorkspaceId = null;
+        return taskSignal.run(held, task);
+      }, signal);
+    })();
+    // The next task waits for this one, and for the one before it even when
+    // this one stopped waiting early.
+    this.queue = Promise.allSettled([previous, run]);
     return run;
+  }
+
+  /** The signal of the exclusive() task this call runs in, if any: it aborts when the task must stop. */
+  public currentTaskSignal(): AbortSignal | undefined {
+    return taskSignal.getStore();
+  }
+
+  /** A request's signal: its own timeout, and the exclusive() task's it runs in. */
+  private signalFor(timeoutMs: number): AbortSignal {
+    const task = taskSignal.getStore();
+    return task ? AbortSignal.any([task, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   }
 
   /**
    * Declares that other processes use this engine too, and gives the lock they
    * all take around each exclusive() task (a worker's replicas share one
-   * engine). With it, a task never trusts that the store still holds what an
-   * earlier one loaded.
+   * engine; services/engineLock.ts). With it, a task never trusts that the
+   * store still holds what an earlier one loaded, and its engine requests are
+   * aborted the moment the lock is lost.
    */
   public shareWith(lock: EngineLock | null): void {
     this.sharedLock = lock;
@@ -203,7 +247,7 @@ class SemanticEngineClient {
       const res = await fetch(`${this.baseUrl}/health`, {
         method: "GET",
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(2000),
+        signal: this.signalFor(2000),
       });
       if (!res.ok) {
         return {
@@ -238,7 +282,8 @@ class SemanticEngineClient {
     const health = await this.checkHealth();
     if (health.alive) return true;
 
-    if (!this.binaryPath) {
+    // No binary to start, or a task that must stop: nothing is spawned.
+    if (!this.binaryPath || this.currentTaskSignal()?.aborted) {
       return false;
     }
 
@@ -259,6 +304,7 @@ class SemanticEngineClient {
 
       // Poll up to 4 seconds for liveness
       for (let i = 0; i < 16; i++) {
+        if (this.currentTaskSignal()?.aborted) return false;
         await new Promise((r) => setTimeout(r, 250));
         const check = await this.checkHealth();
         if (check.alive) return true;
@@ -279,7 +325,7 @@ class SemanticEngineClient {
       method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify({ turtle, base: baseIri }),
-      signal: AbortSignal.timeout(15000),
+      signal: this.signalFor(15000),
     });
     if (!res.ok) throw httpFailure("Failed to load Turtle", res);
     const data = (await res.json()) as { ok?: boolean; triples_loaded?: number; error?: string };
@@ -298,7 +344,7 @@ class SemanticEngineClient {
       method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify([{ command: "clear", args: [] }]),
-      signal: AbortSignal.timeout(5000),
+      signal: this.signalFor(5000),
     });
     if (!res.ok) {
       throw new Error(`Failed to clear the engine store: HTTP ${res.status}`);
@@ -315,7 +361,7 @@ class SemanticEngineClient {
       method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify({ query: sparqlQuery }),
-      signal: AbortSignal.timeout(30000),
+      signal: this.signalFor(30000),
     });
     if (!res.ok) {
       throw new Error(`SPARQL query failed: HTTP ${res.status} ${res.statusText}`);
@@ -342,7 +388,7 @@ class SemanticEngineClient {
       method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify({ query: sparqlUpdate }),
-      signal: AbortSignal.timeout(30000),
+      signal: this.signalFor(30000),
     });
     if (!res.ok) {
       throw new Error(`SPARQL update failed: HTTP ${res.status} ${res.statusText}`);
@@ -392,7 +438,7 @@ class SemanticEngineClient {
         method: "POST",
         headers: this.getHeaders(),
         body: JSON.stringify([{ command: "shacl", args: [shapesFile] }]),
-        signal: AbortSignal.timeout(30000),
+        signal: this.signalFor(30000),
       });
       if (!res.ok) throw httpFailure("SHACL validation request failed", res);
 
@@ -444,7 +490,7 @@ class SemanticEngineClient {
       method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify([{ command: "reason", args: ["--profile", profile] }]),
-      signal: AbortSignal.timeout(30000),
+      signal: this.signalFor(30000),
     });
 
     if (!res.ok) {
