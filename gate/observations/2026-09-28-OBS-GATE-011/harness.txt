@@ -1,0 +1,8 @@
+2026-09-28T07:55:07.7962710Z thesis: entering world 1 (seed 4415405792204367376, profile api)
+2026-09-28T07:55:26.4736835Z thesis: world 1: perturbing with 1 fault(s), peak concurrency 1
+2026-09-28T07:55:39.3043845Z thesis: world 1: HEAL: perturber: residual fault state survived HEAL: 1 residue(s): netns on engine (unattributed): could not be inspected, so no residual check ran: faults: snapshot output is truncated (last section "", expected to end at #END)
+2026-09-28T07:55:39.4062775Z thesis: world 1: QUIESCE: the driver drained in 1ms; every issued operation has a completion record
+2026-09-28T07:55:44.2132431Z thesis: stopping world loop: planned world count reached (1)
+2026-09-28T07:55:44.2165278Z Verdict:    INCONCLUSIVE (exit 2)
+2026-09-28T07:55:44.2165710Z Budget:     36s used / 300s wall, 1 worlds run / 1 planned
+2026-09-28T07:55:44.2166981Z Checker:    actions.delivered, actions.durable, api.read_your_writes, jobs.lease_lapse, session.honoured, sync_jobs.settle — the program(s) that decided this verdict changed since the lock was written

@@ -1,0 +1,2 @@
+harness error: run 36393558079 (09/28/2026 07:47:13, 012db19), r_2026_09_28_0bd4 profile api, oracles not ok: 0
+worlds read: 325, in 92 Gate runs listed
