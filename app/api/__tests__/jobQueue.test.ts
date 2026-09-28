@@ -9,30 +9,40 @@ import {
   retryDelaySeconds,
 } from "../services/jobs/queue";
 
-// Records every SELECT and UPDATE the queue issues, and answers them from `rec`.
+// Records every SELECT and UPDATE the queue issues, and answers them from `rec`:
+// a claim's first locking read from `lapsed`, its second from `due`.
 const rec = vi.hoisted(() => ({
-  selects: [] as { where?: unknown; forArgs?: unknown[] }[],
+  selects: [] as { from?: unknown[]; where?: unknown; orderBy?: unknown[]; forArgs?: unknown[] }[],
   updates: [] as { set?: Record<string, unknown>; where?: unknown }[],
-  candidate: undefined as Record<string, unknown> | undefined,
+  lapsed: undefined as Record<string, unknown> | undefined,
+  due: undefined as Record<string, unknown> | undefined,
   claimed: undefined as Record<string, unknown> | undefined,
   affectedRows: 1,
+  txConfig: undefined as unknown,
 }));
 
 vi.mock("../queries/connection", () => {
   function selectChain() {
-    const q: { where?: unknown; forArgs?: unknown[] } = {};
+    const q: { from?: unknown[]; where?: unknown; orderBy?: unknown[]; forArgs?: unknown[] } = {};
     rec.selects.push(q);
     const chain: Record<string, unknown> = {
-      from: () => chain,
+      from: (...args: unknown[]) => {
+        q.from = args;
+        return chain;
+      },
       where: (w: unknown) => {
         q.where = w;
         return chain;
       },
-      orderBy: () => chain,
+      orderBy: (...args: unknown[]) => {
+        q.orderBy = args;
+        return chain;
+      },
       limit: () => chain,
       for: (...args: unknown[]) => {
         q.forArgs = args;
-        return Promise.resolve(rec.candidate ? [rec.candidate] : []);
+        const answer = rec.selects.filter((s) => s.forArgs).length === 1 ? rec.lapsed : rec.due;
+        return Promise.resolve(answer ? [answer] : []);
       },
       then: (ok: (v: unknown) => unknown, bad: (e: unknown) => unknown) =>
         Promise.resolve(rec.claimed ? [rec.claimed] : []).then(ok, bad),
@@ -57,39 +67,64 @@ vi.mock("../queries/connection", () => {
   const db: Record<string, unknown> = {
     select: () => selectChain(),
     update: () => updateChain(),
-    transaction: async (cb: (tx: unknown) => unknown) => cb(db),
+    transaction: async (cb: (tx: unknown) => unknown, config?: unknown) => {
+      rec.txConfig = config;
+      return cb(db);
+    },
   };
   return { getDb: () => db };
 });
 
 const dialect = new MySqlDialect();
 const render = (w: unknown) => dialect.sqlToQuery(w as SQL);
+const locking = () => rec.selects.filter((s) => s.forArgs);
+const columns = (orderBy: unknown[] | undefined) => (orderBy as { name: string }[]).map((c) => c.name);
 
 afterEach(() => {
   rec.selects.length = 0;
   rec.updates.length = 0;
-  rec.candidate = rec.claimed = undefined;
+  rec.lapsed = rec.due = rec.claimed = undefined;
   rec.affectedRows = 1;
+  rec.txConfig = undefined;
 });
 
 describe("claimNextJob", () => {
-  it("takes a due queued job or a lapsed running one, skipping rows other workers have locked", async () => {
-    rec.candidate = { id: 5, status: "queued", attempts: 0, maxAttempts: 3, leaseOwner: null, lastError: null };
+  it("takes a job whose lease lapsed before any queued one, locking that row alone, under read committed", async () => {
+    rec.lapsed = { id: 6, status: "running", attempts: 1, maxAttempts: 3, leaseOwner: "w-dead", lastError: null };
+    rec.due = { id: 2, status: "queued", attempts: 0, maxAttempts: 3, leaseOwner: null, lastError: null };
+    rec.claimed = { id: 6, status: "running", attempts: 2, leaseOwner: "w1" };
+
+    const res = await claimNextJob("w1", 15);
+
+    expect(rec.txConfig).toEqual({ isolationLevel: "read committed" });
+    // The due job was never read, so never locked: one claim holds one row.
+    expect(locking()).toHaveLength(1);
+    const [lapsed] = locking();
+    expect(lapsed.forArgs).toEqual(["update", { skipLocked: true }]);
+    expect(lapsed.from?.[1]).toEqual({ forceIndex: "jobs_status_run_after" });
+    expect(render(lapsed.where)).toMatchObject({ sql: "(`jobs`.`status` = ? and `jobs`.`leaseExpiresAt` < now())", params: ["running"] });
+    expect(columns(lapsed.orderBy)).toEqual(["id"]);
+    expect(res).toEqual({ kind: "claimed", job: rec.claimed });
+  });
+
+  it("else takes the next due queued job, in the order jobs fell due, read through the index in its order", async () => {
+    rec.due = { id: 5, status: "queued", attempts: 0, maxAttempts: 3, leaseOwner: null, lastError: null };
     rec.claimed = { id: 5, status: "running", attempts: 1, leaseOwner: "w1" };
 
     const res = await claimNextJob("w1", 15);
 
-    expect(rec.selects[0].forArgs).toEqual(["update", { skipLocked: true }]);
-    const { sql, params } = render(rec.selects[0].where);
-    expect(sql).toContain("`jobs`.`status` = ? and `jobs`.`runAfter` <= now()");
-    expect(sql).toContain("`jobs`.`status` = ? and `jobs`.`leaseExpiresAt` < now()");
-    expect(params).toEqual(["queued", "running"]);
+    expect(locking()).toHaveLength(2);
+    const due = locking()[1];
+    expect(due.forArgs).toEqual(["update", { skipLocked: true }]);
+    expect(due.from?.[1]).toEqual({ forceIndex: "jobs_status_run_after" });
+    expect(render(due.where)).toMatchObject({ sql: "(`jobs`.`status` = ? and `jobs`.`runAfter` <= now())", params: ["queued"] });
+    expect(columns(due.orderBy)).toEqual(["runAfter", "id"]);
     expect(rec.updates[0].set).toMatchObject({ status: "running", leaseOwner: "w1" });
     expect(res).toEqual({ kind: "claimed", job: rec.claimed });
   });
 
   it("records who lost a lapsed lease when it reclaims the job", async () => {
-    rec.candidate = { id: 6, status: "running", attempts: 1, maxAttempts: 3, leaseOwner: "w-dead", lastError: null };
+    rec.lapsed = { id: 6, status: "running", attempts: 1, maxAttempts: 3, leaseOwner: "w-dead", lastError: null };
     rec.claimed = { id: 6, status: "running", attempts: 2, leaseOwner: "w2" };
 
     await claimNextJob("w2", 15);
@@ -102,7 +137,7 @@ describe("claimNextJob", () => {
   });
 
   it("fails a job whose lease lapsed on its last attempt instead of running it again", async () => {
-    rec.candidate = { id: 7, status: "running", attempts: 3, maxAttempts: 3, leaseOwner: "w-dead", lastError: null };
+    rec.lapsed = { id: 7, status: "running", attempts: 3, maxAttempts: 3, leaseOwner: "w-dead", lastError: null };
 
     const res = await claimNextJob("w3", 15);
 
@@ -113,6 +148,7 @@ describe("claimNextJob", () => {
 
   it("returns nothing when no job is runnable", async () => {
     expect(await claimNextJob("w1", 15)).toBeNull();
+    expect(locking()).toHaveLength(2);
     expect(rec.updates).toEqual([]);
   });
 });

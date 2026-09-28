@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, lt, lte, sql } from "drizzle-orm";
 import { jobs, workers, type Job } from "@db/schema";
 import { getDb } from "../../queries/connection";
 
@@ -64,26 +64,58 @@ export type ClaimResult =
   | { kind: "abandoned"; job: Job };
 
 /**
- * Takes the next runnable job: a queued job whose time has come, or a running
- * job whose worker stopped renewing its lease.
+ * The index a claim reads jobs through. Named here because a claim forces it:
+ * see dueJob.
+ */
+export const JOBS_BY_STATUS_INDEX = "jobs_status_run_after";
+
+/**
+ * A running job whose worker stopped renewing its lease, oldest first. A claim
+ * takes one of these before any queued job: they are few, and have waited
+ * longest, and a busy queue must not starve them. Locks the row it returns,
+ * and passes over any row another claim holds.
+ */
+export const lapsedJob = (db: DbOrTx) =>
+  db
+    .select()
+    .from(jobs, { forceIndex: JOBS_BY_STATUS_INDEX })
+    .where(and(eq(jobs.status, "running"), lt(jobs.leaseExpiresAt, sql`now()`)))
+    .orderBy(jobs.id)
+    .limit(1)
+    .for("update", { skipLocked: true });
+
+/**
+ * The next queued job that is due, in the order they fell due. Read in the
+ * index's own order, the scan stops at the first due job no other claim
+ * holds and locks that row alone. A plan that sorted the due jobs first (by
+ * id, say) would lock every due job it read.
+ */
+export const dueJob = (db: DbOrTx) =>
+  db
+    .select()
+    .from(jobs, { forceIndex: JOBS_BY_STATUS_INDEX })
+    .where(and(eq(jobs.status, "queued"), lte(jobs.runAfter, sql`now()`)))
+    .orderBy(jobs.runAfter, jobs.id)
+    .limit(1)
+    .for("update", { skipLocked: true });
+
+/**
+ * Takes the next runnable job: a running job whose worker stopped renewing its
+ * lease, else a queued job whose time has come.
+ *
+ * READ COMMITTED, so the locking reads take no gap locks. Under REPEATABLE READ
+ * they did, and once the table held enough finished jobs for MySQL to read it
+ * through the index, claims deadlocked: each one's update, moving its row from
+ * queued to running, waited on a gap another claim held (SKIP LOCKED passes
+ * over locked rows, not gaps).
  */
 export async function claimNextJob(
   workerId: string,
   leaseSeconds = DEFAULT_LEASE_SECONDS,
 ): Promise<ClaimResult | null> {
   return getDb().transaction(async (tx) => {
-    const [candidate] = await tx
-      .select()
-      .from(jobs)
-      .where(
-        or(
-          and(eq(jobs.status, "queued"), lte(jobs.runAfter, sql`now()`)),
-          and(eq(jobs.status, "running"), lt(jobs.leaseExpiresAt, sql`now()`)),
-        ),
-      )
-      .orderBy(jobs.id)
-      .limit(1)
-      .for("update", { skipLocked: true });
+    let [candidate] = await lapsedJob(tx);
+    if (!candidate) [candidate] = await dueJob(tx);
     if (!candidate) return null;
 
     if (candidate.status === "running" && candidate.attempts >= candidate.maxAttempts) {
@@ -115,7 +147,7 @@ export async function claimNextJob(
       .where(eq(jobs.id, candidate.id));
     const [claimed] = await tx.select().from(jobs).where(eq(jobs.id, candidate.id));
     return { kind: "claimed", job: claimed };
-  });
+  }, { isolationLevel: "read committed" });
 }
 
 /** Extends the lease. False means this worker no longer holds the job. */
