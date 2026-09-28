@@ -38,6 +38,9 @@ app/bin/
 .tmp-ui-test/
 app/scratch/
 
+# The engine host's stores when run from app/ in development (ENGINE_HOST_DATA_DIR)
+app/.ontos-engines/
+
 # Local git identity maps
 .mailmap
 

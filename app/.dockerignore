@@ -12,6 +12,7 @@ dist
 .tmp-ui-test
 scratch
 bin
+.ontos-engines
 *.log
 *.tsbuildinfo
 
