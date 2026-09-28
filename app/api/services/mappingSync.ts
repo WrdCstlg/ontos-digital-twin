@@ -16,7 +16,7 @@ import {
   type SyncJob,
 } from "@db/schema";
 import { getDb } from "../queries/connection";
-import { withDeadlockRetry } from "../lib/deadlockRetry";
+import { withDeadlockRetry } from "../lib/mysqlErrors";
 import { writeAudit } from "./audit";
 import { recordGraphChange } from "./graphChanges";
 import { EngineRequestError, semanticEngine, type ShaclValidationResult } from "./semanticEngine";
