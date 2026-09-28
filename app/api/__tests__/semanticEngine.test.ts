@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import {
+  buildPrefixMap,
   datatypeRanges,
+  modulePrefixes,
   moduleToTurtle,
   knowledgeGraphToTurtle,
   shaclJsonToTurtle,
 } from "../services/rdfBridge";
 import { semanticEngine } from "../services/semanticEngine";
+import { seedShaped } from "./rdfFixtures";
 import type { OntologyClass, OntologyModule, OntologyProperty, KgNode, KgEdge } from "@db/schema";
 
 describe("Semantic Engine & RDF Bridge Integration", () => {
@@ -253,6 +256,19 @@ describe("Semantic Engine & RDF Bridge Integration", () => {
       expect(health.alive).toBe(true);
       expect(health.version).toBeDefined();
       expect(health.url).toBe(semanticEngine.getUrl());
+    });
+
+    it("loads a workspace graph whose module keys differ from their prefixes, every triple of it", async () => {
+      // Before the renderer declared every prefix it wrote, the engine refused this whole graph.
+      await semanticEngine.clearStore();
+      const { modules, nodes, edges, triples } = seedShaped;
+      const turtle = knowledgeGraphToTurtle(nodes, edges, buildPrefixMap(modules), undefined, modulePrefixes(modules));
+
+      expect((await semanticEngine.loadTurtle(turtle)).triplesLoaded).toBe(triples);
+      const amount = await semanticEngine.querySparql(
+        "SELECT ?v WHERE { <https://ontos.dev/ontology/fin/Invoice/INV-1> <https://ontos.dev/ontology/fin/amount> ?v }",
+      );
+      expect(amount.results).toHaveLength(1);
     });
 
     it("loads Turtle and runs SPARQL SELECT query", async () => {

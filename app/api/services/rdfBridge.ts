@@ -69,28 +69,51 @@ export function buildPrefixMap(modules: OntologyModule[] = []): Map<string, stri
   return map;
 }
 
+/** A local name Turtle takes after a prefix: letters, digits, _ - . inside, and not ending in a dot. */
+const PLAIN_LOCAL_NAME = /^[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?$/;
+
 /**
  * Formats an IRI to a valid Turtle representation.
  * - Full URLs become `<https://...>`
- * - Prefixed names with slashes (e.g. `hr:Person/E-0001`) become `<https://ontos.dev/ontology/hr/Person/E-0001>`
- * - Clean prefixed names (e.g. `hr:Person`) stay `hr:Person`
+ * - A prefixed name stays one (`hr:Person`) only when the document declares its
+ *   prefix and Turtle takes its local name. Otherwise it becomes the full IRI
+ *   (`hr:Person/E-0001` becomes `<https://ontos.dev/ontology/hr/Person/E-0001>`):
+ *   an undeclared prefix makes the engine refuse the whole document.
  */
 export function formatIri(iri: string, prefixMap: Map<string, string>): string {
   if (!iri) return "<https://ontos.dev/blank>";
-  if (iri.startsWith("http://") || iri.startsWith("https://")) {
-    return `<${iri}>`;
+  const colonIdx = iri.indexOf(":");
+  if (colonIdx > 0 && !iri.startsWith("http://") && !iri.startsWith("https://")) {
+    const prefix = iri.slice(0, colonIdx);
+    const local = iri.slice(colonIdx + 1);
+    if (prefixMap.has(prefix) && PLAIN_LOCAL_NAME.test(local)) return `${prefix}:${local}`;
   }
+  return `<${expandIri(iri, prefixMap)}>`;
+}
+
+/**
+ * The full IRI `iri` names, as formatIri writes it: a prefixed name in its
+ * declared namespace, or under Ontos's base for a prefix nobody declared; a
+ * bare name as an Ontos resource. What the engine reports (a SHACL focus
+ * node, say) is matched against this.
+ */
+export function expandIri(iri: string, prefixMap: Map<string, string>): string {
+  if (iri.startsWith("http://") || iri.startsWith("https://")) return iri;
   const colonIdx = iri.indexOf(":");
   if (colonIdx > 0) {
     const prefix = iri.slice(0, colonIdx);
-    const local = iri.slice(colonIdx + 1);
-    const baseUri = prefixMap.get(prefix) ?? `${BASE_ONTOLOGY_URI}/${prefix}/`;
-    if (local.includes("/") || /[^a-zA-Z0-9_\-.]/.test(local)) {
-      return `<${baseUri}${local}>`;
-    }
-    return `${prefix}:${local}`;
+    return `${prefixMap.get(prefix) ?? `${BASE_ONTOLOGY_URI}/${prefix}/`}${iri.slice(colonIdx + 1)}`;
   }
-  return `<${BASE_RESOURCE_URI}/${iri}>`;
+  return `${BASE_RESOURCE_URI}/${iri}`;
+}
+
+/**
+ * Each module's key, and the prefix it declares. A node's property stored
+ * without a prefix is its module's: `amount` on a node of module `finance` is
+ * `fin:amount`, the IRI the module's properties and shapes name.
+ */
+export function modulePrefixes(modules: Pick<OntologyModule, "key" | "prefix">[]): Map<string, string> {
+  return new Map(modules.filter((m) => m.prefix).map((m) => [m.key, m.prefix]));
 }
 
 /**
@@ -231,6 +254,7 @@ export function knowledgeGraphToTurtle(
   edges: KgEdge[],
   prefixMap: Map<string, string> = buildPrefixMap(),
   ranges?: DatatypeRanges,
+  prefixOfModule: ReadonlyMap<string, string> = new Map(),
 ): string {
   const lines: string[] = [];
   lines.push(serializePrefixes(prefixMap));
@@ -263,8 +287,9 @@ export function knowledgeGraphToTurtle(
       for (const [key, value] of Object.entries(props)) {
         if (value === null || value === undefined) continue;
 
-        // Resolve predicate: if key is already prefixed use it, else prefix with node's moduleKey
-        const predIri = key.includes(":") ? key : `${n.moduleKey}:${key}`;
+        // A key without a prefix is the node's module's property, in the
+        // module's namespace: its prefix, which is not always its key.
+        const predIri = key.includes(":") ? key : `${prefixOfModule.get(n.moduleKey) ?? n.moduleKey}:${key}`;
         const formattedPred = formatIri(predIri, prefixMap);
 
         const typed = declaredLiteral(value, ranges?.get(predIri));

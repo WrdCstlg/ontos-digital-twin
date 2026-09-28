@@ -23,6 +23,7 @@ import {
   datatypeRanges,
   moduleToTurtle,
   knowledgeGraphToTurtle,
+  modulePrefixes,
   shaclJsonToTurtle,
 } from "./services/rdfBridge";
 import {
@@ -591,7 +592,7 @@ export const ontologyRouter = createRouter({
             await semanticEngine.loadTurtle(modTtl);
 
             if (nodes.length > 0) {
-              const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties));
+              const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes([mod]));
               await semanticEngine.loadTurtle(instTtl);
             }
 
@@ -762,7 +763,7 @@ export const ontologyRouter = createRouter({
         const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
         await semanticEngine.loadTurtle(modTtl);
         if (nodes.length > 0) {
-          const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties));
+          const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes([mod]));
           await semanticEngine.loadTurtle(instTtl);
         }
         return semanticEngine.validateShacl(shapesTtl);

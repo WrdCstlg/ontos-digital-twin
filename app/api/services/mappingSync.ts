@@ -18,7 +18,7 @@ import {
 import { getDb } from "../queries/connection";
 import { writeAudit } from "./audit";
 import { EngineRequestError, semanticEngine, type ShaclValidationResult } from "./semanticEngine";
-import { buildPrefixMap, knowledgeGraphToTurtle, shaclJsonToTurtle } from "./rdfBridge";
+import { buildPrefixMap, expandIri, knowledgeGraphToTurtle, modulePrefixes, shaclJsonToTurtle } from "./rdfBridge";
 import { workspaceDatatypeRanges } from "./datatypeRanges";
 import { explainShaclReport, type ExplainedShaclReport } from "./explainableShacl";
 import { enqueueJob } from "./jobs/queue";
@@ -326,7 +326,7 @@ export async function checkImportShacl(
     });
   }
 
-  const dataTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId));
+  const dataTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId), modulePrefixes(mods));
   let raw: ShaclValidationResult;
   try {
     raw = await semanticEngine.exclusive(async () => {
@@ -351,12 +351,7 @@ export async function checkImportShacl(
     };
   }
 
-  const expand = (iri: string) => {
-    const colon = iri.indexOf(":");
-    const ns = colon > 0 ? prefixMap.get(iri.slice(0, colon)) : undefined;
-    return ns ? ns + iri.slice(colon + 1) : iri;
-  };
-  const judged = new Set([...own.keys()].flatMap((iri) => [iri, expand(iri)]));
+  const judged = new Set([...own.keys()].flatMap((iri) => [iri, expandIri(iri, prefixMap)]));
   const reportOn = (violations: ShaclValidationResult["violations"]) =>
     explainShaclReport({ ...raw, conforms: violations.length === 0, violationCount: violations.length, violations });
   const mine = raw.violations.filter((v) => judged.has(v.focusNode));
