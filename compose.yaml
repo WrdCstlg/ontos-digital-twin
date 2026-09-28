@@ -108,6 +108,8 @@ services:
   # The worker takes jobs from the queue in MySQL; more than one can run. It has
   # its own engine because the engine holds one graph at a time and the lock
   # that keeps operations from interleaving lives in the process using it.
+  # Replicas of this service (--scale worker=N) would share engine-worker, so
+  # give each worker its own engine instead (README, Known limitations).
   worker:
     build: *app-build
     command: ["node", "dist/worker.js"]
