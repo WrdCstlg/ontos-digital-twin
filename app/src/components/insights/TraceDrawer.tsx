@@ -190,7 +190,8 @@ export function TraceDrawer({
 }: {
   target: TraceTarget | null;
   onClose: () => void;
-  onAcknowledge: (insight: InsightRow) => void;
+  /** Left out for someone who may not acknowledge (a viewer): the action is not offered. */
+  onAcknowledge?: (insight: InsightRow) => void;
 }) {
   const open = target !== null;
   const centerIri = target ? resolveCenterIri(target) : null;
@@ -349,7 +350,7 @@ export function TraceDrawer({
 
         {/* Footer actions */}
         <div className="sticky bottom-0 flex items-center gap-2 border-t border-border-hairline bg-bg-panel/95 p-4 backdrop-blur">
-          {insight && insight.status === 'open' && (
+          {insight && insight.status === 'open' && onAcknowledge && (
             <button
               type="button"
               onClick={() => {

@@ -30,7 +30,8 @@ export interface InsightCardProps {
   insight: InsightRow;
   isNew?: boolean;
   onTrace: (insight: InsightRow) => void;
-  onAcknowledge: (insight: InsightRow) => void;
+  /** Left out for someone who may not acknowledge (a viewer): the action is not offered. */
+  onAcknowledge?: (insight: InsightRow) => void;
   onWatch: (insight: InsightRow) => void;
 }
 
@@ -122,7 +123,7 @@ export function InsightCard({ insight, isNew, onTrace, onAcknowledge, onWatch }:
         >
           <Waypoints className="size-3.5" /> Trace evidence
         </button>
-        {!acknowledged && (
+        {!acknowledged && onAcknowledge && (
           <button
             type="button"
             onClick={() => onAcknowledge(insight)}
