@@ -262,7 +262,10 @@ export async function checkImportShacl(
     .from(ontologyClasses)
     .where(and(eq(ontologyClasses.moduleId, m.moduleId), eq(ontologyClasses.iri, m.classIri)))
     .limit(1);
-  if (!targetClass?.shaclJson) return { kind: "none" };
+  // A class its module does not define has shapes nobody can find: a mapping
+  // set to block must not take that for a class without shapes.
+  if (!targetClass) return { kind: "uncheckable", reason: `the mapping's class ${m.classIri} is not in its module, so its shapes cannot be found` };
+  if (!targetClass.shaclJson) return { kind: "none" };
   const mods = await db.select().from(ontologyModules).where(eq(ontologyModules.workspaceId, workspaceId));
   const prefixMap = buildPrefixMap(mods);
   const shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);

@@ -3,12 +3,13 @@
  * The mapping editor keeps a mapping's SHACL mode across a save. A mapping
  * set to block is saved as block when the toggle is left alone: a reset to
  * warn on an unrelated save would quietly let imports that break the shapes
- * in. A new mapping starts at warn.
+ * in. A new mapping starts at warn. Someone who may not switch a blocking
+ * check off (an editor) sees it locked, says why, and saves what is saved.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { TRPCLink } from "@trpc/client";
+import { TRPCClientError, type TRPCLink } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
 import type { AppRouter } from "../../api/router";
 import { trpc } from "@/providers/trpc";
@@ -16,9 +17,12 @@ import { MappingEditor } from "@/components/mapping/MappingEditor";
 import type { ConnectorLike, MappingLike } from "@/components/mapping/utils";
 
 const calls: { path: string; input: unknown }[] = [];
-let canRelaxShaclCheck = true;
+let canRelaxShaclCheck: boolean | "fails" = true;
 const answers: Record<string, (input: unknown) => unknown> = {
-  "mapping.capabilities": () => ({ canRelaxShaclCheck }),
+  "mapping.capabilities": () => {
+    if (canRelaxShaclCheck === "fails") throw new Error("Service unavailable");
+    return { canRelaxShaclCheck };
+  },
   "ontology.listModules": () => [{ key: "hr", prefix: "hr", name: "HR" }],
   "ontology.listClasses": () => [{ iri: "hr:Person", label: "Person" }],
   "ontology.listProperties": () => [],
@@ -28,7 +32,14 @@ const answers: Record<string, (input: unknown) => unknown> = {
 const fakeLink: TRPCLink<AppRouter> = () => ({ op }) =>
   observable((observer) => {
     calls.push({ path: op.path, input: op.input });
-    observer.next({ result: { type: "data", data: answers[op.path]?.(op.input) ?? null } } as never);
+    let data: unknown;
+    try {
+      data = answers[op.path]?.(op.input) ?? null;
+    } catch (err) {
+      observer.error(TRPCClientError.from({ error: { message: (err as Error).message, code: -32000, data: { code: "INTERNAL_SERVER_ERROR", httpStatus: 503 } } } as never));
+      return;
+    }
+    observer.next({ result: { type: "data", data } } as never);
     observer.complete();
   });
 
@@ -38,15 +49,16 @@ const people: MappingLike = {
   columnMapJson: { subject: "hr:person/{id}" }, module: { key: "hr" },
 };
 
+/** Renders the editor over `mappings`; the returned function renders it again over new ones, as a refetch does. */
 function renderEditor(mappings: MappingLike[]) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
   const client = trpc.createClient({ links: [fakeLink] });
-  render(
+  const tree = (list: MappingLike[]) => (
     <trpc.Provider client={client} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
         <MappingEditor
           connector={connector}
-          mappings={mappings}
+          mappings={list}
           csvData={null}
           onRequestCsvUpload={vi.fn()}
           onPreview={vi.fn()}
@@ -55,11 +67,14 @@ function renderEditor(mappings: MappingLike[]) {
           onError={vi.fn()}
         />
       </QueryClientProvider>
-    </trpc.Provider>,
+    </trpc.Provider>
   );
+  const { rerender } = render(tree(mappings));
+  return (list: MappingLike[]) => rerender(tree(list));
 }
 
 const toggle = () => screen.getByRole("checkbox", { name: "Block imports that fail SHACL" }) as HTMLInputElement;
+const reason = () => toggle().closest("label")?.title ?? "";
 const save = () => act(async () => void fireEvent.click(screen.getByRole("button", { name: "Save" })));
 const saved = () => calls.filter((c) => c.path === "mapping.upsertMapping").map((c) => c.input);
 
@@ -90,12 +105,41 @@ describe("MappingEditor", () => {
   it("keeps a blocking check locked for someone who may not switch it back to warn, and says who may", async () => {
     canRelaxShaclCheck = false;
     renderEditor([people]);
-    await waitFor(() => expect(calls.some((c) => c.path === "mapping.capabilities")).toBe(true));
+    await waitFor(() => expect(reason()).toMatch(/Only ontologists and admins can switch it back to warn/));
     expect(toggle().checked).toBe(true);
     expect(toggle().disabled).toBe(true);
-    expect(toggle().closest("label")?.title).toMatch(/Only ontologists and admins can switch it back to warn/);
     await save();
     expect(saved()).toEqual([expect.objectContaining({ shaclMode: "block" })]);
+  });
+
+  it("lets someone who may not relax a check still switch one on", async () => {
+    canRelaxShaclCheck = false;
+    renderEditor([{ ...people, shaclMode: "warn" }]);
+    await waitFor(() => expect(calls.some((c) => c.path === "mapping.capabilities")).toBe(true));
+    expect(toggle().disabled).toBe(false);
+    fireEvent.click(toggle());
+    await save();
+    expect(saved()).toEqual([expect.objectContaining({ shaclMode: "block" })]);
+  });
+
+  it("shows and saves the saved mode when someone else switched the check on meanwhile", async () => {
+    canRelaxShaclCheck = false;
+    const refetched = renderEditor([{ ...people, shaclMode: "warn" }]);
+    await waitFor(() => expect(calls.some((c) => c.path === "mapping.capabilities")).toBe(true));
+    expect(toggle().checked).toBe(false);
+    // An ontologist switched it to block, and the list was fetched again: the form still holds warn.
+    refetched([people]);
+    await waitFor(() => expect(reason()).toMatch(/Only ontologists and admins/));
+    expect(toggle().checked).toBe(true);
+    await save();
+    expect(saved()).toEqual([expect.objectContaining({ shaclMode: "block" })]);
+  });
+
+  it("says it could not check, rather than who may, when the check fails", async () => {
+    canRelaxShaclCheck = "fails";
+    renderEditor([people]);
+    await waitFor(() => expect(reason()).toMatch(/Could not check whether you may switch this check off/));
+    expect(toggle().disabled).toBe(true);
   });
 
   it("starts a new mapping at warn", async () => {
