@@ -31,11 +31,12 @@ import {
   type Prepared,
   type SubmitterInfo,
 } from "./services/actions/service";
-import { redactDefinition, redactDeliveryResult, redactUrlsIn } from "./services/actions/webhookView";
+import { ACTION_AUTHOR_ROLES, redactDefinition, redactDeliveryResult } from "./services/actions/webhookView";
+import { jobAudience, jobErrorFor } from "./services/jobs/jobView";
 import type { TrpcContext } from "./context";
 
 /** Admins and ontologists define action types; any member may submit one their role allows. */
-const authorProcedure = workspaceProcedure.use(requireWorkspaceRole(["admin", "ontologist"]));
+const authorProcedure = workspaceProcedure.use(requireWorkspaceRole(ACTION_AUTHOR_ROLES));
 
 const paramsInput = z
   .record(z.string().max(64), z.union([z.string().max(10_000), z.number(), z.boolean(), z.null()]))
@@ -52,7 +53,7 @@ type Ctx = TrpcContext & {
  * addresses in full: everyone else sees where each goes (services/actions/webhookView.ts).
  */
 function canAuthor(ctx: Pick<Ctx, "membership" | "user">): boolean {
-  return hasWorkspaceRole(ctx.membership, ctx.user, ["admin", "ontologist"]);
+  return hasWorkspaceRole(ctx.membership, ctx.user, ACTION_AUTHOR_ROLES);
 }
 
 function submitterOf(ctx: Ctx): SubmitterInfo {
@@ -246,11 +247,16 @@ export const actionsRouter = createRouter({
       .limit(1);
     const parsed = version ? actionDefinitionSchema.safeParse(version.definitionJson) : null;
     const definition = parsed?.success ? parsed.data : null;
-    if (canAuthor(ctx)) return { submission, sideEffects, definition };
+    // Webhook addresses in full to authors, worker identities to admins (jobView.ts).
+    const audience = jobAudience(ctx.membership, ctx.user);
     return {
       submission,
-      sideEffects: sideEffects.map((s) => ({ ...s, result: redactDeliveryResult(s.result), lastError: redactUrlsIn(s.lastError) })),
-      definition: redactDefinition(definition),
+      sideEffects: sideEffects.map((s) => ({
+        ...s,
+        result: audience.webhookUrls ? s.result : redactDeliveryResult(s.result),
+        lastError: jobErrorFor(s.lastError, audience),
+      })),
+      definition: audience.webhookUrls ? definition : redactDefinition(definition),
     };
   }),
 });

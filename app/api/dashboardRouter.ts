@@ -13,6 +13,7 @@ import {
 } from "@db/schema";
 import { createRouter, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { jobAudience, jobErrorFor } from "./services/jobs/jobView";
 
 export const dashboardRouter = createRouter({
   overview: workspaceQuery.query(async ({ ctx }) => {
@@ -53,7 +54,8 @@ export const dashboardRouter = createRouter({
       .where(eq(connectors.workspaceId, ws.id))
       .orderBy(desc(syncJobs.id))
       .limit(1);
-    const lastSync = newest?.job ?? null;
+    // Its error is its queue job's, copied: worker identities only to admins (jobView.ts).
+    const lastSync = newest ? { ...newest.job, error: jobErrorFor(newest.job.error, jobAudience(ctx.membership, ctx.user)) } : null;
     const [snap] = await db
       .select()
       .from(graphSnapshots)
