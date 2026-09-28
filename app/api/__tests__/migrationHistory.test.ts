@@ -34,6 +34,7 @@ const RELEASED: Record<string, string> = {
   "0005_action_types": "fce338d641cca7286e0583f29e90bd2e03fd4bb876bfcf502c69a2911bab6c7b",
   "0006_api_tokens": "53b3496b0460eb3146d0131a821fe28f0de83f2ec6d07efc7261c6e94e5a5a36",
   "0007_mapping_shacl_mode": "006b2779562df0a739b32df3dede345a1800b47aa2442e1a81e6367f8e59da7a",
+  "0008_audit_chain_lock": "f1aa0659b4c9296e301246a68847c2e009af9698190b2c9ca42093ce411c5116",
 };
 
 describe("the migration history", () => {

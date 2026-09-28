@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
-import { desc, eq } from "drizzle-orm";
-import { auditLog, workspaces } from "@db/schema";
+import { desc, eq, sql } from "drizzle-orm";
+import { auditChainLock, auditLog, workspaces } from "@db/schema";
 import type { User } from "@db/schema";
 import { getDb } from "../queries/connection";
 
@@ -77,9 +77,31 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
  * Append a hash-chained audit entry. Returns the inserted row. Given `inTx`,
  * the entry is written inside that transaction, so it commits or rolls back
  * with the change it records.
+ *
+ * Appends take turns on the one row of audit_chain_lock, and only then read
+ * their chain's last entry under lock. Reading it under lock took a gap lock
+ * at the chain's end, a gap that reaches into the next workspace's chain when
+ * a chain is short; two appends that held such a gap each waited to insert
+ * into it, and deadlocked, so concurrent action submissions failed. With the
+ * turn taken first, one append at a time holds a chain's end, until it commits.
+ * Reading the last entry itself, not a copy kept on the lock row, keeps an
+ * append that does not take its turn (a process of an earlier build, during an
+ * upgrade) from forking the chain.
+ *
+ * The turn is taken inside the append's own transaction, in one statement, an
+ * upsert of that row. On the row that is there, it takes an exclusive lock on
+ * that one record and no gap; if the row is gone, it makes it again, and a
+ * second append doing the same waits for the first. Appends therefore follow
+ * one another across all workspaces: each holds the turn only from its audit
+ * write to its commit, the last steps of its transaction.
  */
 export async function writeAudit(opts: AuditFields & { workspaceId: number }, inTx?: Tx) {
   const write = async (tx: Tx) => {
+    await tx
+      .insert(auditChainLock)
+      .values({ id: 1 })
+      .onDuplicateKeyUpdate({ set: { id: sql`${auditChainLock.id}` } });
+
     const [last] = await tx
       .select()
       .from(auditLog)

@@ -6,6 +6,7 @@ import {
   timestamp,
   bigint,
   int,
+  tinyint,
   double,
   boolean,
   json,
@@ -520,6 +521,17 @@ export const auditLog = mysqlTable(
   (table) => [index("audit_log_ws").on(table.workspaceId, table.id)],
 );
 export type AuditEntry = typeof auditLog.$inferSelect;
+
+/**
+ * One row, locked by every append to an audit chain before it reads its
+ * chain's last entry (services/audit.ts): appends take turns on it. Reading the
+ * last entry under lock alone took gap locks at the chain's end, which reach
+ * into a neighbouring workspace's chain, and on which concurrent appends
+ * deadlocked.
+ */
+export const auditChainLock = mysqlTable("audit_chain_lock", {
+  id: tinyint("id", { unsigned: true }).primaryKey(),
+});
 
 /* ─────────────────────────────────────────────────────────────
  * Digital twin state history — one row per (twin, telemetry key,

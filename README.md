@@ -106,6 +106,11 @@ objects it read are locked and checked unchanged, and the edits, the submission 
 its audit entry and its side-effect jobs commit together or not at all. A deadlock runs
 the whole transaction again; objects that changed in between are planned again once.
 
+Each audit entry holds the hash of the one before it in its workspace's chain. Appends
+take turns on the one row of `audit_chain_lock`, from the audit write to the commit, and
+only then read their chain's last entry: appends made at once, from submissions, imports
+and the admin pages, neither deadlock nor fork a chain.
+
 ---
 
 ## Landscape
