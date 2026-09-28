@@ -425,7 +425,7 @@ export function MappingEditor({
             'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 font-mono text-[11.5px] transition-colors',
             form.shaclMode === 'block' ? 'border-risk/50 bg-risk/10 text-risk' : 'border-border-hairline text-text-muted hover:text-text-primary',
           )}
-          title="Block: an import whose rows fail the class's SHACL shapes imports nothing, and waits while the engine cannot check them. Warn: it imports and records the violations."
+          title="Block: an import whose rows break the class's SHACL shapes (a Violation) imports nothing. If the engine cannot check them, the import is tried twice more over a few seconds, then fails, and can be run again. Warn: it imports and records what the shapes report."
         >
           <input
             type="checkbox"
@@ -436,7 +436,8 @@ export function MappingEditor({
           />
           block on SHACL violations
         </label>
-        <div className="ml-auto flex items-center gap-2">          <button
+        <div className="ml-auto flex items-center gap-2">
+          <button
             type="button"
             onClick={onSaveClick}
             disabled={saving || !form.classIri || !form.subject}
