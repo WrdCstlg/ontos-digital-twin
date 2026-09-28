@@ -39,30 +39,34 @@ import {
  */
 
 export class EngineHostRefusal extends EngineRequestError {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    /** With incarnation_mismatch: the store's current incarnation. */
-    readonly incarnation?: string | null,
-    readonly state?: EngineState,
-  ) {
+  readonly status: number;
+  readonly code: string;
+  /** With incarnation_mismatch: the store's current incarnation. */
+  readonly incarnation?: string | null;
+  readonly state?: EngineState;
+  constructor(status: number, code: string, message: string, incarnation?: string | null, state?: EngineState) {
     super(message);
     this.name = "EngineHostRefusal";
+    this.status = status;
+    this.code = code;
+    this.incarnation = incarnation;
+    this.state = state;
   }
 }
 
 export class EngineHostUnavailable extends Error {
-  constructor(
-    message: string,
-    /** Null when no answer came: a timeout, or the host not reachable. */
-    readonly status: number | null,
-    readonly code: string,
-    readonly retryAfterMs: number | null = null,
-    readonly state?: EngineState,
-  ) {
+  /** Null when no answer came: a timeout, or the host not reachable. */
+  readonly status: number | null;
+  readonly code: string;
+  readonly retryAfterMs: number | null;
+  readonly state?: EngineState;
+  constructor(message: string, status: number | null, code: string, retryAfterMs: number | null = null, state?: EngineState) {
     super(message);
     this.name = "EngineHostUnavailable";
+    this.status = status;
+    this.code = code;
+    this.retryAfterMs = retryAfterMs;
+    this.state = state;
   }
 }
 

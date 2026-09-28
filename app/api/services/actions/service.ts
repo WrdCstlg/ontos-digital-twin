@@ -24,6 +24,8 @@ import { canonicalize, writeAudit } from "../audit";
 import { recordGraphChange } from "../graphChanges";
 import { enqueueJob } from "../jobs/queue";
 import { EngineInterference, semanticEngine, type ShaclValidationResult } from "../semanticEngine";
+import { EngineHostUnavailable } from "../engineHostClient";
+import { scratchShacl, workspaceGraphs } from "../workspaceGraph";
 import { buildPrefixMap, expandIri, knowledgeGraphSubjects, modulePrefixes, shaclJsonToTurtle } from "../rdfBridge";
 import { workspaceDatatypeRanges } from "../datatypeRanges";
 import { explainShaclReport } from "../explainableShacl";
@@ -175,7 +177,8 @@ export async function checkShacl(workspaceId: number, plan: EditPlan, objects: M
     .map((r) => r.cls)
     .filter((c) => c.shaclJson);
   if (shaped.length === 0) return { status: "no_shapes", violations: [] };
-  if (!(await semanticEngine.ensureEngineRunning())) return { status: "unavailable", violations: [] };
+  const hosted = workspaceGraphs() !== null;
+  if (!hosted && !(await semanticEngine.ensureEngineRunning())) return { status: "unavailable", violations: [] };
 
   // Link targets that are not themselves touched, so their links serialise.
   const touchedIris = new Set(touched.map((t) => t.iri));
@@ -233,17 +236,23 @@ export async function checkShacl(workspaceId: number, plan: EditPlan, objects: M
   const judged = new Set([...touchedIris].flatMap((i) => [i, expandIri(i, prefixMap)]));
   // Values typed as their properties declare, as the workspace's graph is.
   const ranges = await workspaceDatatypeRanges(workspaceId);
+  const subjects = knowledgeGraphSubjects(nodes, edges, prefixMap, ranges, modulePrefixes(mods));
+  const shapes = shaclJsonToTurtle(shaped, prefixMap);
   let report: ShaclValidationResult;
   try {
-    report = await semanticEngine.exclusive(() =>
-      semanticEngine.checkLoaded(
-        async () => (await semanticEngine.loadSubjects(prefixMap, knowledgeGraphSubjects(nodes, edges, prefixMap, ranges, modulePrefixes(mods)))).triplesLoaded,
-        () => semanticEngine.validateShacl(shaclJsonToTurtle(shaped, prefixMap)),
-      ),
-    );
+    // With the engine host, on a scratch engine that holds only these objects;
+    // without it, on the one engine, emptied and loaded under its lock.
+    report = hosted
+      ? await scratchShacl(prefixMap, subjects, shapes)
+      : await semanticEngine.exclusive(() =>
+          semanticEngine.checkLoaded(
+            async () => (await semanticEngine.loadSubjects(prefixMap, subjects)).triplesLoaded,
+            () => semanticEngine.validateShacl(shapes),
+          ),
+        );
   } catch (err) {
-    // Checked on a store something else was writing to: no check at all.
-    if (err instanceof EngineInterference) return { status: "unavailable", violations: [] };
+    // Checked on a store something else was writing to, or on no engine at all: no check.
+    if (err instanceof EngineInterference || err instanceof EngineHostUnavailable) return { status: "unavailable", violations: [] };
     throw err;
   }
   if (report.error) return { status: "unavailable", violations: [] };
