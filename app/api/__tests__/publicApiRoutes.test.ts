@@ -30,7 +30,10 @@ vi.mock("../services/actions/service", async (importOriginal) => ({
   prepareSubmission: vi.fn(),
   submitAction: vi.fn(),
 }));
-vi.mock("../queries/connection", () => {
+// The per-token limit runs against an in-memory rate_limit_windows (memoryRateLimits.ts).
+const limits = vi.hoisted(() => ({ rows: new Map() }));
+vi.mock("../queries/connection", async () => {
+  const { memoryPoolFor } = await import("./memoryRateLimits");
   const chain = (): Record<string, unknown> => {
     const c: Record<string, unknown> = {};
     const self = () => c;
@@ -46,13 +49,14 @@ vi.mock("../queries/connection", () => {
     });
     return c;
   };
-  return { getDb: vi.fn(() => ({ select: () => chain() })) };
+  return { getDb: vi.fn(() => ({ select: () => chain() })), getPool: memoryPoolFor(limits) };
 });
 
 import { BadQuery, getObject, listObjects } from "../services/publicApi/objects";
 import { loadOntologyModel } from "../services/publicApi/model";
 import { SubmissionConflict, loadActionType, prepareSubmission, submitAction } from "../services/actions/service";
-import { ontologyModels, publicApi } from "../publicApiRoutes";
+import { RateLimitUnavailable } from "../lib/rateLimit";
+import { ontologyModels, publicApi, publicApiRateLimiter } from "../publicApiRoutes";
 
 let tokenId = 0;
 function token(over: Partial<Principal> = {}): PrincipalResult {
@@ -138,8 +142,28 @@ describe("who may call", () => {
     const res = await get("/ontology");
     expect(res.status).toBe(429);
     expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(res.headers.get("x-ratelimit-remaining")).toBe("0");
+    expect(await errorOf(res)).toEqual({ code: "rate_limited", message: "Too many requests. Slow down and retry after the time in retry-after." });
     state.principal = token(); // another token is not held back
-    expect((await get("/ontology")).status).toBe(200);
+    const next = await get("/ontology");
+    expect(next.status).toBe(200);
+    expect(next.headers.get("x-ratelimit-remaining")).toBe("299");
+  });
+
+  it("answers 503 with retry-after when the limit could not be counted: never 401 or 429, and never lets the request through", async () => {
+    const spy = vi.spyOn(publicApiRateLimiter, "check").mockRejectedValueOnce(
+      new RateLimitUnavailable("api", Object.assign(new Error("connect ECONNREFUSED 172.19.0.3:3306"), { code: "ECONNREFUSED" })),
+    );
+    try {
+      const res = await get("/ontology");
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("5");
+      expect(res.headers.get("x-ratelimit-remaining")).toBeNull();
+      expect(await errorOf(res)).toEqual({ code: "unavailable", message: "The rate limit could not be checked just now. Retry in a moment." });
+      expect(loadOntologyModel).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

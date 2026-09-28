@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   mysqlEnum,
@@ -589,6 +590,32 @@ export const graphDirty = mysqlTable(
   ],
 );
 export type GraphDirtyRow = typeof graphDirty.$inferSelect;
+
+/**
+ * The rate limits and the login lockout (api/lib/rateLimit.ts), kept here so
+ * that every API replica counts against the same limit. One row per limit
+ * (its bucket: auth, api, sparql, nlq, scan) and key. The key is stored as its
+ * SHA-256, so no email address or token id is. `hits` holds the times of the
+ * requests let through within the window, oldest first and at most the
+ * limit's max, as epoch milliseconds on the database's clock. A check locks
+ * its row, so checks of one key take turns. A row idle for a day holds only
+ * expired times, and the worker deletes it.
+ */
+export const rateLimitWindows = mysqlTable(
+  "rate_limit_windows",
+  {
+    bucket: varchar("bucket", { length: 32 }).notNull(),
+    subject: char("subject", { length: 64 }).notNull(),
+    hits: json("hits").$type<number[]>().notNull(),
+    // drizzle-kit writes ON UPDATE CURRENT_TIMESTAMP without the precision,
+    // which MySQL refuses on a timestamp(3); its migration says (3) by hand.
+    updatedAt: timestamp("updatedAt", { fsp: 3 }).notNull().default(sql`CURRENT_TIMESTAMP(3)`).onUpdateNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.bucket, table.subject] }),
+    index("rate_limit_windows_updated").on(table.updatedAt),
+  ],
+);
 
 /* ─────────────────────────────────────────────────────────────
  * Digital twin state history — one row per (twin, telemetry key,

@@ -173,7 +173,14 @@ app.post("/api/sparql", async (c) => {
     return c.json({ error: "Forbidden: No authorized workspace membership." }, 403);
   }
 
-  const limit = sparqlRateLimiter.check(`sparql:${user.id}`);
+  let limit;
+  try {
+    limit = await sparqlRateLimiter.check(`sparql:${user.id}`);
+  } catch (err) {
+    // Not counted, so neither refused nor let through.
+    console.warn(`[sparql] ${err instanceof Error ? err.message : String(err)}`);
+    return c.json({ error: "The rate limit could not be checked just now. Try again in a moment." }, 503);
+  }
   if (!limit.allowed) {
     c.header("retry-after", String(Math.ceil(limit.resetMs / 1000)));
     return c.json({ error: "Rate limit exceeded. Try again shortly." }, 429);

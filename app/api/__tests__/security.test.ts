@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import * as jose from "jose";
 import { hashPassword, verifyPassword } from "../lib/password";
-import { SlidingWindowRateLimiter, authRateLimiter } from "../lib/rateLimit";
+import { RateLimiter, authRateLimiter } from "../lib/rateLimit";
 import { signSessionToken, verifySessionToken } from "../auth/session";
 import { getSessionCookieOptions } from "../lib/cookies";
 import { translate } from "../services/nlq";
@@ -12,13 +12,16 @@ import type { User } from "@db/schema";
 
 // Stand-in database for loginWithCredentials. The real findUserByEmail runs
 // against it: every `select().from().where().limit()` resolves to `userRows`,
-// and `update().set().where()` (lastSignInAt stamp) resolves to nothing.
+// and `update().set().where()` (lastSignInAt stamp) resolves to nothing. The
+// rate limits run against an in-memory rate_limit_windows (memoryRateLimits.ts).
 const dbState = vi.hoisted(() => ({
   userRows: [] as unknown[],
   selects: 0,
 }));
+const limits = vi.hoisted(() => ({ rows: new Map() }));
 
-vi.mock("../queries/connection", () => ({
+vi.mock("../queries/connection", async () => ({
+  getPool: (await import("./memoryRateLimits")).memoryPoolFor(limits),
   getDb: () => ({
     select: () => {
       dbState.selects += 1;
@@ -167,17 +170,17 @@ describe("Security Posture Verification", () => {
       };
     });
 
-    beforeEach(() => {
+    beforeEach(async () => {
       dbState.userRows = [account];
       dbState.selects = 0;
-      authRateLimiter.reset(EMAIL);
-      authRateLimiter.reset(OTHER_EMAIL);
+      await authRateLimiter.reset(EMAIL);
+      await authRateLimiter.reset(OTHER_EMAIL);
     });
 
-    afterEach(() => {
+    afterEach(async () => {
       dbState.userRows = [];
-      authRateLimiter.reset(EMAIL);
-      authRateLimiter.reset(OTHER_EMAIL);
+      await authRateLimiter.reset(EMAIL);
+      await authRateLimiter.reset(OTHER_EMAIL);
     });
 
     async function failOnce(email: string) {
@@ -266,24 +269,24 @@ describe("Security Posture Verification", () => {
   });
 
   describe("Component 5: Sliding Window Rate Limiter", () => {
-    it("allows requests up to max and blocks thereafter with resetMs calculation", () => {
-      const limiter = new SlidingWindowRateLimiter({ windowMs: 1000, max: 3 });
+    it("allows requests up to max and blocks thereafter with resetMs calculation", async () => {
+      const limiter = new RateLimiter("component-5", { windowMs: 1000, max: 3 });
 
-      expect(limiter.check("client-1").allowed).toBe(true);
-      expect(limiter.check("client-1").allowed).toBe(true);
-      expect(limiter.check("client-1").allowed).toBe(true);
+      expect((await limiter.check("client-1")).allowed).toBe(true);
+      expect((await limiter.check("client-1")).allowed).toBe(true);
+      expect((await limiter.check("client-1")).allowed).toBe(true);
 
-      const blocked = limiter.check("client-1");
+      const blocked = await limiter.check("client-1");
       expect(blocked.allowed).toBe(false);
       expect(blocked.remaining).toBe(0);
       expect(blocked.resetMs).toBeGreaterThan(0);
 
       // Separate client is not blocked
-      expect(limiter.check("client-2").allowed).toBe(true);
+      expect((await limiter.check("client-2")).allowed).toBe(true);
 
       // Reset clears hits
-      limiter.reset("client-1");
-      expect(limiter.check("client-1").allowed).toBe(true);
+      await limiter.reset("client-1");
+      expect((await limiter.check("client-1")).allowed).toBe(true);
     });
   });
 

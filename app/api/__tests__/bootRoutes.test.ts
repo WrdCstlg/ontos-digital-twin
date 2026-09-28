@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Hono } from "hono";
 import { sessionUser } from "../auth/service";
+import { RateLimitUnavailable, sparqlRateLimiter } from "../lib/rateLimit";
 
 // Engine stub whose steps record whether they ran inside exclusive().
 const engine = vi.hoisted(() => {
@@ -60,6 +61,12 @@ vi.mock("../services/workspaceGuard", async (importOriginal) => ({
     membership: { role: "viewer" },
   })),
 }));
+// The SPARQL limit runs against an in-memory rate_limit_windows (memoryRateLimits.ts).
+const limits = vi.hoisted(() => ({ rows: new Map() }));
+vi.mock("../queries/connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../queries/connection")>()),
+  getPool: (await import("./memoryRateLimits")).memoryPoolFor(limits),
+}));
 
 let app: Hono;
 
@@ -69,6 +76,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   engine.lock.log.length = 0;
+  limits.rows.clear();
   vi.clearAllMocks();
   vi.unstubAllEnvs();
 });
@@ -115,6 +123,28 @@ describe("POST /api/sparql", () => {
     expect(res.status).toBe(400);
     expect(engine.exclusive).not.toHaveBeenCalled();
     expect(engine.querySparql).not.toHaveBeenCalled();
+  });
+
+  it("limits each user to 30 queries a minute, then says when to retry", async () => {
+    for (let i = 0; i < 30; i++) expect((await sparql("SELECT ?s WHERE { ?s ?p ?o }")).status).toBe(200);
+    const res = await sparql("SELECT ?s WHERE { ?s ?p ?o }");
+    expect(res.status).toBe(429);
+    expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(await res.json()).toEqual({ error: "Rate limit exceeded. Try again shortly." });
+    expect(engine.querySparql).toHaveBeenCalledTimes(30);
+  });
+
+  it("answers 503 when the limit cannot be counted, never 401 or 429, and leaves the engine alone", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.spyOn(sparqlRateLimiter, "check").mockRejectedValueOnce(new RateLimitUnavailable("sparql", new Error("connect ECONNREFUSED")));
+    try {
+      const res = await sparql("SELECT ?s WHERE { ?s ?p ?o }");
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "The rate limit could not be checked just now. Try again in a moment." });
+      expect(engine.exclusive).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("returns a query error as 400 without leaving the lock held", async () => {
