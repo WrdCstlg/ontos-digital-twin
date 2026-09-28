@@ -43,16 +43,17 @@ export const dashboardRouter = createRouter({
       .select({ n: count() })
       .from(insights)
       .where(and(eq(insights.workspaceId, ws.id), eq(insights.status, "open")));
-    const conns = await db.select().from(connectors).where(eq(connectors.workspaceId, ws.id));
-    let lastSync: typeof syncJobs.$inferSelect | null = null;
-    if (conns.length) {
-      const maps = await db.select().from(mappings);
-      const mapIds = maps.filter((m) => conns.some((cn) => cn.id === m.connectorId)).map((m) => m.id);
-      if (mapIds.length) {
-        const jobs = await db.select().from(syncJobs).orderBy(desc(syncJobs.id)).limit(50);
-        lastSync = jobs.find((j) => mapIds.includes(j.mappingId)) ?? null;
-      }
-    }
+    // This workspace's newest import, however busy other workspaces are: a
+    // sync job is a workspace's through its mapping's connector.
+    const [newest] = await db
+      .select({ job: syncJobs })
+      .from(syncJobs)
+      .innerJoin(mappings, eq(syncJobs.mappingId, mappings.id))
+      .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+      .where(eq(connectors.workspaceId, ws.id))
+      .orderBy(desc(syncJobs.id))
+      .limit(1);
+    const lastSync = newest?.job ?? null;
     const [snap] = await db
       .select()
       .from(graphSnapshots)
