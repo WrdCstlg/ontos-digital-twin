@@ -1,8 +1,8 @@
 {
   "schema": "prothesis.lock/v1",
   "manifest_sha": "sha256:dbf08316a1156b4d9855022619f03be0cccdf84c6270c8fb9c90aad4a01397c4",
-  "reason": "api.read_your_writes: every action submission acknowledged through /api/v1 is visible, as applied, to the next read of its objects through /api/v1.",
-  "locked_at": "2026-09-26T22:18:24Z",
+  "reason": "OBS-GATE-007 follow-up: reproducible checker builds with -buildvcs=false so checker binary digests are stable across commits and environments.",
+  "locked_at": "2026-09-28T16:53:03Z",
   "tool_version": "0.1.0-phase0",
   "builtin_options_fingerprint": "sha256:ca5cba3edb828e29bd4b1357c9ff2d86ae2e3eb6a6bd009a2430b076304064bf",
   "executables": [
@@ -10,43 +10,43 @@
       "oracle": "actions.delivered",
       "cmd": "./bin/oracle-actions --check delivered --node db --settle 60s",
       "resolved": "bin/oracle-actions.exe",
-      "sha256": "sha256:c46d6aac228fb510f332eb35e4dbf31b9cc97e1b82608011ffa10f8520cb03d0",
+      "sha256": "sha256:1285500921f0984d13ded0cb1703708553da4c19d5b1f726853d5acd48a2bde6",
       "size": 5104640
     },
     {
       "oracle": "actions.durable",
       "cmd": "./bin/oracle-actions --check durable --node db",
       "resolved": "bin/oracle-actions.exe",
-      "sha256": "sha256:c46d6aac228fb510f332eb35e4dbf31b9cc97e1b82608011ffa10f8520cb03d0",
+      "sha256": "sha256:1285500921f0984d13ded0cb1703708553da4c19d5b1f726853d5acd48a2bde6",
       "size": 5104640
     },
     {
       "oracle": "api.read_your_writes",
       "cmd": "./bin/oracle-api",
       "resolved": "bin/oracle-api.exe",
-      "sha256": "sha256:524b24a090e7b71b4b8703d1590959da55b1bb3f92d12ff6fb66fa7aac58025e",
-      "size": 4729344
+      "sha256": "sha256:97f01f3c894c6eededee69c6a03e555491b37efa351a1afd62be6bc130b62b69",
+      "size": 4728320
     },
     {
       "oracle": "jobs.lease_lapse",
       "cmd": "./bin/oracle-job-leases --node db --settle 60s --asked-to-stop stopping,stopped",
       "resolved": "bin/oracle-job-leases.exe",
-      "sha256": "sha256:df75abce007d7ce8255d1327cf60597994d593ba88ba138cee675fb448918a2e",
-      "size": 5068288
+      "sha256": "sha256:bab65a17c4a1c2aabfc611e4f191f7fd1b566b749280e6bd150a0739cf568d67",
+      "size": 5068800
     },
     {
       "oracle": "session.honoured",
       "cmd": "./bin/oracle-session",
       "resolved": "bin/oracle-session.exe",
-      "sha256": "sha256:688803e7c31744cc64a61ce4d507a2608cdd0167e011f7e445d54ab6a72848da",
+      "sha256": "sha256:aaab2af650d8a423c6d20bc9f539ba0f2a79d3920f4980f0038eff65df9a3948",
       "size": 4770816
     },
     {
       "oracle": "sync_jobs.settle",
       "cmd": "./bin/oracle-sync-jobs --node db --settle 30s --unsettled queued,running",
       "resolved": "bin/oracle-sync-jobs.exe",
-      "sha256": "sha256:400242bbed76283118d8e7975fef2882170b875809c2abe9eebb95efa10f000a",
-      "size": 5117952
+      "sha256": "sha256:2f68d127d38ce8ad5e09fe7fe669568bc123cc2e2d2b4419fbce210ffc989da3",
+      "size": 5116416
     }
   ],
   "covers": [
