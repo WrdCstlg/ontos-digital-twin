@@ -11,6 +11,12 @@
  * scope as the damage it would do. Ordering follows MySQL's for NULLs (first
  * when ascending) but compares strings by code unit, not by a collation.
  *
+ * A transaction runs its body against the same tables and, if the body
+ * throws, puts them back as they were. There is no isolation and no lock: a
+ * locking read (`.for("update")`) reads as any other. An update that sets a
+ * column to itself plus a number (`col = col + 1`) is evaluated; any other SQL
+ * value it sets (`now()`) is stored as given, unevaluated.
+ *
  * Use it from vi.mock:
  *   const store = vi.hoisted(() => ({ tables: new Map<string, Row[]>() }));
  *   vi.mock("../queries/connection", async () => ({
@@ -152,6 +158,19 @@ function awaitable<T>(run: () => T, extra: Record<string, unknown> = {}) {
   return q;
 }
 
+/** An update's values for one row: `col + n`, a column of the row's own, evaluated; the rest as given. */
+function evaluatePatch(patch: Row, row: Row, table: string): Row {
+  const out: Row = {};
+  for (const [key, value] of Object.entries(patch)) {
+    out[key] = value;
+    if (!is(value, SQL)) continue;
+    const { sql, params } = dialect.sqlToQuery(value);
+    const m = new RegExp(`^${COL} \\+ (\\?|\\d+)$`).exec(sql.trim());
+    if (m && m[1] === table) out[key] = Number(row[m[2]] ?? 0) + Number(m[3] === "?" ? params[0] : m[3]);
+  }
+  return out;
+}
+
 export function memoryDb(tables: Tables) {
   const rowsOf = (t: Table) => {
     const name = getTableName(t);
@@ -159,14 +178,6 @@ export function memoryDb(tables: Tables) {
     return tables.get(name)!;
   };
   const db = {
-    /**
-     * Runs `run` on this same database: nothing is isolated, and a failure
-     * rolls nothing back. Tests of what a transaction guarantees run on a
-     * real MySQL (__tests__/mysql).
-     */
-    transaction<T>(run: (tx: unknown) => Promise<T>): Promise<T> {
-      return run(db);
-    },
     select(fields?: Record<string, unknown>) {
       return {
         from(base: Table) {
@@ -199,6 +210,8 @@ export function memoryDb(tables: Tables) {
             },
             limit: (n: number) => ((limit = n), chain),
             offset: (n: number) => ((offset = n), chain),
+            // No locks in memory: a locking read reads.
+            for: () => chain,
           });
           return chain;
         },
@@ -231,7 +244,7 @@ export function memoryDb(tables: Tables) {
           const chain: Record<string, unknown> = awaitable(() => {
             const name = getTableName(t);
             const hit = rowsOf(t).filter((r) => matches(where, { [name]: r }));
-            for (const r of hit) Object.assign(r, patch);
+            for (const r of hit) Object.assign(r, evaluatePatch(patch, r, name));
             return [{ affectedRows: hit.length }];
           });
           chain.where = (w: unknown) => ((where = w), chain);
@@ -253,7 +266,24 @@ export function memoryDb(tables: Tables) {
       return chain;
     },
   };
-  return db;
+  return Object.assign(db, {
+    /**
+     * Runs `body` against these tables, as a real transaction would: if it
+     * throws, they are put back as they were. Nothing here takes a row's
+     * lock, so two calls racing each other are not what a real transaction
+     * guarantees; those run on a real MySQL (__tests__/mysql).
+     */
+    async transaction<T>(body: (tx: typeof db) => Promise<T>): Promise<T> {
+      const saved = [...tables].map(([name, rows]) => [name, rows.map((r) => ({ ...r }))] as const);
+      try {
+        return await body(db);
+      } catch (err) {
+        tables.clear();
+        for (const [name, rows] of saved) tables.set(name, rows);
+        throw err;
+      }
+    },
+  });
 }
 
 /** For vi.mock: a getDb that serves `tables`. */
