@@ -12,7 +12,7 @@ import { PermanentJobError } from "../services/jobs/worker";
 import { writeAudit } from "../services/audit";
 import { EngineRequestError, semanticEngine } from "../services/semanticEngine";
 import { appRouter } from "../router";
-import { createMockContext, mockOntologistUser, mockWorkspace } from "./testHarness";
+import { createMockContext, mockOntologistUser, mockViewerUser, mockWorkspace } from "./testHarness";
 
 const store = vi.hoisted(() => ({ tables: new Map<string, Record<string, unknown>[]>() }));
 vi.mock("../queries/connection", async () => ({ getDb: (await import("./memoryDb")).memoryDbFor(store.tables) }));
@@ -252,6 +252,25 @@ describe("saving a mapping's SHACL mode", () => {
     expect(off.payload).toMatchObject({ shaclMode: "warn", shaclModeWas: "block" });
     expect(rename.action).toBe("Updated mapping 'People (renamed)'");
     expect(rename.payload).not.toHaveProperty("shaclModeWas");
+  });
+
+  it("lets an editor switch the check on, and only an ontologist or admin switch it back to warn", async () => {
+    setUp("warn");
+    const editor = () =>
+      appRouter.createCaller(
+        createMockContext({ user: mockViewerUser, workspace: mockWorkspace, membership: { id: 903, workspaceId: WS, userId: mockViewerUser.id, role: "editor", moduleScope: null, createdAt: at } }),
+      );
+    await editor().mapping.upsertMapping(save({ shaclMode: "block" }));
+    expect(rows(mappings)[0].shaclMode).toBe("block");
+    await expect(editor().mapping.upsertMapping(save({ shaclMode: "warn" }))).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(rows(mappings)[0].shaclMode).toBe("block");
+    // A save that leaves the mode as it is goes through.
+    await editor().mapping.upsertMapping(save({ name: "People (renamed)" }));
+    expect(rows(mappings)[0]).toMatchObject({ name: "People (renamed)", shaclMode: "block" });
+    await ontologist().mapping.upsertMapping(save({ shaclMode: "warn" }));
+    expect(rows(mappings)[0].shaclMode).toBe("warn");
+    expect(await editor().mapping.capabilities()).toEqual({ canRelaxShaclCheck: false });
+    expect(await ontologist().mapping.capabilities()).toEqual({ canRelaxShaclCheck: true });
   });
 
   it("gives a new mapping warn unless told otherwise", async () => {

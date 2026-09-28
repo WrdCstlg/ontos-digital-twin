@@ -6,7 +6,7 @@
  * in. A new mapping starts at warn.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TRPCLink } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
@@ -16,7 +16,9 @@ import { MappingEditor } from "@/components/mapping/MappingEditor";
 import type { ConnectorLike, MappingLike } from "@/components/mapping/utils";
 
 const calls: { path: string; input: unknown }[] = [];
+let canRelaxShaclCheck = true;
 const answers: Record<string, (input: unknown) => unknown> = {
+  "mapping.capabilities": () => ({ canRelaxShaclCheck }),
   "ontology.listModules": () => [{ key: "hr", prefix: "hr", name: "HR" }],
   "ontology.listClasses": () => [{ iri: "hr:Person", label: "Person" }],
   "ontology.listProperties": () => [],
@@ -64,6 +66,7 @@ const saved = () => calls.filter((c) => c.path === "mapping.upsertMapping").map(
 afterEach(() => {
   cleanup();
   calls.length = 0;
+  canRelaxShaclCheck = true;
 });
 
 describe("MappingEditor", () => {
@@ -76,10 +79,23 @@ describe("MappingEditor", () => {
 
   it("saves the mode the toggle is switched to", async () => {
     renderEditor([people]);
+    // Locked until the server says this person may switch a blocking check off.
+    await waitFor(() => expect(toggle().disabled).toBe(false));
     fireEvent.click(toggle());
     expect(toggle().checked).toBe(false);
     await save();
     expect(saved()).toEqual([expect.objectContaining({ id: 100, shaclMode: "warn" })]);
+  });
+
+  it("keeps a blocking check locked for someone who may not switch it back to warn, and says who may", async () => {
+    canRelaxShaclCheck = false;
+    renderEditor([people]);
+    await waitFor(() => expect(calls.some((c) => c.path === "mapping.capabilities")).toBe(true));
+    expect(toggle().checked).toBe(true);
+    expect(toggle().disabled).toBe(true);
+    expect(toggle().closest("label")?.title).toMatch(/Only ontologists and admins can switch it back to warn/);
+    await save();
+    expect(saved()).toEqual([expect.objectContaining({ shaclMode: "block" })]);
   });
 
   it("starts a new mapping at warn", async () => {

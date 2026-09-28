@@ -171,6 +171,9 @@ export const workspaceMutation = workspaceProcedure;
 /** The workspace roles that may change its data: editors and above. */
 export const EDITOR_ROLES = ["admin", "ontologist", "editor"];
 
+/** The workspace roles that define its ontology and the rules on its data: ontologists and admins. */
+export const ONTOLOGIST_ROLES = ["admin", "ontologist"];
+
 export const workspaceOntologistProcedure = workspaceProcedure.use(
   requireWorkspaceRole(EDITOR_ROLES),
 );
