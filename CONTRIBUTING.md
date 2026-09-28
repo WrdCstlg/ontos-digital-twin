@@ -42,8 +42,8 @@ A second CI job runs the server tests on a real MySQL 8.4 (`npm --prefix app run
 test:mysql`; the README's [Testing](README.md#on-a-real-mysql) section says how to run them
 locally), with an MQTT broker beside it for the IoT consumer's handover tests
 (`ONTOS_TEST_MQTT_URL`; a throwaway `eclipse-mosquitto` container does). Run them when you
-change the schema, a migration, the job queue, a lease, the IoT consumer or ingestion, or
-a query that groups or counts. A third job builds the Docker image and boots the full
+change the schema, a migration, the job queue, a lease, the IoT consumer or ingestion, the
+rate limits, or a query that groups or counts. A third job builds the Docker image and boots the full
 compose stack, so changes to the `Dockerfile`, `compose.yaml` or `db/bootstrap.ts` are
 exercised end to end. A fourth boots the same stack with persona login on and runs the
 browser tests in `app/e2e` against it.

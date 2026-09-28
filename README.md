@@ -59,7 +59,7 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 graph TD
     User["Enterprise User / Ontologist"] <-->|HTTPS| Web["React 19 SPA<br/>(Vite 7, Cytoscape, Three.js)"]
     Web <-->|tRPC 11 / JSON| Hono["API server<br/>(Hono 4 + Node 24)"]
-    Hono <-->|Drizzle ORM| MySQL[("MySQL 8.4<br/>graph, state, job queue, audit")]
+    Hono <-->|Drizzle ORM| MySQL[("MySQL 8.4<br/>graph, state, job queue, audit, rate limits")]
     Hono <-->|SPARQL 1.1 / HTTP| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
     Worker["Worker(s)<br/>(Node 24)"] <-->|leases jobs, the IoT lease| MySQL
     Worker <-->|SHACL| EngineW["open-ontologies<br/>(the workers', apart from the app's)"]
@@ -121,6 +121,14 @@ one unsure that a renewal went through closes its connections before it could la
 Every message is recorded in a transaction that first checks the lease's generation, a
 fencing token raised on every takeover, so a holder that lost the lease records nothing
 ([IoT brokers](#iot-brokers--live-telemetry-ingestion)).
+
+Rate limits and the login lockout are kept in MySQL, in `rate_limit_windows`, so every API
+replica counts against the same limit. Each limit keeps, per key, the times of the requests
+it let through within its window, an exact sliding window, under the key's SHA-256. A check
+locks its row before it reads it, in one upsert, so checks of one key take turns across
+processes, and it takes the time from the database's clock, in UTC. A request the limit
+cannot count, because the database is away, is answered 503, never 401 or 429. Workers
+delete, every minute, the rows no request has touched for a day.
 
 ---
 
@@ -707,7 +715,9 @@ when it differs from the version the client was generated from. Errors are JSON,
 400 fix the request, 401 get a valid token, 403 this token or role may not, 404 no such
 thing, 409 the objects changed meanwhile (submit again), 429 slow down (`retry-after`),
 503 retry shortly. A token that could not be checked, because the database is away, is
-answered 503, never 401. Each token may make 300 requests a minute.
+answered 503, never 401. Each token may make 300 requests a minute, however many API
+replicas serve it; a request that could not be counted against that, because the database
+is away, is answered 503 as well.
 
 ```ts
 import { OntosClient } from "./ontos-client"; // from GET /api/v1/sdk.ts
@@ -734,7 +744,9 @@ const result = await ontos.actions.submit("renew-contract", { contract: "lgl:Con
   origin checks on mutations, and a 2 MB body limit.
 - Sliding-window rate limits on auth (10 / 15 min; a sign-in the server could not decide,
   its database unreachable, does not count), NLQ (30 / min), SPARQL (30 / min) and graph
-  scans (10 / min).
+  scans (10 / min). They are kept in MySQL, so they hold across API replicas and restarts.
+  A request the server could not count, its database unreachable, is answered 503: neither
+  refused nor let through.
 - Signing out needs no database: it clears the session cookie even while the session
   cannot be checked.
 - NLQ input is capped at 500 characters and screened for destructive or injection intent.
@@ -796,8 +808,12 @@ server instead, and checks what only a real one can:
 - a broker message delivered twice at once is recorded once, a consumer that lost the
   IoT lease records nothing, and telemetry and the simulation's tick writing one twin at
   once lose none of each other's updates;
-- reconciliations at once keep one insight per rule, and migration 0009 first removes the
-  duplicates earlier ones made.
+- reconciliations at once keep one insight per rule, and migration 0010 first removes the
+  duplicates earlier ones made;
+- rate limits on two connection pools, as two API replicas hold them, checking one key at
+  once let exactly the limit through and never deadlock; pools whose sessions are in
+  different time zones count in one window; release, reset and the sweep of idle rows do
+  what they say; and sign-in and `/api/v1` answer 503 when the limit cannot be counted.
 
 `ONTOS_TEST_DATABASE_URL` names the server, without a database. Each run creates a
 database of its own there, `ontos_test_<pid>_<time>`, empties it between tests and drops it
@@ -886,7 +902,8 @@ Node server), and the server serves both. Everything is bundled, so `dist/` plus
 
 MySQL must keep row-based binary logging, its default (`binlog_format` `ROW`, or `MIXED`).
 A worker claims jobs at READ COMMITTED, which MySQL refuses under `STATEMENT`: every claim
-would fail, and the worker would log `claim failed` without end.
+would fail, and the worker would log `claim failed` without end. Rate-limit checks write
+at READ COMMITTED too, so every limited request, sign-in included, would answer 503.
 
 ---
 
@@ -940,9 +957,10 @@ These are tracked, known behaviours rather than surprises:
 - **Webhook addresses are checked when the job runs.** A host whose DNS answer changes
   between that check and the request is not caught.
 - **Some state still lives in the API process.** Background jobs and IoT broker
-  connections are safe to spread across processes (one holds the brokers at a time), but
-  a second API process would hold its own login and query rate limits and need its own
-  semantic engine. Run one API process until those move out.
+  connections are safe to spread across processes (one holds the brokers at a time), and
+  the rate limits and login lockout, kept in MySQL, hold across API processes too. But a
+  second API process would need its own semantic engine. Run one API process until that
+  moves out.
 - **Broker connectors wait for a consumer.** A broker shows as connecting until the
   process holding the IoT lease reports on it. If no process runs the consumer (no worker
   in a production deployment, or `ONTOS_IOT_CONSUMER=false` everywhere), it stays so, and

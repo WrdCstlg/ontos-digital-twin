@@ -47,7 +47,8 @@ startup whenever it is on. Use it for local demos only, never on a reachable net
 - User records pass through a field allowlist before serialization; password hashes never
   reach a client.
 - Security headers, explicit-origin CORS, CSRF origin checks, a 2 MB body limit, and
-  sliding-window rate limits on authentication, NLQ, SPARQL and graph scans.
+  sliding-window rate limits on authentication, NLQ, SPARQL and graph scans, kept in
+  MySQL so that every API replica counts against the same limit.
 - Containers run as non-root users; the engine's filesystem is read-only; `.env` files are
   excluded from the Docker build context; every upstream image is pinned by digest.
 
@@ -56,9 +57,11 @@ startup whenever it is on. Use it for local demos only, never on a reachable net
 These are documented rather than hidden. Reports that restate them are welcome if you can
 show an impact beyond what is described here.
 
-- **Rate limits are per process and in memory.** They reset on restart and are not shared
-  between replicas, so they slow down a single attacker against a single instance but are
-  not a distributed defence.
+- **Rate limits depend on the database.** They are kept in MySQL, so they hold across
+  restarts and API replicas. While the database cannot be reached, a limited request is
+  answered 503, neither refused nor let through; a sign-in needs the database anyway. Each
+  key is stored as its SHA-256. That hides a token id, but not an email address from
+  someone who can read the database and guess the address.
 - **The semantic engine is shared across workspaces.** It holds one in-memory graph, and
   every operation clears it and loads what it needs, so the engine itself has no tenant
   isolation. The app serialises those operations under a per-process lock and loads the
