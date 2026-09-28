@@ -420,10 +420,23 @@ email outside `@acme.com`.
 `api/middleware.ts`. A legacy `user` role remains the schema default and carries no
 elevated access.
 
+Within a workspace, a member's role there decides what they may do: a workspace admin
+can make anyone a viewer in their workspace. An account's own role counts only when it
+is `admin`, a platform administrator. The same rule governs who may submit an action,
+the highest role a new API token may have, and the role the Ontology API acts with.
+
 - `authedQuery` / `authedMutation` — any signed-in user
-- `ontologistQuery` / `ontologistMutation` — `ontologist`, `editor` or `admin`
-- `adminQuery` / `adminMutation` — `admin` only
+- `workspaceOntologistQuery` / `workspaceOntologistMutation` — editors and above: writes to
+  the workspace's data (imports, telemetry, the twin simulation, acknowledging a finding)
+- `workspaceAdminQuery` / `workspaceAdminMutation` — the workspace's admins: members,
+  connectors and broker credentials, retrying jobs
+- `adminQuery` / `adminMutation` — platform `admin` only
 - `publicQuery` — unauthenticated entry points only (`ping`, `auth.login`, `auth.demoLogin`)
+
+Ontologists and admins define action types and see webhook addresses in full, and only
+they can switch a mapping's SHACL check from block back to warn. The client is never told
+its workspace role: each page asks the router it uses for `capabilities` and offers only
+what the role allows.
 
 ### Digital twins
 
