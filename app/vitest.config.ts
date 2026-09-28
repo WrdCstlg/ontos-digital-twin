@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import path from "path";
 
 const templateRoot = path.resolve(import.meta.dirname);
@@ -24,5 +24,7 @@ export default defineConfig({
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
     ],
+    // Tests on a real MySQL run apart (vitest.mysql.config.ts, npm run test:mysql).
+    exclude: [...configDefaults.exclude, "api/**/*.mysql.test.ts"],
   },
 });

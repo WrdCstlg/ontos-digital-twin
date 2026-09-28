@@ -37,8 +37,11 @@ npm test        # Vitest
 npm run build   # client, server and database bootstrap bundles
 ```
 
-A second CI job builds the Docker image and boots the full compose stack, so changes to the
-`Dockerfile`, `compose.yaml` or `db/bootstrap.ts` are exercised end to end.
+A second CI job runs the server tests on a real MySQL 8.4 (`npm --prefix app run
+test:mysql`; the README's [Testing](README.md#on-a-real-mysql) section says how to run them
+locally). Run them when you change the schema, a migration, the job queue or a query that
+groups or counts. A third job builds the Docker image and boots the full compose stack, so
+changes to the `Dockerfile`, `compose.yaml` or `db/bootstrap.ts` are exercised end to end.
 
 **Formatting.** A Prettier config lives in `app/.prettierrc`. The existing codebase is not
 uniformly formatted and CI does not enforce it, so please do not reformat files you are not
@@ -49,7 +52,7 @@ otherwise changing — it buries the real diff. Formatting the lines you touch i
 **Schema changes need a migration.** Edit `app/db/schema.ts`, then run
 `npm --prefix app run db:generate` and commit the generated SQL and the updated `meta/`
 files. Do not use `db:push` for anything you intend to commit; it bypasses migration
-history.
+history. The MySQL tests fail when `schema.ts` and the migrations disagree.
 
 **Seed scripts are destructive.** `db/seed.ts` and `db/seed-twins.ts` clear every table,
 including the hash-linked audit chain, before inserting. Never point them at a database
@@ -74,7 +77,7 @@ Every change reaches `master` through a pull request, never a direct push, whoev
 whatever wrote it, a coding agent included. `master` on
 [WrdCstlg/ontos-digital-twin](https://github.com/WrdCstlg/ontos-digital-twin) is protected:
 a pull request can merge only when it is up to date with `master` and the CI jobs (both Node
-versions and the Docker stack) and the PRO-THESIS gate have passed. The rule applies to
+versions, the MySQL tests and the Docker stack) and the PRO-THESIS gate have passed. The rule applies to
 administrators too.
 
 1. Work on a branch of your own, one topic per branch. Two people or agents never share a

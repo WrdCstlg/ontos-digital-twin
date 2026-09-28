@@ -63,6 +63,41 @@ jobs:
       - name: Build
         run: npm --prefix app run build
 
+  mysql:
+    name: Server tests on MySQL 8.4
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        # The image compose.yaml pins. The server lives only as long as this job
+        # and listens only on the runner, so its password is no secret.
+        image: mysql:8.4@sha256:85b9bf2e29cf836ecb8c2a15a935d4ba0c606631dff1dd79531a11983c638f2a
+        env:
+          MYSQL_ROOT_PASSWORD: ci-throwaway
+        ports:
+          - 127.0.0.1:3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix app ci
+
+      - name: Test on MySQL
+        run: npm --prefix app run test:mysql
+        env:
+          ONTOS_TEST_DATABASE_URL: mysql://root:ci-throwaway@127.0.0.1:3306
+
   docker:
     name: Docker stack boots and serves
     runs-on: ubuntu-latest
