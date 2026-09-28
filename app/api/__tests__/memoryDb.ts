@@ -4,8 +4,12 @@
  * in tables by name, and each query's WHERE is rendered through drizzle's MySQL
  * dialect and evaluated against them. It understands conjunctions of
  * `col = ?`, `col = other_col`, `col in (...)` and `col is [not] null`, inner
- * joins on an equality, projections to tables or columns, limit and offset;
- * anything else throws, so a test never passes on a predicate it ignored.
+ * joins on an equality, projections to tables or columns, ordering by columns,
+ * limit and offset; anything else throws, so a test never passes on a
+ * predicate or ordering it ignored. As in SQL, an update or delete without a
+ * WHERE touches every row: a test that holds two workspaces sees a missing
+ * scope as the damage it would do. Ordering follows MySQL's for NULLs (first
+ * when ascending) but compares strings by code unit, not by a collation.
  *
  * Use it from vi.mock:
  *   const store = vi.hoisted(() => ({ tables: new Map<string, Row[]>() }));
@@ -82,6 +86,42 @@ function matches(where: unknown, scope: Scope): boolean {
   return conjuncts(sql, params).every((t) => holds(t, scope));
 }
 
+/** One ORDER BY term: a column, bare or through asc() or desc(). */
+function orderTerm(spec: unknown): { table: string; column: string; desc: boolean } {
+  if (is(spec, Column)) return { table: getTableName(spec.table), column: spec.name, desc: false };
+  if (is(spec, SQL)) {
+    const m = new RegExp(`^${COL}(?: (asc|desc))?$`).exec(dialect.sqlToQuery(spec).sql.trim());
+    if (m) return { table: m[1], column: m[2], desc: m[3] === "desc" };
+  }
+  throw new Error("memoryDb: unsupported ORDER BY term");
+}
+
+/** MySQL's order for the values tests hold: NULL lowest, then numbers and dates by value, strings by code unit. */
+function compareValues(a: unknown, b: unknown): number {
+  const nil = (v: unknown) => v === null || v === undefined;
+  if (nil(a) || nil(b)) return nil(a) === nil(b) ? 0 : nil(a) ? -1 : 1;
+  const x = a instanceof Date ? a.getTime() : a;
+  const y = b instanceof Date ? b.getTime() : b;
+  if (typeof x === "number" && typeof y === "number") return x - y;
+  const [s, t] = [String(x), String(y)];
+  return s < t ? -1 : s > t ? 1 : 0;
+}
+
+function sortScopes(scopes: Scope[], order: unknown[]): Scope[] {
+  const terms = order.map(orderTerm);
+  const value = (s: Scope, t: { table: string; column: string }) => {
+    if (!(t.table in s)) throw new Error(`memoryDb: ORDER BY names table ${t.table}, not in this query`);
+    return s[t.table][t.column];
+  };
+  return [...scopes].sort((p, q) => {
+    for (const t of terms) {
+      const c = compareValues(value(p, t), value(q, t));
+      if (c !== 0) return t.desc ? -c : c;
+    }
+    return 0;
+  });
+}
+
 /** A selected `count(*)`: the whole query answers one row of counts. */
 const isCount = (f: unknown) => is(f, SQL) && dialect.sqlToQuery(f).sql.trim().toLowerCase() === "count(*)";
 
@@ -125,6 +165,7 @@ export function memoryDb(tables: Tables) {
           const baseName = getTableName(base);
           const joins: { table: Table; on: unknown }[] = [];
           let where: unknown;
+          let order: unknown[] = [];
           let limit = Infinity;
           let offset = 0;
           const run = () => {
@@ -133,7 +174,7 @@ export function memoryDb(tables: Tables) {
               const name = getTableName(j.table);
               scopes = scopes.flatMap((s) => rowsOf(j.table).map((r) => ({ ...s, [name]: r })).filter((s2) => matches(j.on, s2)));
             }
-            const hits = scopes.filter((s) => matches(where, s));
+            const hits = sortScopes(scopes.filter((s) => matches(where, s)), order);
             if (fields && Object.values(fields).some(isCount)) {
               if (!Object.values(fields).every(isCount)) throw new Error("memoryDb: count(*) beside other fields needs groupBy, unsupported");
               return [Object.fromEntries(Object.keys(fields).map((k) => [k, hits.length]))];
@@ -144,8 +185,10 @@ export function memoryDb(tables: Tables) {
           Object.assign(chain, {
             innerJoin: (table: Table, on: unknown) => (joins.push({ table, on }), chain),
             where: (w: unknown) => ((where = w), chain),
-            orderBy: () => chain,
-            groupBy: () => chain,
+            orderBy: (...terms: unknown[]) => ((order = terms), chain),
+            groupBy: () => {
+              throw new Error("memoryDb: GROUP BY is unsupported");
+            },
             limit: (n: number) => ((limit = n), chain),
             offset: (n: number) => ((offset = n), chain),
           });
@@ -172,32 +215,30 @@ export function memoryDb(tables: Tables) {
     update(t: Table) {
       return {
         set(patch: Row) {
-          return {
-            where(w: unknown) {
-              return awaitable(() => {
-                const name = getTableName(t);
-                const hit = rowsOf(t).filter((r) => matches(w, { [name]: r }));
-                for (const r of hit) Object.assign(r, patch);
-                return [{ affectedRows: hit.length }];
-              });
-            },
-          };
+          let where: unknown;
+          const chain: Record<string, unknown> = awaitable(() => {
+            const name = getTableName(t);
+            const hit = rowsOf(t).filter((r) => matches(where, { [name]: r }));
+            for (const r of hit) Object.assign(r, patch);
+            return [{ affectedRows: hit.length }];
+          });
+          chain.where = (w: unknown) => ((where = w), chain);
+          return chain;
         },
       };
     },
     delete(t: Table) {
-      return {
-        where(w: unknown) {
-          return awaitable(() => {
-            const name = getTableName(t);
-            const rows = rowsOf(t);
-            const keep = rows.filter((r) => !matches(w, { [name]: r }));
-            const removed = rows.length - keep.length;
-            rows.splice(0, rows.length, ...keep);
-            return [{ affectedRows: removed }];
-          });
-        },
-      };
+      let where: unknown;
+      const chain: Record<string, unknown> = awaitable(() => {
+        const name = getTableName(t);
+        const rows = rowsOf(t);
+        const keep = rows.filter((r) => !matches(where, { [name]: r }));
+        const removed = rows.length - keep.length;
+        rows.splice(0, rows.length, ...keep);
+        return [{ affectedRows: removed }];
+      });
+      chain.where = (w: unknown) => ((where = w), chain);
+      return chain;
     },
   };
 }
