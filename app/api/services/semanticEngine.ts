@@ -90,6 +90,9 @@ function httpFailure(what: string, res: Response): Error {
   return res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429 ? new EngineRequestError(message) : new Error(message);
 }
 
+/** Runs a task while no other process that uses the same engine runs one (see shareWith). */
+export type EngineLock = <T>(task: () => Promise<T>) => Promise<T>;
+
 class SemanticEngineClient {
   private baseUrl: string;
   private token?: string;
@@ -99,6 +102,8 @@ class SemanticEngineClient {
   // complete graph the store holds, or null once it holds anything else.
   private queue: Promise<unknown> = Promise.resolve();
   private loadedWorkspaceId: number | null = null;
+  // Held around each exclusive() task when other processes use this engine too.
+  private sharedLock: EngineLock | null = null;
 
   constructor() {
     this.baseUrl =
@@ -118,12 +123,33 @@ class SemanticEngineClient {
    * another request's clear, so every such sequence runs through here.
    *
    * Not re-entrant: a task must not call exclusive() again. It serialises within
-   * this process only; several app processes sharing one engine still interfere.
+   * this process, and across processes too once shareWith() has given it a lock
+   * they all take.
    */
   public exclusive<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(task);
+    const lock = this.sharedLock;
+    const run = this.queue.then(() =>
+      lock
+        ? lock(() => {
+            // Another process may have loaded its own graph since this one's
+            // last task, so what the store holds is no longer known.
+            this.loadedWorkspaceId = null;
+            return task();
+          })
+        : task(),
+    );
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * Declares that other processes use this engine too, and gives the lock they
+   * all take around each exclusive() task (a worker's replicas share one
+   * engine). With it, a task never trusts that the store still holds what an
+   * earlier one loaded.
+   */
+  public shareWith(lock: EngineLock | null): void {
+    this.sharedLock = lock;
   }
 
   /**
