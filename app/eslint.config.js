@@ -6,8 +6,9 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  // .tmp-ui-test is gitignored local scratch (Playwright walks, one-off scripts)
-  globalIgnores(['dist', '.tmp-ui-test']),
+  // .tmp-ui-test is gitignored local scratch (Playwright walks, one-off scripts);
+  // playwright-report and test-results are the browser tests' output
+  globalIgnores(['dist', '.tmp-ui-test', 'playwright-report', 'test-results']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -31,6 +32,14 @@ export default defineConfig([
     files: ['src/components/ui/**/*.{ts,tsx}', 'src/providers/**/*.{ts,tsx}'],
     rules: {
       'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
+    // The browser tests are Playwright code, not React: a fixture's `use`
+    // callback is no hook.
+    files: ['e2e/**/*.ts'],
+    rules: {
+      'react-hooks/rules-of-hooks': 'off',
     },
   },
 ])
