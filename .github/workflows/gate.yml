@@ -112,16 +112,53 @@ jobs:
         working-directory: gate
         run: thesis run --profile api --fault 'proc.restart(db)@5000..12000'
 
-      - name: Show verdicts, driver, app and worker logs on failure
-        if: failure()
+      # Every run of this job is in .prothesis/runs, and nothing else: the
+      # directory is not committed, and the pinned thesis never prunes it
+      # (v0.1.0-phase0 validates artifacts.retain_passing but does not apply
+      # it). The copy is what gets scanned, shown and kept, so nothing under
+      # .prothesis/ is rewritten.
+      - name: Collect the run bundles
+        if: ${{ !cancelled() }}
         working-directory: gate
         run: |
-          for v in .prothesis/runs/*/verdict.json; do echo "== $v"; cat "$v"; done
+          if [ -d .prothesis/runs ]; then
+            mkdir -p "$RUNNER_TEMP/gate-bundles"
+            cp -R .prothesis/runs/. "$RUNNER_TEMP/gate-bundles/"
+            echo "GATE_BUNDLES=$RUNNER_TEMP/gate-bundles" >> "$GITHUB_ENV"
+          fi
+
+      # The repository is public, so bundlescan first redacts the tokens a run
+      # creates, and fails here if it finds a real secret. Each refusal is an
+      # annotation with its file and line, never the value.
+      - name: Scan the run bundles for secrets
+        id: scan
+        if: ${{ !cancelled() && env.GATE_BUNDLES != '' }}
+        working-directory: gate
+        run: go run ./cmd/bundlescan -dir "$GATE_BUNDLES"
+
+      # From the scanned copy, so the log shows nothing the scan would not
+      # publish. If the scan refused, its annotations are the diagnostics.
+      - name: Show verdicts, driver, app and worker logs on failure
+        if: ${{ failure() && steps.scan.outcome == 'success' }}
+        run: |
+          cd "$GATE_BUNDLES"
+          for v in */verdict.json; do [ -f "$v" ] || continue; echo "== $v"; cat "$v"; done
           # Each oracle's own verdict and account, which verdict.json does not carry.
-          for r in .prothesis/runs/*/world-*/result.json; do [ -f "$r" ] || continue; echo "== $r"; jq -r '.oracles[] | "\(.oracle): \(.status) -- \(.explanation)"' "$r"; done
+          for r in */world-*/result.json; do [ -f "$r" ] || continue; echo "== $r"; jq -r '.oracles[] | "\(.oracle): \(.status) -- \(.explanation)"' "$r"; done
           # The driver's own account of each world: what it found, and its op counts.
-          for d in .prothesis/runs/*/world-*/driver.log; do [ -f "$d" ] || continue; echo "== $d"; tail -n 40 "$d"; done
-          for l in .prothesis/runs/*/world-*/logs/app.log .prothesis/runs/*/world-*/logs/worker-*.log; do
+          for d in */world-*/driver.log; do [ -f "$d" ] || continue; echo "== $d"; tail -n 40 "$d"; done
+          for l in */world-*/logs/app.log */world-*/logs/worker-*.log; do
             [ -f "$l" ] || continue
             echo "== $l"; tail -n 80 "$l"
           done
+
+      # Every world's bundle, kept for a recount and for anyone checking a
+      # verdict.
+      - name: Keep the run bundles
+        if: ${{ !cancelled() && steps.scan.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gate-runs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.GATE_BUNDLES }}
+          retention-days: 30
+          if-no-files-found: ignore

@@ -63,6 +63,7 @@ receiver.
 | `cmd/oracle-session` | The `session.honoured` oracle: the driver's session is valid all world, so no operation may be refused as signed out (HTTP 401) |
 | `cmd/oracle-api` | The `api.read_your_writes` oracle: every action submission acknowledged through the Ontology API is visible, as applied, to the client's next read of its objects through the API. It reads only the history: `ontosload`'s `api_action` and the `api_read` that follows it |
 | `cmd/oracle-job-leases` | The `jobs.lease_lapse` oracle: a worker that recorded it was asked to stop never leaves its job to the lease; it finishes the job or hands it back. Lapses on workers that went silent (frozen, killed) are excused |
+| `cmd/bundlescan` | Makes run bundles fit to publish. Redacts the API tokens, session tokens, cookies and HTTP Basic credentials a run creates, URL-encoded or JSON-escaped too, keeping a token's prefix. Fails on a private key, a GitHub, AWS or Slack token, a Slack webhook URL, a line that still holds a secret once decoded, a link or anything else that is not a regular file (never followed), and a file it cannot read or write back. Lists what it did, never the value, in `REDACTIONS.txt`, and prints that list with each refusal as a GitHub annotation |
 | `.prothesis/oracles/` | Oracle definitions, hash-locked with the covered config keys into `.prothesis/lock` |
 | `.prothesis/PREREGISTRATION.md` | Expected outcomes, written before the worlds they describe |
 | `observations/` | What the worlds showed, against their pre-registration, with each run's `verdict.json` and world files |
@@ -97,4 +98,12 @@ receiver.
 - `sync_jobs.settle` reads MySQL by `docker exec` into the container labelled
   `io.prothesis.node=db`, and refuses to judge if more than one is running.
 - Node logs land in the run bundle. Ontos logs no secrets, but check a bundle
-  before sharing it.
+  before sharing it. CI does. After the last world it copies `.prothesis/runs`,
+  which then holds every run of the job and nothing else: it is not committed,
+  and thesis v0.1.0-phase0 never prunes it (`artifacts.retain_passing` is
+  validated but not applied). `bundlescan` scans the copy, which is kept for 30
+  days as the job's `gate-runs-<run>-<attempt>` artifact, and the logs CI
+  prints when a world fails come from it. If `bundlescan` refuses, the job
+  fails, nothing is uploaded or printed from the bundles, and each refusal is
+  an annotation with its file and line. It judges each line on its own, so a
+  value split across lines is not found.
