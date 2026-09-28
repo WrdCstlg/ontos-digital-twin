@@ -11,6 +11,7 @@ import { runMappingSync } from "../services/mappingSync";
 import { PermanentJobError } from "../services/jobs/worker";
 import { writeAudit } from "../services/audit";
 import { EngineInterference, EngineRequestError, semanticEngine } from "../services/semanticEngine";
+import { subjectToTurtle } from "../services/rdfBridge";
 import { LockLost, LockUnavailable } from "../lib/namedLock";
 import { appRouter } from "../router";
 import { createMockContext, mockOntologistUser, mockViewerUser, mockWorkspace } from "./testHarness";
@@ -27,7 +28,7 @@ vi.mock("../services/semanticEngine", async (importOriginal) => ({
     ensureEngineRunning: vi.fn(async () => true),
     exclusive: vi.fn(async (f: () => unknown) => f()),
     clearStore: vi.fn(async () => undefined),
-    loadTurtle: vi.fn(async () => ({ ok: true, triplesLoaded: 0 })),
+    loadSubjects: vi.fn(async () => ({ triplesLoaded: 0, requests: 0 })),
     validateShacl: vi.fn(),
     // The real one's order, without its counts: semanticEngine.test.ts runs those.
     checkLoaded: vi.fn(async (load: () => Promise<number>, check: () => Promise<unknown>) => {
@@ -36,6 +37,9 @@ vi.mock("../services/semanticEngine", async (importOriginal) => ({
     }),
   },
 }));
+
+/** The data the last check loaded, as Turtle. */
+const checked = () => vi.mocked(semanticEngine.loadSubjects).mock.calls.at(-1)![1].map(subjectToTurtle).join("\n");
 
 const WS = mockWorkspace.id;
 const at = new Date("2026-01-01T00:00:00Z");
@@ -154,7 +158,7 @@ describe("what the check sees", () => {
     put(connectors, [{ ...rows(connectors)[0], configJson: { filename: "p.csv", csvText: "id,name,manager,salary\n1,Ada,,1234.50\n2,Grace,1,n/a\n" } }]);
     vi.mocked(semanticEngine.validateShacl).mockResolvedValue(conforming);
     await run();
-    const data = vi.mocked(semanticEngine.loadTurtle).mock.calls.at(-1)![0];
+    const data = checked();
     expect(data).toContain('hr:salary "1234.50"^^xsd:decimal');
     expect(data).toContain('hr:manager "1"^^xsd:integer');
     expect(data).toContain('hr:salary "n/a"^^xsd:string');
@@ -164,7 +168,7 @@ describe("what the check sees", () => {
     withLinks();
     vi.mocked(semanticEngine.validateShacl).mockResolvedValue({ ...conforming, focusNodes: 5 });
     expect((await run()).nodesUpserted).toBe(4);
-    const data = vi.mocked(semanticEngine.loadTurtle).mock.calls.at(-1)![0];
+    const data = checked();
     expect(data).toContain("hr:reportsTo <https://ontos.dev/ontology/hr/person/1>");
     expect(data).toContain("hr:reportsTo <https://ontos.dev/ontology/hr/person/99>");
     expect(data).toContain("<https://ontos.dev/ontology/hr/person/99> a hr:Person");

@@ -12,12 +12,20 @@ vi.mock("../queries/connection", () => ({
   })),
 }));
 
-/** Engine stub: /health is always up; every other call answers `status`. */
+/**
+ * Engine stub: /health is always up; every other call answers `status`. With
+ * 200, a clear succeeds as the engine answers it, any other batch command
+ * answers with no result, and anything else with `{}`.
+ */
 function stubEngine(status = 200) {
-  const fetchMock = vi.fn(async (url: string | URL | Request) => {
+  const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const target = String(url);
     if (target.endsWith("/health")) {
       return new Response(JSON.stringify({ status: "ok", version: "test" }), { status: 200 });
+    }
+    if (status === 200 && target.endsWith("/api/batch")) {
+      const [first] = JSON.parse(String(init?.body)) as { command: string }[];
+      return Response.json(first?.command === "clear" ? [{ seq: 0, command: "clear", result: { ok: true, message: "Store cleared" } }] : []);
     }
     return new Response(JSON.stringify({}), { status });
   });

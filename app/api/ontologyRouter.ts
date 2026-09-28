@@ -21,8 +21,8 @@ import { semanticEngine } from "./services/semanticEngine";
 import {
   buildPrefixMap,
   datatypeRanges,
-  moduleToTurtle,
-  knowledgeGraphToTurtle,
+  moduleSubjects,
+  knowledgeGraphSubjects,
   modulePrefixes,
   shaclJsonToTurtle,
 } from "./services/rdfBridge";
@@ -588,13 +588,10 @@ export const ontologyRouter = createRouter({
           const res = await semanticEngine.exclusive(async () => {
             await semanticEngine.clearStore();
             const prefixMap = buildPrefixMap([mod]);
-            const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
-            await semanticEngine.loadTurtle(modTtl);
-
-            if (nodes.length > 0) {
-              const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes([mod]));
-              await semanticEngine.loadTurtle(instTtl);
-            }
+            await semanticEngine.loadSubjects(prefixMap, [
+              ...moduleSubjects(classes, properties, prefixMap),
+              ...knowledgeGraphSubjects(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes([mod])),
+            ]);
 
             return semanticEngine.runReasoning(input.profile);
           });
@@ -760,12 +757,10 @@ export const ontologyRouter = createRouter({
 
       const report = await semanticEngine.exclusive(async () => {
         await semanticEngine.clearStore();
-        const modTtl = moduleToTurtle(mod, classes, properties, prefixMap);
-        await semanticEngine.loadTurtle(modTtl);
-        if (nodes.length > 0) {
-          const instTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes([mod]));
-          await semanticEngine.loadTurtle(instTtl);
-        }
+        await semanticEngine.loadSubjects(prefixMap, [
+          ...moduleSubjects(classes, properties, prefixMap),
+          ...knowledgeGraphSubjects(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes([mod])),
+        ]);
         return semanticEngine.validateShacl(shapesTtl);
       });
       const explained = explainShaclReport(report);
