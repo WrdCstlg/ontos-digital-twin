@@ -278,4 +278,76 @@ describe("saving a mapping's SHACL mode", () => {
     const created = await ontologist().mapping.upsertMapping(save({ id: undefined, name: "New" }));
     expect(created.shaclMode).toBe("warn");
   });
+
+  /** A member of this workspace in `role`, whose own account role is `accountRole`. */
+  const member = (role: "editor" | "ontologist", accountRole: string) =>
+    appRouter.createCaller(
+      createMockContext({
+        user: { ...mockViewerUser, role: accountRole } as typeof mockViewerUser,
+        workspace: mockWorkspace,
+        membership: { id: 904, workspaceId: WS, userId: mockViewerUser.id, role, moduleScope: null, createdAt: at },
+      }),
+    );
+
+  it("decides by the role in the workspace, not the account's, both ways", async () => {
+    setUp("block");
+    const accountOntologist = member("editor", "ontologist");
+    await expect(accountOntologist.mapping.upsertMapping(save({ shaclMode: "warn" }))).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await accountOntologist.mapping.capabilities()).toEqual({ canRelaxShaclCheck: false });
+    await member("ontologist", "viewer").mapping.upsertMapping(save({ shaclMode: "warn" }));
+    expect(rows(mappings)[0].shaclMode).toBe("warn");
+  });
+
+  it("lets an editor save a mapping that only warns, as the editor always sends its mode", async () => {
+    setUp("warn");
+    await member("editor", "viewer").mapping.upsertMapping(save({ name: "People (edited)", shaclMode: "warn" }));
+    expect(rows(mappings)[0]).toMatchObject({ name: "People (edited)", shaclMode: "warn" });
+  });
+
+  it("keeps an editor from getting round a blocking mapping: no new warn mapping into its class, no moving it away", async () => {
+    setUp("block");
+    put(ontologyClasses, [...rows(ontologyClasses), { id: 51, moduleId: 10, iri: "hr:Contractor", label: "Contractor", shaclJson: null }]);
+    const editor = member("editor", "viewer");
+    // A second mapping into the same class that only warns would import what the first refuses.
+    await expect(editor.mapping.upsertMapping(save({ id: undefined, name: "People copy" }))).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/Another mapping into hr:Person blocks imports/),
+    });
+    const blocking = await editor.mapping.upsertMapping(save({ id: undefined, name: "People copy", shaclMode: "block" }));
+    expect(blocking.shaclMode).toBe("block");
+    // Moving the blocking mapping to a class without shapes would import unchecked.
+    await expect(editor.mapping.upsertMapping(save({ classIri: "hr:Contractor" }))).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(rows(mappings).find((m) => m.id === 100)?.classIri).toBe("hr:Person");
+    // An ontologist may do either.
+    expect((await ontologist().mapping.upsertMapping(save({ id: undefined, name: "Warn copy" }))).shaclMode).toBe("warn");
+  });
+
+  it("refuses a class its module does not define", async () => {
+    setUp("warn");
+    await expect(ontologist().mapping.upsertMapping(save({ classIri: "legal:Contract" }))).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Class 'legal:Contract' is not in module 'hr'",
+    });
+  });
+
+  it("does not lose a switch to block made while an editor saved a form that held warn", async () => {
+    setUp("warn");
+    const results = await Promise.allSettled([
+      ontologist().mapping.upsertMapping(save({ shaclMode: "block" })),
+      member("editor", "viewer").mapping.upsertMapping(save({ name: "People (edited)", shaclMode: "warn" })),
+    ]);
+    expect(rows(mappings)[0].shaclMode).toBe("block");
+    for (const r of results) if (r.status === "rejected") expect(r.reason).toMatchObject({ code: "CONFLICT" });
+  });
+});
+
+describe("an import whose class cannot be found", () => {
+  it("fails for good when its mapping blocks: its shapes may exist, but cannot be read", async () => {
+    setUp("block");
+    put(mappings, [{ ...rows(mappings)[0], classIri: "hr:Ghost" }]);
+    const refused = run();
+    await expect(refused).rejects.toBeInstanceOf(PermanentJobError);
+    await expect(refused).rejects.toThrow(/the mapping's class hr:Ghost is not in its module/);
+    expect(rows(kgNodes)).toEqual([]);
+  });
 });

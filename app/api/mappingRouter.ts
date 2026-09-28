@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { connectors, jobs, mappings, ontologyModules, syncJobs, type Connector } from "@db/schema";
+import { connectors, jobs, mappings, ontologyClasses, ontologyModules, syncJobs, type Connector } from "@db/schema";
 import {
   createRouter,
   ONTOLOGIST_ROLES,
@@ -232,31 +232,68 @@ export const mappingRouter = createRouter({
         .limit(1);
       if (!conn)
         throw new TRPCError({ code: "NOT_FOUND", message: `Connector ${input.connectorId} not found` });
+      // The class must be the module's: the import's SHACL check reads the
+      // class there, and a class it cannot find is one it cannot check.
+      const [targetClass] = await db
+        .select({ id: ontologyClasses.id })
+        .from(ontologyClasses)
+        .where(and(eq(ontologyClasses.moduleId, mod.id), eq(ontologyClasses.iri, input.classIri)))
+        .limit(1);
+      if (!targetClass) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Class '${input.classIri}' is not in module '${input.moduleKey}'` });
+      }
+
+      // A blocking SHACL check keeps imports that break the class's shapes out.
+      // Letting them in is for those who define the shapes, ontologists and
+      // admins: switching the check off, moving a blocking mapping to another
+      // class, or adding a mapping that only warns into a class another
+      // mapping blocks. Anyone who may edit a mapping may make it block.
+      const mayRelax = hasWorkspaceRole(ctx.membership, ctx.user, ONTOLOGIST_ROLES);
 
       let id = input.id;
-      // The SHACL mode before this save, so the audit shows a check switched on or off.
-      let modeWas: string | null = null;
+      // The SHACL mode before this save, and after it.
+      let modeWas: "warn" | "block" | null = null;
+      let intoClass = true;
       if (id) {
         // Only this workspace's mapping may be changed: a mapping is a
         // workspace's through its connector.
         const [existing] = await db
-          .select({ id: mappings.id, shaclMode: mappings.shaclMode })
+          .select({ id: mappings.id, shaclMode: mappings.shaclMode, classIri: mappings.classIri, moduleId: mappings.moduleId })
           .from(mappings)
           .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
           .where(and(eq(mappings.id, id), eq(connectors.workspaceId, ws.id)))
           .limit(1);
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${id} not found` });
         modeWas = existing.shaclMode;
-        // Switching a blocking check off lets imports that break the class's
-        // shapes in: that is for those who define the shapes. Anyone who may
-        // edit the mapping may switch it on.
-        if (modeWas === "block" && input.shaclMode === "warn" && !hasWorkspaceRole(ctx.membership, ctx.user, ONTOLOGIST_ROLES)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Only ontologists and admins can switch a mapping's SHACL check from block to warn",
-          });
+        intoClass = existing.classIri !== input.classIri || existing.moduleId !== mod.id;
+      }
+      const modeAfter = input.shaclMode ?? modeWas ?? "warn";
+      if (!mayRelax) {
+        if (modeWas === "block" && modeAfter === "warn") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only ontologists and admins can switch a mapping's SHACL check from block to warn" });
         }
-        await db
+        if (modeWas === "block" && intoClass) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only ontologists and admins can move a mapping that blocks imports to another class" });
+        }
+        if (modeAfter === "warn" && intoClass) {
+          const blocking = await db
+            .select({ id: mappings.id })
+            .from(mappings)
+            .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
+            .where(and(eq(connectors.workspaceId, ws.id), eq(mappings.classIri, input.classIri), eq(mappings.shaclMode, "block")));
+          if (blocking.some((b) => b.id !== id)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: `Another mapping into ${input.classIri} blocks imports that break its shapes: only ontologists and admins can add one that only warns. Save it with block on.`,
+            });
+          }
+        }
+      }
+
+      if (id) {
+        // Written only if the mode is still the one checked above, so a switch
+        // made meanwhile by someone else is not lost.
+        const [res] = await db
           .update(mappings)
           .set({
             name: input.name,
@@ -266,9 +303,12 @@ export const mappingRouter = createRouter({
             classIri: input.classIri,
             columnMapJson: input.columnMap,
             status: input.status,
-            ...(input.shaclMode ? { shaclMode: input.shaclMode } : {}),
+            shaclMode: modeAfter,
           })
-          .where(eq(mappings.id, id));
+          .where(and(eq(mappings.id, id), eq(mappings.shaclMode, modeWas!)));
+        if (res.affectedRows === 0) {
+          throw new TRPCError({ code: "CONFLICT", message: "The mapping's SHACL check was changed meanwhile: reload the mapping and save again" });
+        }
       } else {
         const [{ id: newId }] = await db
           .insert(mappings)
@@ -280,26 +320,26 @@ export const mappingRouter = createRouter({
             classIri: input.classIri,
             columnMapJson: input.columnMap,
             status: input.status,
-            shaclMode: input.shaclMode ?? "warn",
+            shaclMode: modeAfter,
           })
           .$returningId();
         id = newId;
       }
-      const [row] = await db.select().from(mappings).where(eq(mappings.id, id!));
-      const modeChanged = modeWas !== null && modeWas !== row.shaclMode;
+      const modeChanged = modeWas !== null && modeWas !== modeAfter;
       await writeAudit({
         workspaceId: ws.id,
         actor: actorLabelFor(ctx.user),
         action: `${input.id ? "Updated" : "Created"} mapping '${input.name}'${
-          modeChanged ? `: its SHACL check now ${row.shaclMode === "block" ? "blocks imports that do not conform" : "only warns"}` : ""
+          modeChanged ? `: its SHACL check now ${modeAfter === "block" ? "blocks imports that do not conform" : "only warns"}` : ""
         }`,
         entityType: "mapping",
         entityId: id,
         payload: {
           name: input.name, sourceTable: input.sourceTable, classIri: input.classIri, status: input.status,
-          shaclMode: row.shaclMode, ...(modeChanged ? { shaclModeWas: modeWas } : {}),
+          shaclMode: modeAfter, ...(modeChanged ? { shaclModeWas: modeWas } : {}),
         },
       });
+      const [row] = await db.select().from(mappings).where(eq(mappings.id, id!));
       return row;
     }),
 

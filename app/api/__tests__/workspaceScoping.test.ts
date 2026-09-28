@@ -16,6 +16,7 @@ import {
   jobs,
   kgNodes,
   mappings,
+  ontologyClasses,
   ontologyModules,
   syncJobs,
   twinStateLog,
@@ -49,7 +50,7 @@ const inB = (user: User, role: "viewer" | "editor" | "ontologist" | "admin") =>
 
 const mapping = (id: number, connectorId: number, moduleId: number, name: string) => ({
   id, connectorId, moduleId, name, sourceTable: "people", classIri: `${name}:Person`,
-  columnMapJson: { subject: "hr:person/{id}", fields: { salary: `${name}:salary` } }, status: "active", createdAt: at, updatedAt: at,
+  columnMapJson: { subject: "hr:person/{id}", fields: { salary: `${name}:salary` } }, status: "active", shaclMode: "warn", createdAt: at, updatedAt: at,
 });
 const broker = (id: number, workspaceId: number) => ({
   id, workspaceId, name: `Broker ${id}`, brokerType: "mqtt", endpointUrl: `mqtts://broker-${id}.example:8883`, topicPattern: null, clientId: null,
@@ -67,6 +68,10 @@ beforeEach(() => {
     { id: 2, workspaceId: B.id, name: "B HRIS", type: "csv", configJson: { filename: "b.csv" }, status: "connected", createdAt: at },
   ]);
   put(mappings, [mapping(100, 1, 10, "alpha"), mapping(200, 2, 20, "beta")]);
+  put(ontologyClasses, [
+    { id: 1, moduleId: 10, iri: "alpha:Person", label: "Person", shaclJson: null },
+    { id: 2, moduleId: 20, iri: "beta:Person", label: "Person", shaclJson: null },
+  ]);
   put(iotConnectors, [broker(5, A.id), broker(6, B.id)]);
 });
 afterEach(() => vi.restoreAllMocks());
