@@ -25,6 +25,7 @@ import {
   twinStateLog,
 } from "@db/schema";
 import { getDemoWorkspace, writeAudit } from "../api/services/audit";
+import { recordGraphReplaced } from "../api/services/graphChanges";
 import { reconcileInsights } from "../api/insightsRouter";
 import {
   SIMULATED_TWIN_CLASSES,
@@ -581,6 +582,9 @@ async function main() {
   const { results: fired } = await reconcileInsights(workspaceId);
   console.log("rules fired (full graph):", fired.map((f) => f.ruleId).join(", "));
 
+  // The twin module and its twins were made anew: every copy of the graph in a
+  // semantic engine is rebuilt.
+  await recordGraphReplaced(workspaceId);
   console.log("TWIN SEED COMPLETE", {
     twinNodes: twinRows.length,
     twins: twinCount,
