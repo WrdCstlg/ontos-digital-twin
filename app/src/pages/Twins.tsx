@@ -7,6 +7,7 @@ import { Radio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DisclosureChip } from '@/components/twins/DisclosureChip';
 import { TickControl } from '@/components/twins/TickControl';
+import { useCanSimulate } from '@/components/twins/useCanSimulate';
 import { TwinRegistry } from '@/components/twins/TwinRegistry';
 import { TwinDetail } from '@/components/twins/TwinDetail';
 import { EventLog } from '@/components/twins/EventLog';
@@ -123,14 +124,23 @@ export default function Twins() {
     [utils],
   );
 
+  // A tick writes twin state: an editor's or above. Anyone else watches.
+  const canSimulate = useCanSimulate();
   const tick = trpc.twin.tick.useMutation({
     onSuccess: handleTick,
-    onError: (err) => toast.error(`tick failed — ${err.message}`),
+    onError: (err) => {
+      // Refused (a role changed under us): stop, rather than fail every 2 s.
+      if (err.data?.code === 'FORBIDDEN') {
+        setAutoTick(false);
+        void utils.twin.capabilities.invalidate();
+      }
+      toast.error(`tick failed — ${err.message}`);
+    },
   });
 
   const doTick = useCallback(() => {
-    if (!tick.isPending) tick.mutate({});
-  }, [tick]);
+    if (canSimulate && !tick.isPending) tick.mutate({});
+  }, [tick, canSimulate]);
 
   const tickRef = useRef(doTick);
   useEffect(() => {
@@ -138,10 +148,10 @@ export default function Twins() {
   }, [doTick]);
 
   useEffect(() => {
-    if (!autoTick) return;
+    if (!autoTick || !canSimulate) return;
     const iv = setInterval(() => tickRef.current(), 2000);
     return () => clearInterval(iv);
-  }, [autoTick]);
+  }, [autoTick, canSimulate]);
 
   const changedForDetail = selectedIri ? (changedByTwin.get(selectedIri) ?? new Set<string>()) : new Set<string>();
 
@@ -206,6 +216,7 @@ export default function Twins() {
               onAutoTickChange={setAutoTick}
               onTick={doTick}
               ticking={tick.isPending}
+              canSimulate={canSimulate}
             />
           </motion.span>
         </div>
@@ -255,7 +266,7 @@ export default function Twins() {
       </AnimatePresence>
 
       {/* Section 5 — live pulse event log */}
-      <EventLog entries={log} autoTick={autoTick} tickCount={tickCount} onSelect={(iri) => iri && setSelectedIri(iri)} />
+      <EventLog entries={log} autoTick={autoTick && canSimulate} tickCount={tickCount} onSelect={(iri) => iri && setSelectedIri(iri)} />
 
       {/* IoT Brokers & Telemetry Management Modal */}
       <IotConnectorsModal

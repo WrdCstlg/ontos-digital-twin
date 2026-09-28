@@ -2,9 +2,10 @@ import { z } from "zod";
 import { and, desc, eq, inArray, isNull, like, lt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { kgEdges, kgNodes, ontologyClasses, ontologyModules, twinStateLog } from "@db/schema";
-import { createRouter, workspaceQuery, workspaceMutation, workspaceAdminMutation } from "./middleware";
+import { createRouter, EDITOR_ROLES, workspaceQuery, workspaceOntologistMutation, workspaceAdminMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
+import { hasWorkspaceRole } from "./services/workspaceGuard";
 import {
   DTDL_QUANTITATIVE_TYPES_CONTEXT,
   DTDL_SEMANTIC_TYPES,
@@ -294,12 +295,18 @@ export const twinRouter = createRouter({
       };
     }),
 
+  /** What the caller may do with the simulation: the client is not told its workspace role. */
+  capabilities: workspaceQuery.query(({ ctx }) => ({
+    canSimulate: hasWorkspaceRole(ctx.membership, ctx.user, EDITOR_ROLES),
+  })),
+
   /**
    * Advance the twin simulation one step (≈ one hour): random-walk telemetry,
    * cold-chain drift toward 2-6°C, shipment ETA countdown + delivery flip,
    * equipment battery drain. Persists propsJson + appends twin_state_log.
+   * It writes twin state, as telemetry does, so it is an editor's or above.
    */
-  tick: workspaceMutation
+  tick: workspaceOntologistMutation
     .input(z.object({ iri: z.string().min(1).max(512).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;

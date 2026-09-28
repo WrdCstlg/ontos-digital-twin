@@ -13,9 +13,11 @@ import {
   connectors,
   iotConnectors,
   jobs,
+  kgNodes,
   mappings,
   ontologyModules,
   syncJobs,
+  twinStateLog,
   users,
   workspaceMembers,
 } from "@db/schema";
@@ -130,6 +132,29 @@ describe("broker connectors are managed by the workspace's admins, and only its 
     await inB(mockAdminUser, "admin").iot.deleteConnector({ id: 6 });
     expect(stop).toHaveBeenCalledWith(6);
     expect(rows(iotConnectors).map((c) => c.id)).toEqual([5]);
+  });
+});
+
+describe("the twin simulation is run by editors and above", () => {
+  const twin = { id: 1, workspaceId: B.id, moduleKey: "twin", classIri: "dtwin:EquipmentTwin", iri: "dtwin:eq1", label: "Eq 1", propsJson: { batteryLevel: 50, status: "ok" }, deletedAt: null };
+
+  it("a viewer cannot advance it: the tick is refused and writes nothing", async () => {
+    put(kgNodes, [twin]);
+    await expect(inB(mockViewerUser, "viewer").twin.tick({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(rows(kgNodes)[0].propsJson).toEqual(twin.propsJson);
+    expect(rows(twinStateLog)).toEqual([]);
+  });
+
+  it("an editor can", async () => {
+    put(kgNodes, [twin]);
+    const res = await inB(mockViewerUser, "editor").twin.tick({});
+    expect(res.count).toBe(1);
+    expect(rows(kgNodes)[0].propsJson).not.toEqual(twin.propsJson);
+  });
+
+  it("and the client is told which, from the workspace role", async () => {
+    const can = async (role: "viewer" | "editor" | "ontologist" | "admin") => (await inB(mockViewerUser, role).twin.capabilities()).canSimulate;
+    expect([await can("viewer"), await can("editor"), await can("ontologist"), await can("admin")]).toEqual([false, true, true, true]);
   });
 });
 
