@@ -129,6 +129,58 @@ export function serializePrefixes(prefixMap: Map<string, string>): string {
 }
 
 /**
+ * One subject and what is said about it, as Turtle predicate-object pairs
+ * (`a hr:Person`, `rdfs:label "Ada"`). Rendering stops here, before the
+ * document, so a graph too large for one request can be cut between subjects
+ * (packTurtle) and still be written as one document (subjectToTurtle).
+ */
+export type TurtleSubject = { subject: string; statements: string[] };
+
+/** A subject's statements as one Turtle block: `s p1 o1 ;\n  p2 o2 .\n`. */
+export function subjectToTurtle(s: TurtleSubject): string {
+  return `${s.subject} ${s.statements.join(" ;\n  ")} .\n`;
+}
+
+/** An ontology module's classes and properties, one subject each. */
+export function moduleSubjects(
+  classes: OntologyClass[],
+  properties: OntologyProperty[],
+  prefixMap: Map<string, string>,
+): TurtleSubject[] {
+  const out: TurtleSubject[] = [];
+  const classById = new Map(classes.map((c) => [c.id, c]));
+
+  for (const c of classes) {
+    const statements = [`a owl:Class`, `rdfs:label "${escapeTurtleLiteral(c.label)}"`];
+    if (c.parentId) {
+      const parent = classById.get(c.parentId);
+      if (parent) statements.push(`rdfs:subClassOf ${formatIri(parent.iri, prefixMap)}`);
+    }
+    if (c.definition) statements.push(`rdfs:comment "${escapeTurtleLiteral(c.definition)}"`);
+    if (c.deprecated) statements.push(`owl:deprecated true`);
+    out.push({ subject: formatIri(c.iri, prefixMap), statements });
+  }
+
+  for (const p of properties) {
+    const kind = p.kind === "object" ? "owl:ObjectProperty" : "owl:DatatypeProperty";
+    const statements = [`a ${kind}`, `rdfs:label "${escapeTurtleLiteral(p.label)}"`];
+    if (p.domainClassId) {
+      const d = classById.get(p.domainClassId);
+      if (d) statements.push(`rdfs:domain ${formatIri(d.iri, prefixMap)}`);
+    }
+    if (p.kind === "object" && p.rangeClassId) {
+      const r = classById.get(p.rangeClassId);
+      if (r) statements.push(`rdfs:range ${formatIri(r.iri, prefixMap)}`);
+    } else if (p.kind === "datatype" && p.rangeDatatype) {
+      statements.push(`rdfs:range ${p.rangeDatatype.startsWith("xsd:") ? p.rangeDatatype : `xsd:${p.rangeDatatype}`}`);
+    }
+    if (p.definition) statements.push(`rdfs:comment "${escapeTurtleLiteral(p.definition)}"`);
+    out.push({ subject: formatIri(p.iri, prefixMap), statements });
+  }
+  return out;
+}
+
+/**
  * Serializes an ontology module and its classes and properties into Turtle.
  */
 export function moduleToTurtle(
@@ -142,52 +194,7 @@ export function moduleToTurtle(
   lines.push(`# =========================================================================`);
   lines.push(`# Ontos Module: ${mod.name} (${mod.key}) v${mod.version}`);
   lines.push(`# =========================================================================\n`);
-
-  const classById = new Map(classes.map((c) => [c.id, c]));
-
-  for (const c of classes) {
-    const classIriFormatted = formatIri(c.iri, prefixMap);
-    lines.push(`${classIriFormatted} a owl:Class ;`);
-    lines.push(`  rdfs:label "${escapeTurtleLiteral(c.label)}" ;`);
-
-    if (c.parentId) {
-      const parent = classById.get(c.parentId);
-      if (parent) {
-        lines.push(`  rdfs:subClassOf ${formatIri(parent.iri, prefixMap)} ;`);
-      }
-    }
-    if (c.definition) {
-      lines.push(`  rdfs:comment "${escapeTurtleLiteral(c.definition)}" ;`);
-    }
-    if (c.deprecated) {
-      lines.push(`  owl:deprecated true ;`);
-    }
-    lines[lines.length - 1] = lines[lines.length - 1].replace(/ ;$/, " .\n");
-  }
-
-  for (const p of properties) {
-    const propIriFormatted = formatIri(p.iri, prefixMap);
-    const kind = p.kind === "object" ? "owl:ObjectProperty" : "owl:DatatypeProperty";
-    lines.push(`${propIriFormatted} a ${kind} ;`);
-    lines.push(`  rdfs:label "${escapeTurtleLiteral(p.label)}" ;`);
-
-    if (p.domainClassId) {
-      const d = classById.get(p.domainClassId);
-      if (d) lines.push(`  rdfs:domain ${formatIri(d.iri, prefixMap)} ;`);
-    }
-    if (p.kind === "object" && p.rangeClassId) {
-      const r = classById.get(p.rangeClassId);
-      if (r) lines.push(`  rdfs:range ${formatIri(r.iri, prefixMap)} ;`);
-    } else if (p.kind === "datatype" && p.rangeDatatype) {
-      const dt = p.rangeDatatype.startsWith("xsd:") ? p.rangeDatatype : `xsd:${p.rangeDatatype}`;
-      lines.push(`  rdfs:range ${dt} ;`);
-    }
-    if (p.definition) {
-      lines.push(`  rdfs:comment "${escapeTurtleLiteral(p.definition)}" ;`);
-    }
-    lines[lines.length - 1] = lines[lines.length - 1].replace(/ ;$/, " .\n");
-  }
-
+  for (const s of moduleSubjects(classes, properties, prefixMap)) lines.push(subjectToTurtle(s));
   return lines.join("\n");
 }
 
@@ -261,7 +268,19 @@ export function knowledgeGraphToTurtle(
   lines.push(`# =========================================================================`);
   lines.push(`# Ontos Knowledge Graph Instances (${nodes.length} nodes, ${edges.length} edges)`);
   lines.push(`# =========================================================================\n`);
+  for (const s of knowledgeGraphSubjects(nodes, edges, prefixMap, ranges, prefixOfModule)) lines.push(subjectToTurtle(s));
+  return lines.join("\n");
+}
 
+/** Knowledge graph nodes as knowledgeGraphToTurtle renders them, one subject each, with its outgoing links. */
+export function knowledgeGraphSubjects(
+  nodes: KgNode[],
+  edges: KgEdge[],
+  prefixMap: Map<string, string> = buildPrefixMap(),
+  ranges?: DatatypeRanges,
+  prefixOfModule: ReadonlyMap<string, string> = new Map(),
+): TurtleSubject[] {
+  const out: TurtleSubject[] = [];
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
   // Group outgoing edges by fromNodeId
@@ -273,12 +292,10 @@ export function knowledgeGraphToTurtle(
   }
 
   for (const n of nodes) {
-    const subjectIri = formatIri(n.iri, prefixMap);
-    const typeIri = formatIri(n.classIri, prefixMap);
-    lines.push(`${subjectIri} a ${typeIri} ;`);
+    const statements = [`a ${formatIri(n.classIri, prefixMap)}`];
 
     if (n.label) {
-      lines.push(`  rdfs:label "${escapeTurtleLiteral(n.label)}" ;`);
+      statements.push(`rdfs:label "${escapeTurtleLiteral(n.label)}"`);
     }
 
     // Datatype property assignments from propsJson
@@ -294,18 +311,18 @@ export function knowledgeGraphToTurtle(
 
         const typed = declaredLiteral(value, ranges?.get(predIri));
         if (typed) {
-          lines.push(`  ${formattedPred} ${typed} ;`);
+          statements.push(`${formattedPred} ${typed}`);
         } else if (typeof value === "number") {
           const type = Number.isInteger(value) ? "xsd:integer" : "xsd:decimal";
-          lines.push(`  ${formattedPred} "${value}"^^${type} ;`);
+          statements.push(`${formattedPred} "${value}"^^${type}`);
         } else if (typeof value === "boolean") {
-          lines.push(`  ${formattedPred} "${value}"^^xsd:boolean ;`);
+          statements.push(`${formattedPred} "${value}"^^xsd:boolean`);
         } else if (typeof value === "string") {
           // Check for ISO date pattern
           if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-            lines.push(`  ${formattedPred} "${value}"^^xsd:date ;`);
+            statements.push(`${formattedPred} "${value}"^^xsd:date`);
           } else {
-            lines.push(`  ${formattedPred} "${escapeTurtleLiteral(value)}"^^xsd:string ;`);
+            statements.push(`${formattedPred} "${escapeTurtleLiteral(value)}"^^xsd:string`);
           }
         }
       }
@@ -316,16 +333,81 @@ export function knowledgeGraphToTurtle(
     for (const e of related) {
       const target = nodeById.get(e.toNodeId);
       if (target) {
-        const predIri = formatIri(e.predicateIri, prefixMap);
-        const targetIri = formatIri(target.iri, prefixMap);
-        lines.push(`  ${predIri} ${targetIri} ;`);
+        statements.push(`${formatIri(e.predicateIri, prefixMap)} ${formatIri(target.iri, prefixMap)}`);
       }
     }
 
-    lines[lines.length - 1] = lines[lines.length - 1].replace(/ ;$/, " .\n");
+    out.push({ subject: formatIri(n.iri, prefixMap), statements });
   }
+  return out;
+}
 
-  return lines.join("\n");
+/** Bytes `text` takes inside a JSON string: UTF-8, after escaping, without the quotes. */
+function jsonBytes(text: string): number {
+  return Buffer.byteLength(JSON.stringify(text), "utf8") - 2;
+}
+
+/**
+ * Cuts a graph into Turtle documents that each fit one request to the engine,
+ * which refuses a body over 2 MiB. Every document declares the prefixes, and
+ * none takes more than `maxBytes` inside a JSON string, as the request carries
+ * it. Documents break between subjects; a subject too large for one document
+ * is split between its statements, repeating the subject, which says the same
+ * triples. The documents together hold exactly the triples of
+ * `prefixes + subjects`, in order. Throws if a single statement cannot fit:
+ * leaving it out would load a graph that is not the workspace's.
+ */
+export function packTurtle(prefixMap: Map<string, string>, subjects: TurtleSubject[], maxBytes: number): string[] {
+  const header = serializePrefixes(prefixMap);
+  // Each block follows a newline, 2 bytes escaped.
+  const room = maxBytes - jsonBytes(header);
+  if (room <= 0) throw new Error(`The prefixes alone take more than one request to the engine can carry (${maxBytes} bytes)`);
+  const docs: string[] = [];
+  let blocks: string[] = [];
+  let used = 0;
+  const flush = () => {
+    if (blocks.length > 0) docs.push([header, ...blocks].join("\n"));
+    blocks = [];
+    used = 0;
+  };
+  const add = (block: string, bytes: number) => {
+    if (used + bytes > room) flush();
+    blocks.push(block);
+    used += bytes;
+  };
+
+  for (const s of subjects) {
+    const whole = subjectToTurtle(s);
+    const wholeBytes = jsonBytes(whole) + 2;
+    if (wholeBytes <= room) {
+      add(whole, wholeBytes);
+      continue;
+    }
+    // Too large for any document: one block per run of statements that fits.
+    // A block's size is the sum of its pieces', escaping being per character.
+    const base = jsonBytes(`${s.subject} `) + jsonBytes(" .\n") + 2;
+    const separator = jsonBytes(" ;\n  ");
+    let part: string[] = [];
+    let partBytes = 0;
+    for (const statement of s.statements) {
+      const bytes = jsonBytes(statement);
+      if (base + bytes > room) {
+        throw new Error(
+          `${s.subject} has a statement of ${bytes} bytes, more than one request to the engine can carry (${maxBytes} bytes with the prefixes)`,
+        );
+      }
+      if (part.length > 0 && base + partBytes + separator + bytes > room) {
+        add(subjectToTurtle({ subject: s.subject, statements: part }), base + partBytes);
+        part = [];
+        partBytes = 0;
+      }
+      partBytes += (part.length > 0 ? separator : 0) + bytes;
+      part.push(statement);
+    }
+    if (part.length > 0) add(subjectToTurtle({ subject: s.subject, statements: part }), base + partBytes);
+  }
+  flush();
+  return docs;
 }
 
 /**

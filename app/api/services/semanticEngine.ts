@@ -16,9 +16,11 @@ import { getDb } from "../queries/connection";
 import {
   buildPrefixMap,
   datatypeRanges,
-  moduleToTurtle,
-  knowledgeGraphToTurtle,
+  knowledgeGraphSubjects,
+  moduleSubjects,
   modulePrefixes,
+  packTurtle,
+  type TurtleSubject,
 } from "./rdfBridge";
 
 export type SemanticEngineHealth = {
@@ -89,6 +91,33 @@ export class EngineRequestError extends Error {}
 function httpFailure(what: string, res: Response): Error {
   const message = `${what}: HTTP ${res.status} ${res.statusText}`.trim();
   return res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429 ? new EngineRequestError(message) : new Error(message);
+}
+
+/**
+ * The engine refuses a request body over 2 MiB (axum's default limit), with
+ * 413 or by dropping the connection. A load is cut into documents of at most
+ * this many bytes of Turtle, leaving room for the JSON around it.
+ */
+export const LOAD_REQUEST_BYTES = 1_800_000;
+
+/**
+ * Why the engine refused, if its answer is a refusal. It answers failures
+ * with HTTP 200: `{"error": …}`; `null` from a REST route whose message holds
+ * a quote (it cannot encode it); and, inside an /api/batch result, `{"raw": …}`
+ * holding the error it could not encode. Null when the answer is none of these.
+ */
+export function engineRefusal(answer: unknown): string | null {
+  if (answer === null || typeof answer !== "object") return "the engine refused the request and could not say why";
+  const { error, raw } = answer as { error?: unknown; raw?: unknown };
+  if (typeof error === "string" && error) return error;
+  if (typeof raw === "string") return raw.replace(/^\{"error":"/, "").replace(/"\}$/, "") || "the engine refused the request and could not say why";
+  return null;
+}
+
+/** The first item of an /api/batch answer, `{command, result}` or `{command, error}`, if it has one. */
+function firstBatchItem(answer: unknown): { result?: unknown; error?: string } | undefined {
+  const item = Array.isArray(answer) ? (answer[0] as unknown) : undefined;
+  return item !== null && typeof item === "object" ? (item as { result?: unknown; error?: string }) : undefined;
 }
 
 /**
@@ -462,9 +491,28 @@ export class SemanticEngineClient {
     await this.ensureEngineRunning();
     const res = await this.send("/api/load-turtle", { method: "POST", body: JSON.stringify({ turtle, base: baseIri }) }, 15000);
     if (!res.ok) throw httpFailure("Failed to load Turtle", res);
-    const data = (await res.json()) as { ok?: boolean; triples_loaded?: number; error?: string };
-    if (data.error) throw new EngineRequestError(`Oxigraph load error: ${data.error}`);
-    return { ok: true, triplesLoaded: data.triples_loaded ?? 0 };
+    const data = (await res.json()) as { triples_loaded?: number } | null;
+    const refused = engineRefusal(data);
+    if (refused) throw new EngineRequestError(`Oxigraph load error: ${refused}`);
+    return { ok: true, triplesLoaded: data?.triples_loaded ?? 0 };
+  }
+
+  /**
+   * Loads a graph of any size: in documents that each fit one request (see
+   * LOAD_REQUEST_BYTES), one after another. Call inside exclusive(): a reader
+   * between two documents would see part of the graph.
+   */
+  public async loadSubjects(prefixMap: Map<string, string>, subjects: TurtleSubject[]): Promise<{ triplesLoaded: number; requests: number }> {
+    let docs: string[];
+    try {
+      docs = packTurtle(prefixMap, subjects, LOAD_REQUEST_BYTES);
+    } catch (err) {
+      // A statement no request can carry: the engine would refuse it every time.
+      throw new EngineRequestError(err instanceof Error ? err.message : String(err));
+    }
+    let triplesLoaded = 0;
+    for (const doc of docs) triplesLoaded += (await this.loadTurtle(doc)).triplesLoaded;
+    return { triplesLoaded, requests: docs.length };
   }
 
   /**
@@ -478,6 +526,11 @@ export class SemanticEngineClient {
     if (!res.ok) {
       throw new Error(`Failed to clear the engine store: HTTP ${res.status}`);
     }
+    // A refusal comes back with HTTP 200: without this check, a load would go
+    // on top of whatever the store still holds.
+    const item = firstBatchItem(await res.json());
+    const refused = item ? (item.error ?? engineRefusal(item.result)) : "the engine returned no result";
+    if (refused) throw new Error(`Failed to clear the engine store: ${refused}`);
     return true;
   }
 
@@ -493,12 +546,12 @@ export class SemanticEngineClient {
     const data = (await res.json()) as {
       variables?: string[];
       results?: Record<string, string>[];
-      error?: string;
-    };
-    if (data.error) throw new Error(`SPARQL error: ${data.error}`);
+    } | null;
+    const refused = engineRefusal(data);
+    if (refused) throw new Error(`SPARQL error: ${refused}`);
     return {
-      variables: data.variables ?? [],
-      results: data.results ?? [],
+      variables: data?.variables ?? [],
+      results: data?.results ?? [],
     };
   }
 
@@ -512,9 +565,10 @@ export class SemanticEngineClient {
     if (!res.ok) {
       throw new Error(`SPARQL update failed: HTTP ${res.status} ${res.statusText}`);
     }
-    const data = (await res.json()) as { ok?: boolean; affected?: number; error?: string };
-    if (data.error) throw new Error(`SPARQL update error: ${data.error}`);
-    return { ok: true, affected: data.affected ?? 0 };
+    const data = (await res.json()) as { affected?: number } | null;
+    const refused = engineRefusal(data);
+    if (refused) throw new Error(`SPARQL update error: ${refused}`);
+    return { ok: true, affected: data?.affected ?? 0 };
   }
 
   /**
@@ -529,24 +583,19 @@ export class SemanticEngineClient {
   public async validateShacl(shapesTurtle: string): Promise<ShaclValidationResult> {
     await this.ensureEngineRunning();
 
-    type BatchResp = Array<{
-      command: string;
-      result?: {
-        conforms?: boolean;
-        focus_nodes?: number;
-        violation_count?: number;
-        violations?: Array<{
-          constraint?: string;
-          focus_node?: string;
-          path?: string;
-          severity?: "Violation" | "Warning" | "Info";
-          message?: string;
-          value?: string;
-        }>;
-        error?: string;
-      };
-      error?: string;
-    }>;
+    type ShaclAnswer = {
+      conforms?: boolean;
+      focus_nodes?: number;
+      violation_count?: number;
+      violations?: Array<{
+        constraint?: string;
+        focus_node?: string;
+        path?: string;
+        severity?: "Violation" | "Warning" | "Info";
+        message?: string;
+        value?: string;
+      }>;
+    };
 
     const exchangeDir = process.env.SHACL_EXCHANGE_DIR || os.tmpdir();
     const shapesFile = path.join(exchangeDir, `ontos-shacl-${randomUUID()}.ttl`);
@@ -556,12 +605,14 @@ export class SemanticEngineClient {
       const res = await this.send("/api/batch", { method: "POST", body: JSON.stringify([{ command: "shacl", args: [shapesFile] }]) }, 30000);
       if (!res.ok) throw httpFailure("SHACL validation request failed", res);
 
-      const batch = (await res.json()) as BatchResp;
-      const shaclRes = batch[0]?.result;
-
-      const refused = shaclRes?.error || batch[0]?.error;
+      const item = firstBatchItem(await res.json());
+      if (item?.error) throw new EngineRequestError(item.error);
+      if (item?.result === undefined) throw new Error("SHACL validation failed: the engine returned no result");
+      const refused = engineRefusal(item.result);
       if (refused) throw new EngineRequestError(refused);
-      if (!shaclRes) throw new Error("SHACL validation failed: the engine returned no result");
+      const shaclRes = item.result as ShaclAnswer;
+      // Without its verdict, "does not conform, with no violations" would be a guess.
+      if (typeof shaclRes.conforms !== "boolean") throw new Error("SHACL validation failed: the engine's answer has no verdict");
 
       const violations: ShaclViolation[] = (shaclRes.violations ?? []).map((v) => ({
         constraint: v.constraint ?? "unknown",
@@ -573,7 +624,7 @@ export class SemanticEngineClient {
       }));
 
       return {
-        conforms: shaclRes.conforms ?? false,
+        conforms: shaclRes.conforms,
         focusNodes: shaclRes.focus_nodes ?? 0,
         violationCount: shaclRes.violation_count ?? violations.length,
         violations,
@@ -606,25 +657,19 @@ export class SemanticEngineClient {
       throw new Error(`Reasoning request failed: HTTP ${res.status}`);
     }
 
-    type ReasonBatch = Array<{
-      command: string;
-      result?: {
-        initial_triples?: number;
-        final_triples?: number;
-        inferred_count?: number;
-        iterations?: number;
-        profile_used?: string;
-        sample_inferences?: string[];
-        error?: string;
-      };
-      error?: string;
-    }>;
+    type ReasonAnswer = {
+      initial_triples?: number;
+      final_triples?: number;
+      inferred_count?: number;
+      iterations?: number;
+      profile_used?: string;
+      sample_inferences?: string[];
+    };
 
-    const batch = (await res.json()) as ReasonBatch;
-    const item = batch[0]?.result;
-    if (!item || item.error) {
-      throw new Error(item?.error || batch[0]?.error || "Reasoning execution failed");
-    }
+    const batchItem = firstBatchItem(await res.json());
+    const refused = batchItem?.error || (batchItem?.result === undefined ? "Reasoning execution failed" : engineRefusal(batchItem.result));
+    if (refused) throw new Error(refused);
+    const item = batchItem?.result as ReasonAnswer;
 
     // Query inferred subClassOf relationships from the reasoned graph
     const sparql = `
@@ -741,23 +786,17 @@ export class SemanticEngineClient {
 
     const prefixMap = buildPrefixMap(modules);
 
-    let totalTriples = 0;
-
-    // Load each module's schema
-    for (const mod of modules) {
-      const modClasses = classes.filter((c) => c.moduleId === mod.id);
-      const modProps = properties.filter((p) => p.moduleId === mod.id);
-      const ttl = moduleToTurtle(mod, modClasses, modProps, prefixMap);
-      const res = await this.loadTurtle(ttl);
-      totalTriples += res.triplesLoaded;
-    }
-
-    // Load instances
-    if (nodes.length > 0) {
-      const kgTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes(modules));
-      const res = await this.loadTurtle(kgTtl);
-      totalTriples += res.triplesLoaded;
-    }
+    // Each module's schema, as it always was: a module names only its own
+    // classes as parents, domains and ranges. Then the instances.
+    const subjects: TurtleSubject[] = modules.flatMap((mod) =>
+      moduleSubjects(
+        classes.filter((c) => c.moduleId === mod.id),
+        properties.filter((p) => p.moduleId === mod.id),
+        prefixMap,
+      ),
+    );
+    subjects.push(...knowledgeGraphSubjects(nodes, edges, prefixMap, datatypeRanges(properties), modulePrefixes(modules)));
+    const { triplesLoaded: totalTriples } = await this.loadSubjects(prefixMap, subjects);
 
     this.loadedWorkspaceId = workspaceId;
     return {
