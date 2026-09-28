@@ -16,7 +16,9 @@ import {
   type SyncJob,
 } from "@db/schema";
 import { getDb } from "../queries/connection";
+import { withDeadlockRetry } from "../lib/deadlockRetry";
 import { writeAudit } from "./audit";
+import { recordGraphChange } from "./graphChanges";
 import { EngineRequestError, semanticEngine, type ShaclValidationResult } from "./semanticEngine";
 import { buildPrefixMap, expandIri, knowledgeGraphToTurtle, modulePrefixes, shaclJsonToTurtle } from "./rdfBridge";
 import { workspaceDatatypeRanges } from "./datatypeRanges";
@@ -39,6 +41,9 @@ import { SecretUnreadableError } from "../lib/secretBox";
  */
 
 export const MAPPING_SYNC_KIND = "mapping.sync";
+
+/** Rows (or links) an import writes per transaction. */
+const IMPORT_BATCH = 500;
 
 /* ── CSV helpers ─────────────────────────────────────────────── */
 
@@ -464,85 +469,112 @@ export async function runMappingSync(
     }
   }
 
-  let processed = 0;
-  const iriToId = new Map<string, number>();
-  const pendingEdges: { from: number; toIri: string; predicate: string }[] = [];
-
+  // Rows are written in transactions of at most IMPORT_BATCH, each recording
+  // the nodes it wrote (graphChanges.ts), so a copy of the graph learns of
+  // them. In IRI order, stably, so the last of several rows for one IRI still
+  // wins, and two imports that write the same nodes lock them in one order and
+  // never wait on each other in a circle. A batch MySQL picks as a deadlock's
+  // victim is rolled back, and run again.
+  const mapped: { iri: string; label: string; props: Record<string, string>; row: Record<string, string> }[] = [];
   for (const row of rows) {
-    if (signal.aborted) interrupted(signal);
     const iri = renderTemplate(columnMap.subject, row);
     if (!iri || iri.includes("{}")) continue;
     const props: Record<string, string> = {};
     for (const [col, propIri] of Object.entries(columnMap.fields ?? {})) {
       if (row[col]) props[propIri] = row[col];
     }
-    const label = columnMap.label ? row[columnMap.label] : iri;
-    await db
-      .insert(kgNodes)
-      .values({
-        workspaceId,
-        moduleKey,
-        classIri: m.classIri,
-        iri,
-        label: label || iri,
-        propsJson: props,
-        sourceMappingId: m.id,
-      })
-      .onDuplicateKeyUpdate({
-        // The import is now the last thing to have changed it.
-        set: { label: label || iri, propsJson: props, sourceMappingId: m.id, sourceSubmissionId: null, updatedAt: new Date() },
-      });
-    const [node] = await db
-      .select()
-      .from(kgNodes)
-      .where(and(eq(kgNodes.workspaceId, workspaceId), eq(kgNodes.iri, iri)))
-      .limit(1);
-    if (node) {
-      iriToId.set(iri, node.id);
+    mapped.push({ iri, label: (columnMap.label ? row[columnMap.label] : iri) || iri, props, row });
+  }
+  mapped.sort((a, b) => (a.iri < b.iri ? -1 : a.iri > b.iri ? 1 : 0));
+
+  let processed = 0;
+  const iriToId = new Map<string, number>();
+  const pendingEdges: { from: number; toIri: string; predicate: string }[] = [];
+
+  for (let i = 0; i < mapped.length; i += IMPORT_BATCH) {
+    if (signal.aborted) interrupted(signal);
+    const batch = mapped.slice(i, i + IMPORT_BATCH);
+    const written = await withDeadlockRetry(() =>
+      db.transaction(async (tx) => {
+        const ids = new Map<string, number>();
+        for (const r of batch) {
+          await tx
+            .insert(kgNodes)
+            .values({ workspaceId, moduleKey, classIri: m.classIri, iri: r.iri, label: r.label, propsJson: r.props, sourceMappingId: m.id })
+            .onDuplicateKeyUpdate({
+              // The import is now the last thing to have changed it.
+              set: { label: r.label, propsJson: r.props, sourceMappingId: m.id, sourceSubmissionId: null, updatedAt: new Date() },
+            });
+          const [node] = await tx
+            .select({ id: kgNodes.id })
+            .from(kgNodes)
+            .where(and(eq(kgNodes.workspaceId, workspaceId), eq(kgNodes.iri, r.iri)))
+            .limit(1);
+          if (node) ids.set(r.iri, node.id);
+        }
+        await recordGraphChange(tx, workspaceId, { nodes: ids.values() });
+        return ids;
+      }),
+    );
+    for (const r of batch) {
+      const from = written.get(r.iri);
+      if (from === undefined) continue;
+      iriToId.set(r.iri, from);
       for (const l of columnMap.links ?? []) {
-        const toIri = renderTemplate(l.target, { value: row[l.column] ?? "" });
-        if (row[l.column] && toIri) pendingEdges.push({ from: node.id, toIri, predicate: l.predicate });
+        const toIri = renderTemplate(l.target, { value: r.row[l.column] ?? "" });
+        if (r.row[l.column] && toIri) pendingEdges.push({ from, toIri, predicate: l.predicate });
       }
     }
-    processed++;
+    processed += batch.length;
   }
 
-  // Resolve edge targets, which must already exist in the graph.
+  // Resolve edge targets, which must already exist in the graph. Batched as
+  // the rows were: each batch records the nodes it linked from.
   let edgesCreated = 0;
-  for (const pe of pendingEdges) {
+  for (let i = 0; i < pendingEdges.length; i += IMPORT_BATCH) {
     if (signal.aborted) interrupted(signal);
-    let toId = iriToId.get(pe.toIri);
-    if (!toId) {
-      const [t] = await db
-        .select()
-        .from(kgNodes)
-        .where(and(eq(kgNodes.workspaceId, workspaceId), eq(kgNodes.iri, pe.toIri)))
-        .limit(1);
-      toId = t?.id;
-    }
-    if (!toId) continue;
-    const [dup] = await db
-      .select()
-      .from(kgEdges)
-      .where(
-        and(
-          eq(kgEdges.workspaceId, workspaceId),
-          eq(kgEdges.fromNodeId, pe.from),
-          eq(kgEdges.toNodeId, toId),
-          eq(kgEdges.predicateIri, pe.predicate),
-        ),
-      )
-      .limit(1);
-    if (dup) continue;
-    await db.insert(kgEdges).values({
-      workspaceId,
-      fromNodeId: pe.from,
-      toNodeId: toId,
-      predicateIri: pe.predicate,
-      moduleKey,
-      sourceMappingId: m.id,
-    });
-    edgesCreated++;
+    const batch = pendingEdges.slice(i, i + IMPORT_BATCH);
+    edgesCreated += await withDeadlockRetry(() =>
+      db.transaction(async (tx) => {
+        const linkedFrom: number[] = [];
+        for (const pe of batch) {
+          let toId = iriToId.get(pe.toIri);
+          if (!toId) {
+            const [t] = await tx
+              .select({ id: kgNodes.id })
+              .from(kgNodes)
+              .where(and(eq(kgNodes.workspaceId, workspaceId), eq(kgNodes.iri, pe.toIri)))
+              .limit(1);
+            toId = t?.id;
+          }
+          if (!toId) continue;
+          const [dup] = await tx
+            .select({ id: kgEdges.id })
+            .from(kgEdges)
+            .where(
+              and(
+                eq(kgEdges.workspaceId, workspaceId),
+                eq(kgEdges.fromNodeId, pe.from),
+                eq(kgEdges.toNodeId, toId),
+                eq(kgEdges.predicateIri, pe.predicate),
+              ),
+            )
+            .limit(1);
+          if (dup) continue;
+          await tx.insert(kgEdges).values({
+            workspaceId,
+            fromNodeId: pe.from,
+            toNodeId: toId,
+            predicateIri: pe.predicate,
+            moduleKey,
+            sourceMappingId: m.id,
+          });
+          linkedFrom.push(pe.from);
+        }
+        await recordGraphChange(tx, workspaceId, { nodes: linkedFrom });
+        return linkedFrom.length;
+      }),
+    );
   }
 
   const snapLabel = await nextSnapshotLabel(workspaceId);

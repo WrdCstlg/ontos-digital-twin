@@ -67,6 +67,15 @@ tests fail when the migrations build something other than `schema.ts`. A release
 never changes (a database that applied it never runs it again): add the new one's hash to
 `RELEASED` in `api/__tests__/migrationHistory.test.ts`, whose test tells you the hash.
 
+**A change to the graph is recorded with it.** Whatever writes `kg_nodes`, `kg_edges` or the
+ontology tables calls `recordGraphChange` (`api/services/graphChanges.ts`) in the same
+transaction, as its last graph write and after its `writeAudit` if it has one. It names the
+nodes, classes and properties whose rendering changed, and the nodes that came or went. A
+semantic engine that holds a copy of the graph learns of changes only this way. The test in
+`api/__tests__/graphChangeWriters.test.ts` counts every write to those tables, and fails on
+a new one until it is counted there. A seed that replaces a graph calls
+`recordGraphReplaced` instead.
+
 **Seed scripts are destructive.** `db/seed.ts` and `db/seed-twins.ts` clear every table,
 including the hash-linked audit chain, before inserting. Never point them at a database
 holding data you care about. `db:bootstrap` only seeds an empty database.

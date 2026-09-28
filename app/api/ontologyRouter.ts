@@ -16,6 +16,7 @@ import {
   actorLabelFor,
   writeAudit,
 } from "./services/audit";
+import { recordGraphChange } from "./services/graphChanges";
 import { serializeModule } from "./services/serializers";
 import { semanticEngine } from "./services/semanticEngine";
 import {
@@ -292,107 +293,123 @@ export const ontologyRouter = createRouter({
         parentId = parent.id;
       }
 
-      const [{ id: classId }] = await db
-        .insert(ontologyClasses)
-        .values({
-          moduleId: mod.id,
-          iri,
-          label: input.label,
-          parentId,
-          definition: input.definition ?? null,
-          isCustom: true,
-        })
-        .$returningId();
-
-      const createdProps: typeof ontologyProperties.$inferSelect[] = [];
-      for (const p of input.properties) {
-        if (p.kind === "object" && !p.rangeClassIri)
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `Object property '${p.name}' requires rangeClassIri`,
-          });
-        let rangeClassId: number | null = null;
-        if (p.rangeClassIri) {
-          const moduleIds = (
-            await db
-              .select({ id: ontologyModules.id })
-              .from(ontologyModules)
-              .where(eq(ontologyModules.workspaceId, ws.id))
-          ).map((m) => m.id);
-          const [rc] = await db
-            .select()
-            .from(ontologyClasses)
-            .where(
-              and(
-                inArray(ontologyClasses.moduleId, moduleIds),
-                eq(ontologyClasses.iri, p.rangeClassIri),
-              ),
-            )
-            .limit(1);
-          if (!rc)
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `Range class '${p.rangeClassIri}' does not exist`,
-            });
-          rangeClassId = rc.id;
-        }
-        const [{ id: propId }] = await db
-          .insert(ontologyProperties)
+      // One transaction: a property refused half way leaves no class behind,
+      // and the graph's change is recorded with what made it.
+      const { classId, createdProps, newVersion, auditId } = await db.transaction(async (tx) => {
+        const [{ id: classId }] = await tx
+          .insert(ontologyClasses)
           .values({
             moduleId: mod.id,
-            iri: `${mod.prefix}:${p.name}`,
-            label: p.name,
-            kind: p.kind,
-            domainClassId: classId,
-            rangeClassId,
-            rangeDatatype: p.kind === "datatype" ? (p.rangeDatatype ?? "xsd:string") : null,
-            cardinality: p.cardinality ?? null,
-            definition: p.definition ?? null,
+            iri,
+            label: input.label,
+            parentId,
+            definition: input.definition ?? null,
+            isCustom: true,
           })
           .$returningId();
-        const [row] = await db
-          .select()
-          .from(ontologyProperties)
-          .where(eq(ontologyProperties.id, propId));
-        createdProps.push(row);
-      }
 
-      // version bump (minor) + version history entry
-      const newVersion = bumpMinor(mod.version);
-      await db
-        .update(ontologyModules)
-        .set({ version: newVersion, updatedAt: new Date() })
-        .where(eq(ontologyModules.id, mod.id));
-      const diff = {
-        added: {
-          classes: [{ iri, label: input.label, parentIri: input.parentIri ?? null }],
-          properties: createdProps.map((p) => ({ iri: p.iri, label: p.label })),
-        },
-        removed: { classes: [], properties: [] },
-        changed: [],
-      };
-      await db.insert(ontologyVersions).values({
-        moduleId: mod.id,
-        version: newVersion,
-        changelog: `Added class ${iri}${input.parentIri ? ` (subclass of ${input.parentIri})` : ""} with ${createdProps.length} propert${createdProps.length === 1 ? "y" : "ies"}`,
-        diffJson: diff,
-        publishedAt: new Date(),
-      });
+        const createdProps: typeof ontologyProperties.$inferSelect[] = [];
+        for (const p of input.properties) {
+          if (p.kind === "object" && !p.rangeClassIri)
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Object property '${p.name}' requires rangeClassIri`,
+            });
+          let rangeClassId: number | null = null;
+          if (p.rangeClassIri) {
+            const moduleIds = (
+              await tx
+                .select({ id: ontologyModules.id })
+                .from(ontologyModules)
+                .where(eq(ontologyModules.workspaceId, ws.id))
+            ).map((m) => m.id);
+            const [rc] = await tx
+              .select()
+              .from(ontologyClasses)
+              .where(
+                and(
+                  inArray(ontologyClasses.moduleId, moduleIds),
+                  eq(ontologyClasses.iri, p.rangeClassIri),
+                ),
+              )
+              .limit(1);
+            if (!rc)
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Range class '${p.rangeClassIri}' does not exist`,
+              });
+            rangeClassId = rc.id;
+          }
+          const [{ id: propId }] = await tx
+            .insert(ontologyProperties)
+            .values({
+              moduleId: mod.id,
+              iri: `${mod.prefix}:${p.name}`,
+              label: p.name,
+              kind: p.kind,
+              domainClassId: classId,
+              rangeClassId,
+              rangeDatatype: p.kind === "datatype" ? (p.rangeDatatype ?? "xsd:string") : null,
+              cardinality: p.cardinality ?? null,
+              definition: p.definition ?? null,
+            })
+            .$returningId();
+          const [row] = await tx
+            .select()
+            .from(ontologyProperties)
+            .where(eq(ontologyProperties.id, propId));
+          createdProps.push(row);
+        }
 
-      const audit = await writeAudit({
-        workspaceId: ws.id,
-        actor: actorLabelFor(ctx.user),
-        action: `Published ${mod.key} v${newVersion} — added class ${iri}`,
-        entityType: "ontology_class",
-        entityId: iri,
-        payload: { moduleKey: mod.key, version: newVersion, diff },
+        // version bump (minor) + version history entry
+        const newVersion = bumpMinor(mod.version);
+        await tx
+          .update(ontologyModules)
+          .set({ version: newVersion, updatedAt: new Date() })
+          .where(eq(ontologyModules.id, mod.id));
+        const diff = {
+          added: {
+            classes: [{ iri, label: input.label, parentIri: input.parentIri ?? null }],
+            properties: createdProps.map((p) => ({ iri: p.iri, label: p.label })),
+          },
+          removed: { classes: [], properties: [] },
+          changed: [],
+        };
+        await tx.insert(ontologyVersions).values({
+          moduleId: mod.id,
+          version: newVersion,
+          changelog: `Added class ${iri}${input.parentIri ? ` (subclass of ${input.parentIri})` : ""} with ${createdProps.length} propert${createdProps.length === 1 ? "y" : "ies"}`,
+          diffJson: diff,
+          publishedAt: new Date(),
+        });
+
+        const audit = await writeAudit(
+          {
+            workspaceId: ws.id,
+            actor: actorLabelFor(ctx.user),
+            action: `Published ${mod.key} v${newVersion} — added class ${iri}`,
+            entityType: "ontology_class",
+            entityId: iri,
+            payload: { moduleKey: mod.key, version: newVersion, diff },
+          },
+          tx,
+        );
+        // The class and its properties are new subjects. A datatype property
+        // also types every value held under its IRI, which nodes may already
+        // hold: then the whole graph is rendered again.
+        await recordGraphChange(tx, ws.id, {
+          classes: [classId],
+          properties: createdProps.map((p) => p.id),
+          everything: createdProps.some((p) => p.kind === "datatype"),
+        });
+        return { classId, createdProps, newVersion, auditId: audit.id };
       });
 
       const [cls] = await db
         .select()
         .from(ontologyClasses)
         .where(eq(ontologyClasses.id, classId));
-      return { class: cls, properties: createdProps, newVersion, auditId: audit.id };
+      return { class: cls, properties: createdProps, newVersion, auditId };
     }),
 
   deprecateClass: workspaceOntologistMutation
@@ -422,18 +439,27 @@ export const ontologyRouter = createRouter({
           code: "NOT_FOUND",
           message: `Class '${input.classIri}' not found`,
         });
-      await db
-        .update(ontologyClasses)
-        .set({ deprecated: true })
-        .where(eq(ontologyClasses.id, cls.id));
       const mod = mods.find((m) => m.id === cls.moduleId)!;
-      const audit = await writeAudit({
-        workspaceId: ws.id,
-        actor: actorLabelFor(ctx.user),
-        action: `Deprecated class ${input.classIri}`,
-        entityType: "ontology_class",
-        entityId: input.classIri,
-        payload: { moduleKey: mod.key, version: mod.version },
+      const audit = await db.transaction(async (tx) => {
+        await tx
+          .update(ontologyClasses)
+          .set({ deprecated: true })
+          .where(eq(ontologyClasses.id, cls.id));
+        const entry = await writeAudit(
+          {
+            workspaceId: ws.id,
+            actor: actorLabelFor(ctx.user),
+            action: `Deprecated class ${input.classIri}`,
+            entityType: "ontology_class",
+            entityId: input.classIri,
+            payload: { moduleKey: mod.key, version: mod.version },
+          },
+          tx,
+        );
+        // A deprecated class leaves the graph, and with it its subclasses'
+        // parent and the domains and ranges that name it: rendered again whole.
+        await recordGraphChange(tx, ws.id, { everything: true });
+        return entry;
       });
       return { ok: true, auditId: audit.id };
     }),

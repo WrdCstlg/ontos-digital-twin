@@ -158,7 +158,15 @@ export function memoryDb(tables: Tables) {
     if (!tables.has(name)) tables.set(name, []);
     return tables.get(name)!;
   };
-  return {
+  const db = {
+    /**
+     * Runs `run` on this same database: nothing is isolated, and a failure
+     * rolls nothing back. Tests of what a transaction guarantees run on a
+     * real MySQL (__tests__/mysql).
+     */
+    transaction<T>(run: (tx: unknown) => Promise<T>): Promise<T> {
+      return run(db);
+    },
     select(fields?: Record<string, unknown>) {
       return {
         from(base: Table) {
@@ -245,6 +253,7 @@ export function memoryDb(tables: Tables) {
       return chain;
     },
   };
+  return db;
 }
 
 /** For vi.mock: a getDb that serves `tables`. */

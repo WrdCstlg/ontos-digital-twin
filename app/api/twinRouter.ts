@@ -5,6 +5,7 @@ import { kgEdges, kgNodes, ontologyClasses, ontologyModules, twinStateLog } from
 import { createRouter, EDITOR_ROLES, workspaceQuery, workspaceOntologistMutation, workspaceAdminMutation } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
+import { recordGraphChange } from "./services/graphChanges";
 import { hasWorkspaceRole } from "./services/workspaceGuard";
 import {
   DTDL_QUANTITATIVE_TYPES_CONTEXT,
@@ -334,11 +335,12 @@ export const twinRouter = createRouter({
 
       const changed: { iri: string; label: string; classIri: string; changes: StateChange[] }[] = [];
       const logRows: (typeof twinStateLog.$inferInsert)[] = [];
+      const updates: { id: number; next: TwinState }[] = [];
       for (const t of twins) {
         const state = ((t.propsJson ?? {}) as TwinState) ?? {};
         const { next, changes } = advanceTwinState(t.classIri, state, Math.random, now);
         if (!changes.length) continue;
-        await db.update(kgNodes).set({ propsJson: next }).where(eq(kgNodes.id, t.id));
+        updates.push({ id: t.id, next });
         for (const c of changes) {
           if (typeof c.new === "number" && LOGGED_NUMERIC_KEYS.has(c.key)) {
             logRows.push({
@@ -361,6 +363,13 @@ export const twinRouter = createRouter({
           }
         }
         changed.push({ iri: t.iri, label: t.label, classIri: t.classIri, changes });
+      }
+      // The twins' new state and the graph's change, together (graphChanges.ts).
+      if (updates.length) {
+        await db.transaction(async (tx) => {
+          for (const u of updates) await tx.update(kgNodes).set({ propsJson: u.next }).where(eq(kgNodes.id, u.id));
+          await recordGraphChange(tx, ws.id, { nodes: updates.map((u) => u.id) });
+        });
       }
       for (let i = 0; i < logRows.length; i += 500) {
         await db.insert(twinStateLog).values(logRows.slice(i, i + 500));

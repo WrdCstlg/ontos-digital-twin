@@ -19,7 +19,9 @@ import {
   type ActionRole,
 } from "@contracts/actions";
 import { getDb } from "../../queries/connection";
+import { withDeadlockRetry } from "../../lib/deadlockRetry";
 import { canonicalize, writeAudit } from "../audit";
+import { recordGraphChange } from "../graphChanges";
 import { enqueueJob } from "../jobs/queue";
 import { semanticEngine } from "../semanticEngine";
 import { buildPrefixMap, expandIri, knowledgeGraphToTurtle, modulePrefixes, shaclJsonToTurtle } from "../rdfBridge";
@@ -347,26 +349,6 @@ function snapshotFingerprint(o: ObjectSnapshot): string {
   return canonicalize({ c: o.classIri, l: o.label, p: o.props, d: o.deleted });
 }
 
-function isDeadlock(err: unknown): boolean {
-  for (let e: unknown = err, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth++) {
-    const x = e as { code?: string; errno?: number };
-    if (x.code === "ER_LOCK_DEADLOCK" || x.errno === 1213) return true;
-  }
-  return false;
-}
-
-/** Runs a transaction again when MySQL chose it as a deadlock's victim, as MySQL asks. */
-export async function withDeadlockRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
-  for (let i = 1; ; i++) {
-    try {
-      return await run();
-    } catch (err) {
-      if (i >= attempts || !isDeadlock(err)) throw err;
-      await new Promise((r) => setTimeout(r, 20 * i + Math.random() * 30));
-    }
-  }
-}
-
 export type PlanSummary = {
   created: { iri: string; classIri: string; label: string }[];
   modified: { iri: string; label?: { from: string; to: string }; set: Record<string, { from: unknown; to: unknown }>; unset: string[] }[];
@@ -513,6 +495,18 @@ async function applyPrepared(workspaceId: number, prep: Prepared, submitter: Sub
       },
       tx,
     );
+    // Every object whose statements changed: those created, revived, changed
+    // or deleted, and those a link was added to or taken from. Those created,
+    // revived or deleted change the objects that link to them too.
+    const came = prep.plan.creates.map((c) => idByIri.get(c.iri)!);
+    const gone = prep.plan.deletes.map((d) => d.id);
+    await recordGraphChange(tx, workspaceId, {
+      nodes: [
+        ...prep.plan.modifies.map((m) => m.id),
+        ...[...prep.plan.linkAdds, ...prep.plan.linkRemoves].map((l) => idByIri.get(l.fromIri)!),
+      ],
+      appearedOrGone: [...came, ...gone],
+    });
     const [row] = await tx.select().from(actionSubmissions).where(eq(actionSubmissions.id, submissionId));
     return row;
   });
