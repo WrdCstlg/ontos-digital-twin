@@ -47,7 +47,6 @@ export function getPool(): mysql.Pool {
 export function openConnection(): Promise<mysql.Connection> {
   return mysql.createConnection({ uri: env.databaseUrl, enableKeepAlive: true, keepAliveInitialDelay: 10000 });
 }
-}
 
 export async function closeDb(): Promise<void> {
   if (pool) {
