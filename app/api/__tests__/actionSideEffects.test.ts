@@ -65,6 +65,12 @@ describe("assertDeliverable", () => {
     await expect(assertDeliverable("ftp://example.com/x", true)).rejects.toThrow(/http or https/);
     await expect(assertDeliverable("http://93.184.216.34/hook", false)).resolves.toBeUndefined();
   });
+
+  it("says a host resolves internally without saying to what: the error is shown to members", async () => {
+    const err = (await assertDeliverable("http://localhost:8080/hook", false).catch((e) => e)) as Error;
+    expect(err).toBeInstanceOf(PermanentJobError);
+    expect(err.message).toBe("localhost resolves to an internal address; set ACTION_WEBHOOK_ALLOW_PRIVATE=true to allow it");
+  });
 });
 
 describe("actionWebhookHandler", () => {
