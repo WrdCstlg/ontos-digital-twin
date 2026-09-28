@@ -421,22 +421,31 @@ email outside `@acme.com`.
 elevated access.
 
 Within a workspace, a member's role there decides what they may do: a workspace admin
-can make anyone a viewer in their workspace. An account's own role counts only when it
-is `admin`, a platform administrator. The same rule governs who may submit an action,
-the highest role a new API token may have, and the role the Ontology API acts with.
+can make any member a viewer in their workspace, except a platform administrator. An
+account's own role counts only when it is `admin`, a platform administrator, who is an
+admin in every workspace. The same rule governs who may submit an action, the highest
+role a new API token may have, and the role the Ontology API acts with. API tokens minted
+by someone whose account role was above their membership now act at the membership's role.
 
 - `authedQuery` / `authedMutation` — any signed-in user
 - `workspaceOntologistQuery` / `workspaceOntologistMutation` — editors and above: writes to
   the workspace's data (imports, telemetry, the twin simulation, acknowledging a finding)
 - `workspaceAdminQuery` / `workspaceAdminMutation` — the workspace's admins: members,
   connectors and broker credentials, retrying jobs
-- `adminQuery` / `adminMutation` — platform `admin` only
 - `publicQuery` — unauthenticated entry points only (`ping`, `auth.login`, `auth.demoLogin`)
 
-Ontologists and admins define action types and see webhook addresses in full, and only
-they can switch a mapping's SHACL check from block back to warn. The client is never told
-its workspace role: each page asks the router it uses for `capabilities` and offers only
-what the role allows.
+There are no procedures gated on the account's own role.
+
+Ontologists and admins define action types and see webhook addresses in full. A mapping
+set to block imports nothing its class's SHACL shapes reject, and only ontologists and
+admins can let such rows in: switch its check back to warn, move it to another class, or
+add a mapping into the same class that only warns. Anyone who may edit a mapping may make
+it block.
+
+The client never decides by role: the sidebar shows the person's role in the workspace
+(`auth.membership`), and pages that offer role-dependent controls (actions, twins, IoT,
+insights, mapping) ask their router's `capabilities`. Everywhere else the server refuses
+what the role may not do.
 
 ### Digital twins
 
