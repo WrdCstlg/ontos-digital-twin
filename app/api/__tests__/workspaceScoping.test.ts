@@ -133,6 +133,18 @@ describe("what members see of each other and of the workspace's work", () => {
     expect(JSON.stringify(members)).not.toContain("SENTINEL-HASH");
   });
 
+  it("the dashboard's last import is this workspace's newest, however many newer imports another workspace ran", async () => {
+    put(syncJobs, [
+      { id: 1, mappingId: 200, status: "failed", rowsProcessed: 0, createdAt: at },
+      { id: 2, mappingId: 200, status: "succeeded", rowsProcessed: 4, createdAt: at },
+      ...Array.from({ length: 60 }, (_, i) => ({ id: 3 + i, mappingId: 100, status: "succeeded", rowsProcessed: 1, createdAt: at })),
+    ]);
+    const { kpis } = await inB(mockViewerUser, "viewer").dashboard.overview();
+    expect(kpis.lastSync).toMatchObject({ id: 2, mappingId: 200 });
+    put(syncJobs, [{ id: 1, mappingId: 100, status: "succeeded", rowsProcessed: 1, createdAt: at }]);
+    expect((await inB(mockViewerUser, "viewer").dashboard.overview()).kpis.lastSync).toBeNull();
+  });
+
   it("the narrative counts this workspace's imports, not every workspace's", async () => {
     put(syncJobs, [
       ...[1, 2, 3].map((id) => ({ id, mappingId: 100, status: "succeeded", rowsProcessed: 1, createdAt: at })),
