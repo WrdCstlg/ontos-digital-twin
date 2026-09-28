@@ -22,6 +22,9 @@ import {
   packTurtle,
   type TurtleSubject,
 } from "./rdfBridge";
+import { EngineRequestError } from "./engineErrors";
+
+export { EngineRequestError };
 
 export type SemanticEngineHealth = {
   alive: boolean;
@@ -78,14 +81,6 @@ export type SparqlResult = {
   variables: string[];
   results: Record<string, string>[];
 };
-
-/**
- * The engine was reached, and answered that it cannot do what was asked: data
- * it cannot parse, a shapes file it cannot read, a request it refuses (4xx).
- * Asking again will not help. Anything else that fails (the engine away, a
- * timeout, a 5xx) may pass on a later try.
- */
-export class EngineRequestError extends Error {}
 
 /** A non-2xx answer: the request's fault (4xx, but a timeout or rate limit) or the engine's. */
 function httpFailure(what: string, res: Response): Error {
