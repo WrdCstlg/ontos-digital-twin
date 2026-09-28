@@ -19,7 +19,7 @@ import {
   type ActionRole,
 } from "@contracts/actions";
 import { getDb } from "../../queries/connection";
-import { withDeadlockRetry } from "../../lib/deadlockRetry";
+import { withDeadlockRetry } from "../../lib/mysqlErrors";
 import { canonicalize, writeAudit } from "../audit";
 import { recordGraphChange } from "../graphChanges";
 import { enqueueJob } from "../jobs/queue";
