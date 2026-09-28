@@ -298,7 +298,7 @@ export default function Login() {
 
         <p className="text-center text-[11px] text-slate-600 mt-6 tracking-wide">
           Ontos v1.0 · Enterprise Ontology & Digital Twin Platform ·{" "}
-          <a href={SOURCE_URL} target="_blank" rel="noreferrer" className="underline decoration-slate-700 underline-offset-2 hover:text-slate-400">
+          <a href={SOURCE_URL} target="_blank" rel="noreferrer" className="text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-slate-200">
             Source code ({LICENSE_NAME})
           </a>
         </p>

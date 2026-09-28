@@ -417,6 +417,7 @@ export function AppShell() {
             target="_blank"
             rel="noreferrer"
             aria-label={`Source code (${LICENSE_NAME})`}
+            title={rail ? `Source code (${LICENSE_NAME})` : undefined}
             className={cn(
               'flex items-center gap-2 rounded-lg px-2 py-1 text-text-muted transition-colors hover:bg-bg-panel-raised hover:text-text-primary',
               rail && 'justify-center px-0',

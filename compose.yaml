@@ -40,6 +40,10 @@ x-app-env: &app-env
 # overwrite each other's image.
 x-app-build: &app-build
   context: ./app
+  # Built into the web client, which links to its source (AGPL section 13).
+  args:
+    VITE_SOURCE_URL: ${VITE_SOURCE_URL:-}
+    VITE_SOURCE_COMMIT: ${VITE_SOURCE_COMMIT:-}
 
 services:
   db:

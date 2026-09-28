@@ -25,6 +25,11 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY . .
+# Where the client says its source is (AGPL section 13; src/lib/source.ts).
+# Vite reads these when it builds, so they are build arguments: set them in
+# .env for compose, or with --build-arg, and rebuild after changing them.
+ARG VITE_SOURCE_URL=
+ARG VITE_SOURCE_COMMIT=
 RUN npm run build && npm run build:db
 
 # ── Runtime ────────────────────────────────────────────────────
