@@ -78,6 +78,13 @@
       "when": 1790624344185,
       "tag": "0010_iot_leased_consumer",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1790625351643,
+      "tag": "0011_rate_limit_windows",
+      "breakpoints": true
     }
   ]
 }

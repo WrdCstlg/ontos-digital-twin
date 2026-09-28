@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { signSessionToken } from "../auth/session";
 import { loginDemoUser, loginWithCredentials, sessionUser } from "../auth/service";
+import { hashPassword } from "../lib/password";
 import { env } from "../lib/env";
+import { RateLimitUnavailable, authRateLimiter } from "../lib/rateLimit";
 import { findUserByEmail, findUserById, upsertUser } from "../queries/users";
 import { appRouter } from "../router";
 import { createMockContext, mockAdminUser } from "./testHarness";
@@ -11,6 +13,12 @@ vi.mock("../queries/users", async (importOriginal) => ({
   findUserById: vi.fn(),
   findUserByEmail: vi.fn(),
   upsertUser: vi.fn(),
+}));
+// The sign-in limit runs against an in-memory rate_limit_windows (memoryRateLimits.ts).
+const limits = vi.hoisted(() => ({ rows: new Map() }));
+vi.mock("../queries/connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../queries/connection")>()),
+  getPool: (await import("./memoryRateLimits")).memoryPoolFor(limits),
 }));
 
 const PERSONA = "demo-admin@acme-ontology.com";
@@ -24,6 +32,7 @@ const saved = { isProduction: env.isProduction, allowDemoLogin: env.allowDemoLog
 afterEach(() => {
   Object.assign(env, saved);
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe("a session token names the account it was issued for", () => {
@@ -101,6 +110,27 @@ describe("a sign-in the database cannot serve", () => {
     // Verdicts still count: ten refusals, and the eleventh attempt is limited.
     for (let i = 0; i < 9; i++) await loginWithCredentials("retrying@acme.com", "wrong").catch(() => undefined);
     await expect(loginWithCredentials("retrying@acme.com", "wrong")).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+  });
+
+  it("when the sign-in limit cannot be counted, answers 503, even to the right password, and takes back no one's attempt", async () => {
+    const limitDown = new RateLimitUnavailable("auth", new Error(OUTAGE));
+    vi.spyOn(authRateLimiter, "check").mockRejectedValue(limitDown);
+    const release = vi.spyOn(authRateLimiter, "release");
+    vi.mocked(findUserByEmail).mockResolvedValue({ ...mockAdminUser, email: "ada@acme.com", passwordHash: await hashPassword("a-long-password") });
+
+    for (const password of ["a-long-password", "wrong"]) {
+      await expect(loginWithCredentials("ada@acme.com", password)).rejects.toMatchObject({ ...unavailable, cause: limitDown });
+    }
+    // Not counted, so neither judged nor taken back: another attempt's count stays.
+    expect(findUserByEmail).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it("still answers 503 when the database is gone before the undecided attempt can be taken back", async () => {
+    vi.mocked(findUserByEmail).mockRejectedValue(new Error(OUTAGE));
+    const release = vi.spyOn(authRateLimiter, "release").mockRejectedValue(new RateLimitUnavailable("auth", new Error(OUTAGE)));
+    await expect(loginWithCredentials("gone@acme.com", "a-long-password")).rejects.toMatchObject(unavailable);
+    expect(release).toHaveBeenCalledWith("gone@acme.com");
   });
 
   it("through the router, sets no session cookie", async () => {

@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { actionSubmissions, type ActionSubmission, type Workspace } from "@db/schema";
 import { actionKeySchema, type ActionRole } from "@contracts/actions";
 import { getDb } from "./queries/connection";
-import { SlidingWindowRateLimiter } from "./lib/rateLimit";
+import { RateLimiter, type RateLimitStatus } from "./lib/rateLimit";
 import { checkSubmitter } from "./services/actions/engine";
 import {
   InvalidStoredDefinition,
@@ -40,8 +40,8 @@ import type { TokenScope } from "./services/publicApi/tokens";
 type Env = { Variables: { principal: Principal; model: OntologyModel } };
 type Ctx = Context<Env>;
 
-/** Per token (or person), across every workspace route. */
-export const publicApiRateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, max: 300 });
+/** Per token (or person), across every workspace route and every replica. */
+export const publicApiRateLimiter = new RateLimiter("api", { windowMs: 60_000, max: 300 });
 
 const modelCache = createTtlCache<number, OntologyModel>({ ttlMs: 5_000, max: 100 });
 
@@ -149,7 +149,15 @@ publicApi.use("*", async (c, next) => {
     if (who.status === 503) c.header("retry-after", "5");
     return fail(c, who.status, who.code, who.message);
   }
-  const limit = publicApiRateLimiter.check(who.principal.limitKey);
+  let limit: RateLimitStatus;
+  try {
+    limit = await publicApiRateLimiter.check(who.principal.limitKey);
+  } catch (err) {
+    // Not counted, so neither refused nor let through: retry shortly.
+    if (!isUnavailable(err)) console.error("[api/v1] the rate limit could not be checked:", err);
+    c.header("retry-after", "5");
+    return fail(c, 503, "unavailable", "The rate limit could not be checked just now. Retry in a moment.");
+  }
   c.header("x-ratelimit-remaining", String(limit.remaining));
   if (!limit.allowed) {
     c.header("retry-after", String(Math.max(1, Math.ceil(limit.resetMs / 1000))));

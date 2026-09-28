@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appRouter } from "../router";
 import { isReadOnlySparql } from "../lib/sparqlGuard";
-import { nlqRateLimiter } from "../lib/rateLimit";
+import { RateLimitUnavailable, nlqRateLimiter } from "../lib/rateLimit";
 import { llmGateway } from "../services/llmGateway";
 import type { LlmProvider } from "../services/llmGateway";
 import { semanticEngine } from "../services/semanticEngine";
@@ -20,7 +20,10 @@ vi.mock("../services/semanticEngine", () => ({
 }));
 
 // executeGenerated loads the workspace graph before running an intent: an empty graph.
-vi.mock("../queries/connection", () => ({
+// The NLQ limit runs against an in-memory rate_limit_windows (memoryRateLimits.ts).
+const limits = vi.hoisted(() => ({ rows: new Map() }));
+vi.mock("../queries/connection", async () => ({
+  getPool: (await import("./memoryRateLimits")).memoryPoolFor(limits),
   getDb: () => ({
     select: () => ({
       from: () => ({
@@ -47,10 +50,10 @@ function fakeProvider(text: string): LlmProvider {
 
 const viewerCaller = () => appRouter.createCaller(createMockContext({ user: mockViewerUser }));
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
-  nlqRateLimiter.reset(String(mockViewerUser.id));
-  nlqRateLimiter.reset(String(mockAdminUser.id));
+  await nlqRateLimiter.reset(String(mockViewerUser.id));
+  await nlqRateLimiter.reset(String(mockAdminUser.id));
   // No LLM unless a test installs one (the default Ollama provider would hit the network).
   vi.spyOn(llmGateway, "getActiveProvider").mockReturnValue(null);
 });
@@ -97,6 +100,35 @@ describe("NLQ Router Integration Tests", () => {
     await expect(
       caller.nlq.translate({ question: "any question" }),
     ).rejects.toThrow("Authentication required");
+  });
+});
+
+describe("NLQ rate limit", () => {
+  it("lets each user translate and execute 30 times a minute between them, then says how long to wait", async () => {
+    const caller = viewerCaller();
+    for (let i = 0; i < 30; i++) await caller.nlq.translate({ question: "how many instances per module" });
+    await expect(caller.nlq.translate({ question: "how many instances per module" })).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      message: expect.stringMatching(/^NLQ rate limit exceeded\. Please wait (60|59) seconds\.$/),
+    });
+    await expect(caller.nlq.execute({ sparql: "# intent:count-by-module\nSELECT * WHERE { ?s ?p ?o }" })).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      message: expect.stringMatching(/^NLQ execution rate limit exceeded\. Please wait \d+ seconds\.$/),
+    });
+    // Another user keeps their own count.
+    await expect(appRouter.createCaller(createMockContext({ user: mockAdminUser })).nlq.translate({ question: "how many instances per module" })).resolves.toBeDefined();
+  });
+
+  it("answers 503 when the limit cannot be counted, and neither translates nor runs anything", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(nlqRateLimiter, "check").mockRejectedValue(new RateLimitUnavailable("nlq", new Error("connect ECONNREFUSED 172.19.0.3:3306")));
+    const generate = vi.spyOn(llmGateway, "generateSparql");
+    const unavailable = { code: "SERVICE_UNAVAILABLE", message: "The rate limit could not be checked just now. Try again in a moment." };
+
+    await expect(viewerCaller().nlq.translate({ question: "list every carrier alongside its routes" })).rejects.toMatchObject(unavailable);
+    await expect(viewerCaller().nlq.execute({ sparql: "# intent:count-by-module\nSELECT * WHERE { ?s ?p ?o }" })).rejects.toMatchObject(unavailable);
+    expect(generate).not.toHaveBeenCalled();
+    expect(semanticEngine.querySparql).not.toHaveBeenCalled();
   });
 });
 

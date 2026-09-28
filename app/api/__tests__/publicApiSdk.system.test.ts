@@ -36,7 +36,9 @@ vi.mock("../services/actions/service", async (importOriginal) => ({
   prepareSubmission: vi.fn(),
   submitAction: vi.fn(),
 }));
-vi.mock("../queries/connection", () => ({ getDb: vi.fn() }));
+// The per-token limit runs against an in-memory rate_limit_windows (memoryRateLimits.ts).
+const limits = vi.hoisted(() => ({ rows: new Map() }));
+vi.mock("../queries/connection", async () => ({ getDb: vi.fn(), getPool: (await import("./memoryRateLimits")).memoryPoolFor(limits) }));
 
 import { getObject, listObjects } from "../services/publicApi/objects";
 import { prepareSubmission, submitAction } from "../services/actions/service";

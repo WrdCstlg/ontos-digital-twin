@@ -10,7 +10,7 @@ import { getDb } from "../queries/connection";
 import { getSessionCookieName } from "../lib/cookies";
 import { env } from "../lib/env";
 import { hashPassword, verifyPassword } from "../lib/password";
-import { authRateLimiter } from "../lib/rateLimit";
+import { authRateLimiter, type RateLimitStatus } from "../lib/rateLimit";
 import { getDemoWorkspace } from "../services/audit";
 
 /**
@@ -149,25 +149,17 @@ export async function loginWithCredentials(
   email: string,
   password: string,
 ): Promise<{ user: User; token: string }> {
-  try {
-    return await checkCredentials(email, password);
-  } catch (err) {
-    const refused = signInError(err);
-    // No verdict was reached, so the attempt does not count toward the limit:
-    // someone told to try again in a moment must not be locked out for it.
-    if (refused.code === "SERVICE_UNAVAILABLE") authRateLimiter.release(email.trim().toLowerCase());
-    throw refused;
-  }
-}
-
-async function checkCredentials(
-  email: string,
-  password: string,
-): Promise<{ user: User; token: string }> {
   const normalizedEmail = email.trim().toLowerCase();
 
-  // Sliding-window rate limit check per email / client
-  const rl = authRateLimiter.check(normalizedEmail);
+  // Sliding-window rate limit per email, shared by every replica. An attempt
+  // the limit could not count (its database unreachable) is not judged
+  // either: it answers 503, and there is nothing to take back.
+  let rl: RateLimitStatus;
+  try {
+    rl = await authRateLimiter.check(normalizedEmail);
+  } catch (err) {
+    throw signInError(err);
+  }
   if (!rl.allowed) {
     console.warn(`[security] Rate limit exceeded for login attempt: ${normalizedEmail}`);
     throw new TRPCError({
@@ -176,6 +168,33 @@ async function checkCredentials(
     });
   }
 
+  try {
+    return await checkCredentials(normalizedEmail, password);
+  } catch (err) {
+    const refused = signInError(err);
+    // No verdict was reached, so the attempt does not count toward the limit:
+    // someone told to try again in a moment must not be locked out for it.
+    if (refused.code === "SERVICE_UNAVAILABLE") await releaseAttempt(normalizedEmail);
+    throw refused;
+  }
+}
+
+/**
+ * Takes back an attempt that reached no verdict. If the database is gone by
+ * then too, the attempt stays counted; the sign-in answers 503 all the same.
+ */
+async function releaseAttempt(normalizedEmail: string): Promise<void> {
+  try {
+    await authRateLimiter.release(normalizedEmail);
+  } catch (err) {
+    console.warn(`[auth] an undecided sign-in attempt could not be taken back: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function checkCredentials(
+  normalizedEmail: string,
+  password: string,
+): Promise<{ user: User; token: string }> {
   // Personas sign in through the persona button only; they never hold a password.
   if (isDemoPersona(normalizedEmail)) {
     console.warn(`[security] Login refused - demo persona on the credential form: ${normalizedEmail}`);
@@ -222,7 +241,7 @@ async function checkCredentials(
   }
 
   // Clear rate-limit hits upon successful credentials
-  authRateLimiter.reset(normalizedEmail);
+  await authRateLimiter.reset(normalizedEmail);
 
   // Update lastSignIn timestamp
   await getDb()

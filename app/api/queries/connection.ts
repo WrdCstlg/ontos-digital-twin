@@ -31,12 +31,22 @@ export function getDb(): AppDatabase {
 }
 
 /**
+ * The pool behind getDb(), for work that manages a connection of its own: the
+ * rate limits' short transactions (lib/rateLimit.ts).
+ */
+export function getPool(): mysql.Pool {
+  getDb();
+  return pool!;
+}
+
+/**
  * A connection of its own, outside the pool, for what must stay on one session
  * and may change it (a named lock sets its session's idle limit). The caller
  * closes it; nothing it does reaches a pooled connection.
  */
 export function openConnection(): Promise<mysql.Connection> {
   return mysql.createConnection({ uri: env.databaseUrl, enableKeepAlive: true, keepAliveInitialDelay: 10000 });
+}
 }
 
 export async function closeDb(): Promise<void> {

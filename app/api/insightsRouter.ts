@@ -16,7 +16,7 @@ import { createRouter, EDITOR_ROLES, workspaceQuery, workspaceMutation, workspac
 import { hasWorkspaceRole } from "./services/workspaceGuard";
 import { getDb } from "./queries/connection";
 import { withDeadlockRetry } from "./lib/mysqlErrors";
-import { scanRateLimiter } from "./lib/rateLimit";
+import { enforceLimit, scanRateLimiter } from "./lib/rateLimit";
 import { actorLabelFor, writeAudit } from "./services/audit";
 
 type Evidence = {
@@ -576,13 +576,11 @@ export const insightsRouter = createRouter({
     }),
 
   runScan: workspaceMutation.mutation(async ({ ctx }) => {
-    const rateCheck = scanRateLimiter.check(String(ctx.user?.id ?? "anon"));
-    if (!rateCheck.allowed) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: `Insight scan rate limit exceeded. Please wait ${Math.ceil(rateCheck.resetMs / 1000)} seconds.`,
-      });
-    }
+    await enforceLimit(
+      scanRateLimiter,
+      String(ctx.user?.id ?? "anon"),
+      (seconds) => `Insight scan rate limit exceeded. Please wait ${seconds} seconds.`,
+    );
     const ws = ctx.workspace;
     const { scanned, results } = await reconcileInsights(ws.id);
     await writeAudit({

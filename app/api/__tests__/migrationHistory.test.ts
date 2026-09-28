@@ -37,6 +37,7 @@ const RELEASED: Record<string, string> = {
   "0008_audit_chain_lock": "f1aa0659b4c9296e301246a68847c2e009af9698190b2c9ca42093ce411c5116",
   "0009_graph_change_capture": "0be8cc5240754d49cc9a433f5a2e97ca76ed3332399e9968a4f0958ba99cc08d",
   "0010_iot_leased_consumer": "c02057415e97b84b8028c6b8c0c0c9718fae147df048f1fb2553e969464c52ed",
+  "0011_rate_limit_windows": "bda708ed8482e3c1f644690a0a863d9d6b72d8fa096c53f4df51d5dc48b83d41",
 };
 
 describe("the migration history", () => {
