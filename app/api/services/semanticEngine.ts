@@ -14,6 +14,7 @@ import {
 import { getDb } from "../queries/connection";
 import {
   buildPrefixMap,
+  datatypeRanges,
   moduleToTurtle,
   knowledgeGraphToTurtle,
 } from "./rdfBridge";
@@ -558,7 +559,7 @@ class SemanticEngineClient {
 
     // Load instances
     if (nodes.length > 0) {
-      const kgTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap);
+      const kgTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, datatypeRanges(properties));
       const res = await this.loadTurtle(kgTtl);
       totalTriples += res.triplesLoaded;
     }

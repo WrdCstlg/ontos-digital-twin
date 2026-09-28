@@ -17,6 +17,7 @@ import { getDb } from "../queries/connection";
 import { writeAudit } from "./audit";
 import { semanticEngine } from "./semanticEngine";
 import { buildPrefixMap, knowledgeGraphToTurtle, shaclJsonToTurtle } from "./rdfBridge";
+import { workspaceDatatypeRanges } from "./datatypeRanges";
 import { explainShaclReport, type ExplainedShaclReport } from "./explainableShacl";
 import { enqueueJob } from "./jobs/queue";
 import { PermanentJobError, type JobHandler } from "./jobs/worker";
@@ -302,7 +303,8 @@ export async function runMappingSync(
             deletedAt: null,
           });
         }
-        const dataTtl = knowledgeGraphToTurtle(candidateNodes, [], prefixMap);
+        // Typed as the ontology declares each property, as the imported graph is.
+        const dataTtl = knowledgeGraphToTurtle(candidateNodes, [], prefixMap, await workspaceDatatypeRanges(workspaceId));
         const valRes = await semanticEngine.exclusive(async () => {
           await semanticEngine.clearStore();
           await semanticEngine.loadTurtle(dataTtl);

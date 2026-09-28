@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getTableName, type Table } from "drizzle-orm";
-import { connectors, kgNodes, mappings, ontologyClasses, ontologyModules, syncJobs } from "@db/schema";
+import { connectors, kgNodes, mappings, ontologyClasses, ontologyModules, ontologyProperties, syncJobs } from "@db/schema";
 import { runMappingSync } from "../services/mappingSync";
 import { PermanentJobError } from "../services/jobs/worker";
 import { writeAudit } from "../services/audit";
@@ -99,6 +99,24 @@ describe("a mapping set to block on SHACL", () => {
     setUp("block", null);
     vi.mocked(semanticEngine.ensureEngineRunning).mockResolvedValue(false);
     expect((await run()).nodesUpserted).toBe(2);
+  });
+});
+
+describe("what the check sees", () => {
+  it("the mapped rows with their values typed as the ontology declares, as the import writes them", async () => {
+    setUp("block");
+    put(ontologyProperties, [
+      { id: 60, moduleId: 10, iri: "hr:salary", label: "salary", kind: "datatype", rangeDatatype: "xsd:decimal" },
+      { id: 61, moduleId: 10, iri: "hr:manager", label: "manager", kind: "datatype", rangeDatatype: "xsd:integer" },
+    ]);
+    put(mappings, [{ ...rows(mappings)[0], columnMapJson: { subject: "hr:person/{id}", label: "name", fields: { manager: "hr:manager", salary: "hr:salary" } } }]);
+    put(connectors, [{ ...rows(connectors)[0], configJson: { filename: "p.csv", csvText: "id,name,manager,salary\n1,Ada,,1234.50\n2,Grace,1,n/a\n" } }]);
+    vi.mocked(semanticEngine.validateShacl).mockResolvedValue(conforming);
+    await run();
+    const data = vi.mocked(semanticEngine.loadTurtle).mock.calls.at(-1)![0];
+    expect(data).toContain('hr:salary "1234.50"^^xsd:decimal');
+    expect(data).toContain('hr:manager "1"^^xsd:integer');
+    expect(data).toContain('hr:salary "n/a"^^xsd:string');
   });
 });
 

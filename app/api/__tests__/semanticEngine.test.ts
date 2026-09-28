@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import {
+  datatypeRanges,
   moduleToTurtle,
   knowledgeGraphToTurtle,
   shaclJsonToTurtle,
@@ -158,6 +159,48 @@ describe("Semantic Engine & RDF Bridge Integration", () => {
       expect(turtle).toContain('hr:isCeo "true"^^xsd:boolean');
       expect(turtle).toContain('hr:hireDate "2024-01-15"^^xsd:date');
       expect(turtle).toContain("hr:reportsTo <https://ontos.dev/ontology/hr/Person/E-0001>");
+    });
+
+    it("types each value as its property declares, when the value fits, as an import's strings must be", () => {
+      const imported: KgNode = {
+        id: 1, workspaceId: 1, moduleKey: "fin", classIri: "fin:Transaction", iri: "fin:txn/1", label: "TXN-1",
+        // An import stores every value as the source gave it: a string.
+        propsJson: {
+          "fin:amount": " 1234.56 ", "fin:units": "12", "fin:settled": "true", "fin:bookedOn": "2026-01-15",
+          "fin:postedAt": "2026-01-15T09:30:00Z", "fin:reference": "2026-01-15", "fin:rate": "1.5e-3",
+          "fin:count": "twelve", "fin:flag": "TRUE", "fin:note": "free text",
+        },
+        sourceMappingId: 1, sourceSubmissionId: null, createdAt: new Date(), updatedAt: new Date(), deletedAt: null,
+      };
+      const ranges = datatypeRanges([
+        { iri: "fin:amount", kind: "datatype", rangeDatatype: "xsd:decimal" },
+        { iri: "fin:units", kind: "datatype", rangeDatatype: "integer" },
+        { iri: "fin:settled", kind: "datatype", rangeDatatype: "xsd:boolean" },
+        { iri: "fin:bookedOn", kind: "datatype", rangeDatatype: "xsd:date" },
+        { iri: "fin:postedAt", kind: "datatype", rangeDatatype: "xsd:dateTime" },
+        { iri: "fin:reference", kind: "datatype", rangeDatatype: "xsd:string" },
+        { iri: "fin:rate", kind: "datatype", rangeDatatype: "xsd:double" },
+        { iri: "fin:count", kind: "datatype", rangeDatatype: "xsd:integer" },
+        { iri: "fin:flag", kind: "datatype", rangeDatatype: "xsd:boolean" },
+        { iri: "fin:bookedTo", kind: "object", rangeDatatype: null },
+      ]);
+      expect(ranges.get("fin:units")).toBe("xsd:integer");
+      expect(ranges.has("fin:bookedTo")).toBe(false);
+
+      const turtle = knowledgeGraphToTurtle([imported], [], undefined, ranges);
+      expect(turtle).toContain('fin:amount "1234.56"^^xsd:decimal');
+      expect(turtle).toContain('fin:units "12"^^xsd:integer');
+      expect(turtle).toContain('fin:settled "true"^^xsd:boolean');
+      expect(turtle).toContain('fin:bookedOn "2026-01-15"^^xsd:date');
+      expect(turtle).toContain('fin:postedAt "2026-01-15T09:30:00Z"^^xsd:dateTime');
+      expect(turtle).toContain('fin:reference "2026-01-15"^^xsd:string');
+      expect(turtle).toContain('fin:rate "1.5e-3"^^xsd:double');
+      // A value that does not fit its declared type keeps its own, so SHACL still reports it.
+      expect(turtle).toContain('fin:count "twelve"^^xsd:string');
+      expect(turtle).toContain('fin:flag "TRUE"^^xsd:string');
+      // Without a declared range, a value is typed from its shape, as before.
+      expect(turtle).toContain('fin:note "free text"^^xsd:string');
+      expect(knowledgeGraphToTurtle([imported], [])).toContain('fin:amount " 1234.56 "^^xsd:string');
     });
 
     it("compiles shaclJson declarations into W3C SHACL Turtle shapes", () => {

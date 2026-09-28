@@ -23,6 +23,7 @@ import { canonicalize, writeAudit } from "../audit";
 import { enqueueJob } from "../jobs/queue";
 import { semanticEngine } from "../semanticEngine";
 import { buildPrefixMap, knowledgeGraphToTurtle, shaclJsonToTurtle } from "../rdfBridge";
+import { workspaceDatatypeRanges } from "../datatypeRanges";
 import { explainShaclReport } from "../explainableShacl";
 import { ACTION_WEBHOOK_KIND } from "./sideEffects";
 import {
@@ -233,9 +234,11 @@ export async function checkShacl(workspaceId: number, plan: EditPlan, objects: M
     return ns ? ns + iri.slice(colon + 1) : iri;
   };
   const judged = new Set([...touchedIris].flatMap((i) => [i, expand(i)]));
+  // Values typed as their properties declare, as the workspace's graph is.
+  const ranges = await workspaceDatatypeRanges(workspaceId);
   const report = await semanticEngine.exclusive(async () => {
     await semanticEngine.clearStore();
-    await semanticEngine.loadTurtle(knowledgeGraphToTurtle(nodes, edges, prefixMap));
+    await semanticEngine.loadTurtle(knowledgeGraphToTurtle(nodes, edges, prefixMap, ranges));
     return semanticEngine.validateShacl(shaclJsonToTurtle(shaped, prefixMap));
   });
   if (report.error) return { status: "unavailable", violations: [] };
