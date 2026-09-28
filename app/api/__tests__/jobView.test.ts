@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { Job, WorkspaceMember } from "@db/schema";
-import { jobAudience, jobErrorFor, jobFor, withoutWorkerNames, type JobAudience } from "../services/jobs/jobView";
+import { jobAudience, jobErrorFor, jobFor, withoutWorkerNames, workerFor, type JobAudience } from "../services/jobs/jobView";
 import { leaseLapse } from "../services/jobs/queue";
 import { mockAdminUser, mockViewerUser } from "./testHarness";
 
@@ -75,6 +75,16 @@ describe("jobFor", () => {
     expect(jobFor(job("action.webhook"), viewer).resultJson).toEqual({ url: "https://hooks.slack.com/…", status: 200 });
     expect(jobFor(job("action.webhook"), author).resultJson).toEqual({ url: HOOK, status: 200 });
     expect(jobFor(job("mapping.sync"), viewer).resultJson).toEqual({ url: HOOK, status: 200 });
+  });
+});
+
+describe("workerFor", () => {
+  it("names the job a worker runs only when it is this workspace's; another's leaves it just busy", () => {
+    const worker = (currentJobId: number | null) => ({ id: "w-1", currentJobId });
+    const own = new Set([41]);
+    expect(workerFor(worker(41), own)).toEqual({ id: "w-1", currentJobId: 41, busyElsewhere: false });
+    expect(workerFor(worker(99), own)).toEqual({ id: "w-1", currentJobId: null, busyElsewhere: true });
+    expect(workerFor(worker(null), own)).toEqual({ id: "w-1", currentJobId: null, busyElsewhere: false });
   });
 });
 

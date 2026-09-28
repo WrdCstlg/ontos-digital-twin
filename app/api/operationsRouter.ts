@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { jobs, workers } from "@db/schema";
 import { createRouter, workspaceAdminMutation, workspaceAdminQuery, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { actorLabelFor, writeAudit } from "./services/audit";
 import { jobHandlers } from "./services/jobs/handlers";
-import { jobAudience, jobFor } from "./services/jobs/jobView";
+import { jobAudience, jobFor, workerFor } from "./services/jobs/jobView";
 import { cancelQueuedJob, getJob, requeueFailedJob } from "./services/jobs/queue";
 
 /** A worker that has missed three heartbeats (every 5 s) is treated as gone. */
@@ -77,8 +77,9 @@ export const operationsRouter = createRouter({
     }),
 
   /** Workers are shared infrastructure, so their identities are for admins. */
-  listWorkers: workspaceAdminQuery.query(async () => {
-    const rows = await getDb()
+  listWorkers: workspaceAdminQuery.query(async ({ ctx }) => {
+    const db = getDb();
+    const rows = await db
       .select({
         id: workers.id,
         hostname: workers.hostname,
@@ -94,11 +95,23 @@ export const operationsRouter = createRouter({
       .from(workers)
       .orderBy(desc(workers.lastSeenAt))
       .limit(25);
-    return rows.map((w) => ({
-      ...w,
-      secondsSinceSeen: Number(w.secondsSinceSeen),
-      alive: w.status === "running" && Number(w.secondsSinceSeen) < STALE_AFTER_SECONDS,
-    }));
+    // Which of the jobs being run are this workspace's: only those are named.
+    const running = [...new Set(rows.map((w) => w.currentJobId).filter((id): id is number => id != null))];
+    const ownJobIds = new Set(
+      running.length
+        ? (await db.select({ id: jobs.id }).from(jobs).where(and(eq(jobs.workspaceId, ctx.workspace.id), inArray(jobs.id, running)))).map((j) => j.id)
+        : [],
+    );
+    return rows.map((w) =>
+      workerFor(
+        {
+          ...w,
+          secondsSinceSeen: Number(w.secondsSinceSeen),
+          alive: w.status === "running" && Number(w.secondsSinceSeen) < STALE_AFTER_SECONDS,
+        },
+        ownJobIds,
+      ),
+    );
   }),
 
   retryJob: workspaceAdminMutation
