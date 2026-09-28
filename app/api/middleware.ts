@@ -55,50 +55,13 @@ const requireAuth = t.middleware(async (opts) => {
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
 
-export function requireRole(role: string) {
-  return t.middleware(async (opts) => {
-    const { ctx, next } = opts;
-
-    if (!ctx.user || ctx.user.role !== role) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: ErrorMessages.insufficientRole,
-      });
-    }
-
-    return next({ ctx: { ...ctx, user: ctx.user } });
-  });
-}
-
-export function requireAnyRole(roles: string[]) {
-  return t.middleware(async (opts) => {
-    const { ctx, next } = opts;
-
-    if (!ctx.user || !roles.includes(ctx.user.role)) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: ErrorMessages.insufficientRole,
-      });
-    }
-
-    return next({ ctx: { ...ctx, user: ctx.user } });
-  });
-}
-
 export const authedProcedure = t.procedure.use(requireAuth);
 export const authedQuery = authedProcedure;
 export const authedMutation = authedProcedure;
 
-export const adminProcedure = authedQuery.use(requireRole("admin"));
-export const adminQuery = adminProcedure;
-export const adminMutation = adminProcedure;
-
-// Ontologists and editors (as well as admins) can mutate ontology definitions
-export const ontologistProcedure = authedQuery.use(
-  requireAnyRole(["admin", "ontologist", "editor"]),
-);
-export const ontologistQuery = ontologistProcedure;
-export const ontologistMutation = ontologistProcedure;
+// There are no procedures gated on the account's own role: everything that
+// acts in a workspace uses the workspace procedures below, decided by the
+// member's role there (services/workspaceGuard.ts, hasWorkspaceRole).
 
 /* ─────────────────────────────────────────────────────────────
  * Multi-tenant workspace procedures with geometric isolation

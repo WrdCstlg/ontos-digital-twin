@@ -194,6 +194,13 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const cmdPalette = useCommandPalette();
   const { user, isAuthenticated, isLoading, isReconnecting } = useAuth();
+  // The role in this workspace, which decides what the person may do here; the
+  // account's own role counts only as a platform admin's (the server says which).
+  const workspaceRole = trpc.auth.membership.useQuery(undefined, {
+    enabled: isAuthenticated,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  }).data?.role;
   const location = useLocation();
   const seg = location.pathname.split('/').filter(Boolean)[1];
   const crumb = seg ? (CRUMB_NAMES[seg] ?? seg) : 'Dashboard';
@@ -324,7 +331,7 @@ export function AppShell() {
               )}
               <ul className="space-y-0.5">
                 {section.items
-                  .filter((item) => !item.requiredRole || user?.role === item.requiredRole)
+                  .filter((item) => !item.requiredRole || workspaceRole === item.requiredRole)
                   .map((item) => {
                   const [path, hash] = item.to.split('#');
                   return (
@@ -393,9 +400,11 @@ export function AppShell() {
                   {isLoading ? '…' : isAuthenticated ? (user?.name ?? 'Signed in') : 'Guest viewer'}
                 </span>
                 <span className="mt-0.5 inline-block rounded-full border border-iris/30 bg-iris/15 px-1.5 py-0 text-[9.5px] font-medium uppercase tracking-[0.08em] text-text-accent">
-                  {isAuthenticated && user?.role
-                    ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
-                    : 'Viewer'}
+                  {!isAuthenticated
+                    ? 'Viewer'
+                    : workspaceRole
+                      ? workspaceRole.charAt(0).toUpperCase() + workspaceRole.slice(1)
+                      : '…'}
                 </span>
               </span>
             )}

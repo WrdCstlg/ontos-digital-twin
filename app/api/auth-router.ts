@@ -4,11 +4,20 @@ import { TRPCError } from "@trpc/server";
 import { Session } from "@contracts/constants";
 import { getSessionCookieName, getSessionCookieOptions } from "./lib/cookies";
 import { env } from "./lib/env";
-import { createRouter, authedQuery, publicQuery } from "./middleware";
+import { createRouter, authedQuery, publicQuery, workspaceQuery } from "./middleware";
 import { loginDemoUser, loginWithCredentials, toPublicUser } from "./auth/service";
 
 export const authRouter = createRouter({
   me: authedQuery.query((opts) => toPublicUser(opts.ctx.user)),
+
+  /**
+   * The caller's own role in this workspace, which decides what they may do
+   * here (a platform admin is an admin everywhere): for showing, not for
+   * deciding. Pages ask each router's capabilities for that.
+   */
+  membership: workspaceQuery.query(({ ctx }) => ({
+    role: ctx.user.role === "admin" ? ("admin" as const) : ctx.membership.role,
+  })),
 
   /** One-click demo login — instantly creates a session for the chosen persona (development only) */
   demoLogin: publicQuery
