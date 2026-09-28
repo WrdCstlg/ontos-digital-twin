@@ -168,8 +168,11 @@ export const workspaceProcedure = authedProcedure.use(requireWorkspace);
 export const workspaceQuery = workspaceProcedure;
 export const workspaceMutation = workspaceProcedure;
 
+/** The workspace roles that may change its data: editors and above. */
+export const EDITOR_ROLES = ["admin", "ontologist", "editor"];
+
 export const workspaceOntologistProcedure = workspaceProcedure.use(
-  requireWorkspaceRole(["admin", "ontologist", "editor"]),
+  requireWorkspaceRole(EDITOR_ROLES),
 );
 export const workspaceOntologistQuery = workspaceOntologistProcedure;
 export const workspaceOntologistMutation = workspaceOntologistProcedure;

@@ -11,12 +11,18 @@ export interface TickControlProps {
   onAutoTickChange: (on: boolean) => void;
   onTick: () => void;
   ticking: boolean;
+  /** False for a viewer: a tick writes twin state, which is an editor's to do. */
+  canSimulate: boolean;
 }
+
+const VIEW_ONLY_REASON = 'Running the simulation changes twin state, so it takes the editor role or above.';
 
 /**
  * TickControl — segmented simulator control: `⏵ Tick` primary-ghost button
  * (teal) + auto-tick switch (`AUTO · 2s`) + mono tick counter + mono
  * last-tick timestamp. The button fires a tick-pulse ring on each tick.
+ * For someone who may not run the simulation both controls are disabled and
+ * say why, rather than failing on each tick.
  */
 export function TickControl({
   tickCount,
@@ -25,13 +31,23 @@ export function TickControl({
   onAutoTickChange,
   onTick,
   ticking,
+  canSimulate,
 }: TickControlProps) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border-hairline bg-bg-panel px-3 py-1.5">
+    <div
+      className="flex items-center gap-3 rounded-xl border border-border-hairline bg-bg-panel px-3 py-1.5"
+      title={canSimulate ? undefined : VIEW_ONLY_REASON}
+    >
+      {!canSimulate && (
+        <span id="tick-view-only" className="sr-only">
+          {VIEW_ONLY_REASON}
+        </span>
+      )}
       <motion.button
         type="button"
         onClick={onTick}
-        disabled={ticking}
+        disabled={ticking || !canSimulate}
+        aria-describedby={canSimulate ? undefined : 'tick-view-only'}
         // Keyed by tick so the pulse replays on every tick. The key must be
         // namespaced: this and the counter below are siblings, and a bare
         // tickCount made both of them key `0` on first render.
@@ -49,15 +65,17 @@ export function TickControl({
         Tick
       </motion.button>
 
-      <label className="flex cursor-pointer items-center gap-2">
+      <label className={cn('flex items-center gap-2', canSimulate ? 'cursor-pointer' : 'cursor-not-allowed')}>
         <Switch
-          checked={autoTick}
+          checked={autoTick && canSimulate}
           onCheckedChange={onAutoTickChange}
+          disabled={!canSimulate}
           aria-label="Auto-tick every 2 seconds"
+          aria-describedby={canSimulate ? undefined : 'tick-view-only'}
           className="data-[state=checked]:bg-module-twin"
         />
         <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-text-muted">
-          AUTO · 2s
+          {canSimulate ? 'AUTO · 2s' : 'VIEW ONLY'}
         </span>
       </label>
 
