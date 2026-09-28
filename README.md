@@ -61,9 +61,10 @@ graph TD
     Web <-->|tRPC 11 / JSON| Hono["API server<br/>(Hono 4 + Node 24)"]
     Hono <-->|Drizzle ORM| MySQL[("MySQL 8.4<br/>graph, state, job queue, audit")]
     Hono <-->|SPARQL 1.1 / HTTP| Engine["open-ontologies<br/>(Oxigraph, OWL-RL, SHACL)"]
-    Worker["Worker(s)<br/>(Node 24)"] <-->|leases jobs| MySQL
+    Worker["Worker(s)<br/>(Node 24)"] <-->|leases jobs, the IoT lease| MySQL
     Worker <-->|SHACL| EngineW["open-ontologies<br/>(the workers', apart from the app's)"]
     Worker -->|action side effects| Hooks["Webhook receivers"]
+    Brokers["IoT brokers<br/>(MQTT)"] -->|telemetry, to the lease holder| Worker
 
     subgraph Compose ["Docker Compose stack"]
         Hono
@@ -86,11 +87,11 @@ graph TD
 | Tests | Vitest |
 
 In development, Vite serves the SPA and mounts the Hono app at `/api/*` through
-`@hono/vite-dev-server`: a single process on port 3000, which also runs a job worker of
-its own. In production, `dist/boot.js` serves the API and the static client bundle, and
-`dist/worker.js` runs background jobs in the `worker` container, with a health endpoint
-on port 3001. `ONTOS_EMBEDDED_WORKER=true` runs jobs inside the API process instead, for
-a single-container deployment.
+`@hono/vite-dev-server`: a single process on port 3000, which also runs a job worker and
+the IoT consumer of its own. In production, `dist/boot.js` serves the API and the static
+client bundle, and `dist/worker.js` runs background jobs and the IoT consumer in the
+`worker` container, with a health endpoint on port 3001. `ONTOS_EMBEDDED_WORKER=true`
+runs both inside the API process instead, for a single-container deployment.
 
 Long-running work does not run inside an HTTP request. `mapping.runSync` records a
 queued import and returns; a worker claims it with `SELECT … FOR UPDATE SKIP LOCKED`,
@@ -110,6 +111,16 @@ Each audit entry holds the hash of the one before it in its workspace's chain. A
 take turns on the one row of `audit_chain_lock`, from the audit write to the commit, and
 only then read their chain's last entry: appends made at once, from submissions, imports
 and the admin pages, neither deadlock nor fork a chain.
+
+IoT broker connections run in one process at a time, however many run. Each process
+that runs the IoT consumer (the worker, by default) tries for a lease in MySQL,
+`iot-consumer`, held on the database's clock for 15 seconds and renewed every 5; the
+holder connects to every enabled broker connector, and the others to none. A holder that
+stops renewing (killed, frozen, cut off from MySQL) loses the lease when it lapses, and
+one unsure that a renewal went through closes its connections before it could lapse.
+Every message is recorded in a transaction that first checks the lease's generation, a
+fencing token raised on every takeover, so a holder that lost the lease records nothing
+([IoT brokers](#iot-brokers--live-telemetry-ingestion)).
 
 ---
 
@@ -245,6 +256,9 @@ required; `docker compose` refuses to start without them.
 | `OPEN_ONTOLOGIES_TOKEN` | no | — | Bearer token, if the engine requires one |
 | `OPEN_ONTOLOGIES_BIN` | no | — | Explicit path to the engine binary |
 | `ACTION_WEBHOOK_ALLOW_PRIVATE` | no | `false` | `true` lets action webhooks reach loopback and private addresses (for receivers inside your network) |
+| `ONTOS_EMBEDDED_WORKER` | no | `true` in development | `true` runs background jobs, and the IoT consumer, inside the web process |
+| `ONTOS_IOT_CONSUMER` | no | on in the worker; in the web process, as `ONTOS_EMBEDDED_WORKER` | Whether a process runs the IoT consumer. Of those that do, only the one holding its lease connects to brokers, so `true` on several adds standbys, not connections. The Docker stack runs it in the worker |
+| `IOT_MQTT_VERSION` | no | `4` (MQTT 3.1.1) | `5` connects the `IOT_BROKER_URL` broker with MQTT 5.0 |
 | `VITE_APP_ID` | no | — | Application identifier exposed to the browser |
 | `ENGINE_HOST_*` | no | — | The engine host's settings: see [Engine host](#engine-host-not-used-yet) |
 
@@ -567,15 +581,57 @@ DigitalTwin
 
 Ontos includes standard protocol adapters to ingest live telemetry directly from enterprise IoT brokers and industrial edge gateways into active digital twins:
 
-- **Universal MQTT (3.1.1 / 5.0)**: Connects to standard brokers like Mosquitto, EMQX, HiveMQ, or RabbitMQ. Supports wildcard topic patterns (`ontos/twins/+/telemetry`).
+- **Universal MQTT (3.1.1 / 5.0)**: Connects to standard brokers like Mosquitto, EMQX, HiveMQ, or RabbitMQ. Supports wildcard topic patterns (`ontos/twins/+/telemetry`, or `sensors/{deviceId}/data`, whose placeholder matches any device, as `+` does, and names it).
 - **AWS IoT Core**: Connects directly via MQTT over mTLS on port 8883 using X.509 device certificates and private keys.
 - **Azure IoT Hub**: Connects via MQTT over TLS with device connection strings or SAS tokens.
 - **HTTP Webhook Ingestion**: Ingest single or batch telemetry points via `POST /api/iot/telemetry` with API key authentication (`x-iot-api-key`). The webhook is off until `IOT_WEBHOOK_API_KEY` is set, and the key writes to exactly one workspace — `IOT_WORKSPACE_ID`, or the demo workspace by default. Only that workspace's admins can see the key in the app.
 - **Device-to-Twin Resolution**: Matches incoming devices by explicit IRI (`dtwin:...`), device label, hardware serial number (`propsJson.deviceId`), or configurable custom mapping tables.
-- **Automated Anomaly Detection**: Live telemetry ingestion re-runs the deterministic insight rules, so a cold-chain reading outside the 2–6 °C band raises an excursion finding.
+- **Automated Anomaly Detection**: Live telemetry ingestion re-runs the deterministic insight rules, so a cold-chain reading outside the 2–6 °C band raises an excursion finding. From brokers, the rules run once a second at most per workspace, however many messages arrive.
 
 Point Ontos only at a broker you control, over TLS, with authentication. Anyone who can
 publish to a public test broker's topic can write into your twins.
+
+**One consumer, each message once.** The broker connections are the IoT consumer's, run
+by whichever process holds its lease ([Architecture](#architecture)): the worker in the
+Docker stack, the dev server in development. Saving, switching or deleting a broker
+records what it should do; the consumer acts on it within 5 seconds (at once when it runs
+in the same process) and writes back what it observed: status, message and error counts,
+the last error. Until it has, the dialog shows the broker connecting, or disconnecting.
+
+So that a new holder takes over without losing or doubling a message:
+
+- Each connector connects under a stable client id, its own or `ontos-<connector id>`
+  (`IOT_CLIENT_ID`, default `ontos_env_client`, for the `IOT_BROKER_URL` broker), in a
+  persistent session: clean session off in MQTT 3.1.1, a one-day session expiry in 5.0
+  (a broker's **MQTT version** setting, or `IOT_MQTT_VERSION=5`). It subscribes at QoS 1.
+  While no consumer is connected, the broker keeps what arrives, and the next holder
+  resumes the session.
+- Messages are recorded one at a time per connector, and each is acknowledged only once
+  its transaction has committed. One that could not be recorded (the database was away)
+  is not acknowledged, nor is any after it: the connection restarts, and the broker
+  delivers them again. One that never can be (not JSON, over 2 MB, or failing five times)
+  is acknowledged and counted as an error, so it cannot hold up the rest.
+- Each message has one effect. Its fingerprint, the SHA-256 of its own `messageId` or
+  `msgId` with its topic, or else of its topic and payload, is kept for seven days, and a
+  delivery already recorded is recognised and has none. A payload with no message id that
+  repeats byte for byte on the same topic counts once: give readings a timestamp or an id.
+- A message's readings, and its twins' state, are written in one transaction that locks
+  the twins' rows. The webhook, the tRPC API and the simulation's tick write the same way,
+  so none loses another's update.
+
+**Persistent sessions differ by broker.**
+
+- *Mosquitto, EMQX, HiveMQ*: MQTT 3.1.1 and 5.0. A 3.1.1 session lasts as long as the
+  broker's settings allow (Mosquitto's `persistent_client_expiration`, by default for
+  ever), and each broker queues a bounded number of messages per session (Mosquitto's
+  `max_queued_messages`, 1000 by default).
+- *AWS IoT Core*: 3.1.1 and 5.0. It keeps a persistent session for an account-wide period
+  (one hour by default, up to seven days) and stores only QoS 1 messages for it. The
+  policy on the connector's certificate must allow its client id (`iot:Connect`).
+- *Azure IoT Hub*: its device endpoint speaks MQTT 3.1.1 (5.0 only in preview), with no
+  session expiry to set, and requires the client id to be the device id: set the
+  connector's client id. With clean session off it keeps the device's subscriptions and
+  its queued cloud-to-device messages.
 
 #### Reading the graphs
 
@@ -733,7 +789,15 @@ server instead, and checks what only a real one can:
   leases are set and run out on the database's clock; and a worker that lost its lease
   cannot write over the one that took the job;
 - the routes that group and count return only the caller's workspace's rows, and saving a
-  mapping unchanged is not taken for a conflict.
+  mapping unchanged is not taken for a conflict;
+- processes racing for a lease on two pools never both hold it, a lease lapses on the
+  database's clock and changes hands one generation up, and a fenced transaction holds a
+  takeover off until it ends;
+- a broker message delivered twice at once is recorded once, a consumer that lost the
+  IoT lease records nothing, and telemetry and the simulation's tick writing one twin at
+  once lose none of each other's updates;
+- reconciliations at once keep one insight per rule, and migration 0009 first removes the
+  duplicates earlier ones made.
 
 `ONTOS_TEST_DATABASE_URL` names the server, without a database. Each run creates a
 database of its own there, `ontos_test_<pid>_<time>`, empties it between tests and drops it
@@ -742,21 +806,29 @@ killed before it ends leaves its database behind, to drop by hand. Run them agai
 server whose sessions are off UTC, so a time taken from the app's clock where the
 database's belongs shows: start it with `TZ=PKT-5` (five hours ahead of UTC) and set
 `ONTOS_TEST_SESSION_TIME_ZONE=+05:00`, which setup checks, changing nothing on the server.
-CI does both. A throwaway server will do:
+CI does both.
+
+`ONTOS_TEST_MQTT_URL`, when set, names an MQTT broker for the IoT consumer's handover
+tests: a persistent session handed from one consumer to the next, through the broker, with
+nothing lost or recorded twice. Unset, they are skipped; set but unreachable, they fail.
+The `eclipse-mosquitto` image's own configuration takes anonymous clients. Throwaway
+servers will do:
 
 ```bash
 docker run -d --name ontos-test-mysql -e MYSQL_ROOT_PASSWORD=test -e TZ=PKT-5 -p 127.0.0.1:33306:3306 mysql:8.4
-ONTOS_TEST_DATABASE_URL=mysql://root:test@127.0.0.1:33306 ONTOS_TEST_SESSION_TIME_ZONE=+05:00 npm run test:mysql
-docker rm -f ontos-test-mysql
+docker run -d --name ontos-test-mqtt -p 127.0.0.1:31883:1883 eclipse-mosquitto:2.1.2-alpine
+ONTOS_TEST_DATABASE_URL=mysql://root:test@127.0.0.1:33306 ONTOS_TEST_SESSION_TIME_ZONE=+05:00 \
+  ONTOS_TEST_MQTT_URL=mqtt://127.0.0.1:31883 npm run test:mysql
+docker rm -f ontos-test-mysql ontos-test-mqtt
 ```
 
-CI runs them in a job of their own against the MySQL image `compose.yaml` pins. The same
-job fails if `drizzle-kit generate` would write a migration, which catches a change to
-`schema.ts` committed without one, and `migrationHistory.test.ts` (in `npm test`) keeps the
-migration history in order and append-only: drizzle skips, on a database already migrated,
-a migration dated before the last it applied, and never runs an edited one again. The Docker
-job still boots the full stack and smoke-tests login, the seeded graph and an import run by
-the worker.
+CI runs them in a job of their own against the MySQL image `compose.yaml` pins, with a
+mosquitto beside it, pinned by digest too. The same job fails if `drizzle-kit generate`
+would write a migration, which catches a change to `schema.ts` committed without one, and
+`migrationHistory.test.ts` (in `npm test`) keeps the migration history in order and
+append-only: drizzle skips, on a database already migrated, a migration dated before the
+last it applied, and never runs an edited one again. The Docker job still boots the full
+stack and smoke-tests login, the seeded graph and an import run by the worker.
 
 ### Browser tests
 
@@ -867,10 +939,19 @@ These are tracked, known behaviours rather than surprises:
   server with a self-signed certificate is refused.
 - **Webhook addresses are checked when the job runs.** A host whose DNS answer changes
   between that check and the request is not caught.
-- **Some state still lives in the API process.** Background jobs are safe to spread
-  across workers, but a second API process would hold its own login and query rate
-  limits, need its own semantic engine, and open its own MQTT broker connections, so
-  broker telemetry would be ingested twice. Run one API process until those move out.
+- **Some state still lives in the API process.** Background jobs and IoT broker
+  connections are safe to spread across processes (one holds the brokers at a time), but
+  a second API process would hold its own login and query rate limits and need its own
+  semantic engine. Run one API process until those move out.
+- **Broker connectors wait for a consumer.** A broker shows as connecting until the
+  process holding the IoT lease reports on it. If no process runs the consumer (no worker
+  in a production deployment, or `ONTOS_IOT_CONSUMER=false` everywhere), it stays so, and
+  the connectors' last reported state does not age.
+- **A deleted broker connector's session stays at the broker** until the broker expires
+  it: a day in MQTT 5.0, otherwise as the broker's settings say. Its default client id,
+  `ontos-<connector id>`, is never used again.
+- **A broker message is recognised for seven days.** One the broker delivers again later
+  than that (a session kept longer, a retained message sent again) is recorded again.
 - **The triple store holds one graph at a time, so engine work takes turns.** The
   Oxigraph engine is not partitioned per workspace: reasoning, SHACL validation, CSV
   import and SPARQL each clear the store and load what they need. The app runs those
