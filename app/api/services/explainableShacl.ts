@@ -61,34 +61,6 @@ export type ExplainedShaclReport = {
 };
 
 /**
- * In-memory Violation Knowledge Graph cache (xpSHACL Violation KG).
- * Caches explanations and remediation suggestions by canonical signature.
- */
-class ViolationKgCache {
-  private cache = new Map<
-    string,
-    { humanExplanation: string; remediationAction: string }
-  >();
-
-  public get(sig: string) {
-    return this.cache.get(sig);
-  }
-
-  public set(
-    sig: string,
-    data: { humanExplanation: string; remediationAction: string },
-  ) {
-    this.cache.set(sig, data);
-  }
-
-  public clear() {
-    this.cache.clear();
-  }
-}
-
-export const violationKg = new ViolationKgCache();
-
-/**
  * Computes a deterministic canonical signature for a SHACL violation (xpSHACL signature pattern).
  */
 export function computeViolationSignature(
@@ -274,15 +246,14 @@ export function buildJustificationTree(
 
 /**
  * Generates natural language explanation and remediation texts for a violation.
- * Utilizes the Violation Knowledge Graph cache to reuse previously computed explanations.
+ * Each is the violation's own: the text names its focus node and can quote the
+ * engine's message, so none is reused for another. A process-wide cache keyed
+ * by signature once did reuse them, and served one workspace's node names in
+ * another's reports (and let anyone plant text there through explainViolation).
  */
 export function generateExplanationAndRemediation(
   v: ShaclViolation,
-  signature: string,
 ): { humanExplanation: string; remediationAction: string } {
-  const cached = violationKg.get(signature);
-  if (cached) return cached;
-
   const vType = categorizeViolation(v.constraint);
   const pathLabel = formatLabel(v.path);
   const nodeLabel = formatLabel(v.focusNode);
@@ -322,9 +293,7 @@ export function generateExplanationAndRemediation(
       break;
   }
 
-  const result = { humanExplanation, remediationAction };
-  violationKg.set(signature, result);
-  return result;
+  return { humanExplanation, remediationAction };
 }
 
 /**
@@ -349,8 +318,7 @@ export function explainShaclReport(
 
   for (const v of rawReport.violations) {
     const sig = computeViolationSignature(v.constraint, v.path);
-    const { humanExplanation, remediationAction } =
-      generateExplanationAndRemediation(v, sig);
+    const { humanExplanation, remediationAction } = generateExplanationAndRemediation(v);
     const jTree = buildJustificationTree(v, sig);
 
     explainedViolations.push({

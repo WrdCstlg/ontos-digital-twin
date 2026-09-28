@@ -5,7 +5,6 @@ import {
   buildJustificationTree,
   generateExplanationAndRemediation,
   explainShaclReport,
-  violationKg,
 } from "../services/explainableShacl";
 import type { ShaclValidationResult, ShaclViolation } from "../services/semanticEngine";
 
@@ -105,9 +104,8 @@ describe("xpSHACL Explainable SHACL Validation Framework", () => {
     });
   });
 
-  describe("Natural Language Explanation & KG Caching", () => {
-    it("generates human-friendly explanations and caches them by signature", () => {
-      violationKg.clear();
+  describe("Natural Language Explanation", () => {
+    it("generates human-friendly explanations", () => {
       const violation: ShaclViolation = {
         focusNode: "https://ontos.dev/ontology/hr/Person/E-0004",
         path: "hr:email",
@@ -115,16 +113,23 @@ describe("xpSHACL Explainable SHACL Validation Framework", () => {
         severity: "Violation",
       };
 
-      const sig = computeViolationSignature(violation.constraint, violation.path);
-      const res1 = generateExplanationAndRemediation(violation, sig);
+      const res1 = generateExplanationAndRemediation(violation);
 
       expect(res1.humanExplanation).toContain("does not match the required formatting pattern");
+      expect(res1.humanExplanation).toContain("<E-0004>");
       expect(res1.remediationAction).toContain("Check source record for 'email'");
+    });
 
-      // Verify retrieved from KG cache on second access
-      const cached = violationKg.get(sig);
-      expect(cached).toBeDefined();
-      expect(cached?.humanExplanation).toBe(res1.humanExplanation);
+    it("explains each violation by its own node, never by another's with the same signature", () => {
+      const first: ShaclViolation = { focusNode: "https://acme.example/hr/Person/ALICE-SECRET", path: "hr:manager", constraint: "minCount", severity: "Violation" };
+      const later: ShaclViolation = { ...first, focusNode: "https://beta.example/hr/Person/B-1" };
+      expect(computeViolationSignature(first.constraint, first.path)).toBe(computeViolationSignature(later.constraint, later.path));
+
+      expect(generateExplanationAndRemediation(first).humanExplanation).toContain("ALICE-SECRET");
+      const report = explainShaclReport({ conforms: false, focusNodes: 1, violationCount: 1, violations: [later] });
+      expect(report.explainedViolations[0].humanExplanation).toContain("<B-1>");
+      // Another report, from another import or workspace, names only its own nodes.
+      expect(JSON.stringify(report)).not.toContain("ALICE-SECRET");
     });
   });
 
