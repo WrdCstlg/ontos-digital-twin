@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTableName, type Table } from "drizzle-orm";
 import type { User } from "@db/schema";
 import { actionSubmissions, actionTypeVersions, jobs } from "@db/schema";
+import { actionDefinitionSchema } from "@contracts/actions";
 import { appRouter } from "../router";
 import { redactDefinition, redactDeliveryResult, redactUrl, redactUrlsIn, webhookAddressProblem } from "../services/actions/webhookView";
 import { createMockContext, mockAdminUser, mockOntologistUser, mockViewerUser, mockWorkspace } from "./testHarness";
@@ -18,11 +19,13 @@ vi.mock("../queries/connection", async () => ({ getDb: (await import("./memoryDb
 
 const HOOK = "https://hooks.slack.com/services/T000/B000/SENTINEL-HOOK";
 const at = new Date("2026-01-01T00:00:00Z");
+// A definition the schema accepts, so every route that parses one redacts it.
 const definition = {
-  parameters: [{ name: "person", type: "object", classIri: "hr:Person", required: true }],
+  parameters: [{ name: "person", label: "Person", type: "object", classIri: "hr:Person", required: true }],
   criteria: [],
-  effects: [],
-  sideEffects: [{ type: "webhook", url: HOOK }],
+  rules: [{ kind: "modify_object", object: "person", properties: { status: "notified" } }],
+  validation: { shacl: false },
+  sideEffects: [{ kind: "webhook", url: HOOK }],
 };
 const actionType = {
   id: 7, workspaceId: mockWorkspace.id, key: "notify", displayName: "Notify", description: null, moduleId: 1, minRole: "viewer", status: "active",
@@ -35,7 +38,7 @@ vi.mock("../services/actions/definitions", async (importOriginal) => ({
   listActionTypes: vi.fn(async () => [{ ...actionType, module, definition, submissions: { applied: 0, rejected: 0, lastAt: null } }]),
   listVersions: vi.fn(async () => [
     { id: 71, actionTypeId: 7, version: 2, definitionJson: definition, changedBy: "a", createdAt: at },
-    { id: 70, actionTypeId: 7, version: 1, definitionJson: { ...definition, sideEffects: [{ type: "webhook", url: `${HOOK}-OLD` }] }, changedBy: "a", createdAt: at },
+    { id: 70, actionTypeId: 7, version: 1, definitionJson: { ...definition, sideEffects: [{ kind: "webhook", url: `${HOOK}-OLD` }] }, changedBy: "a", createdAt: at },
   ]),
 }));
 vi.mock("../services/actions/service", async (importOriginal) => ({
@@ -76,10 +79,15 @@ describe("action webhook addresses", () => {
       { id: 32, workspaceId: mockWorkspace.id, kind: "action.webhook", status: "failed", attempts: 3, maxAttempts: 3, lastError: `webhook ${HOOK} answered HTTP 500`, resultJson: null, finishedAt: at },
     ]);
     put(actionTypeVersions, [{ id: 71, actionTypeId: 7, version: 2, definitionJson: definition, changedBy: "a", createdAt: at }]);
-    const viewer = JSON.stringify(await caller(mockViewerUser, "viewer").actions.getSubmission({ id: 1 }));
+    expect(actionDefinitionSchema.safeParse(definition).success).toBe(true);
+    const asViewer = await caller(mockViewerUser, "viewer").actions.getSubmission({ id: 1 });
+    const viewer = JSON.stringify(asViewer);
     expect(viewer).not.toContain("SENTINEL-HOOK");
     expect(viewer).toContain("webhook https://hooks.slack.com/… answered HTTP 500");
-    expect(JSON.stringify(await caller(mockAdminUser, "admin").actions.getSubmission({ id: 1 }))).toContain("SENTINEL-HOOK");
+    expect(asViewer.definition?.sideEffects[0].url).toBe("https://hooks.slack.com/…");
+    const asAdmin = await caller(mockAdminUser, "admin").actions.getSubmission({ id: 1 });
+    expect(JSON.stringify(asAdmin)).toContain("SENTINEL-HOOK");
+    expect(asAdmin.definition?.sideEffects[0].url).toBe(HOOK);
   });
 });
 
