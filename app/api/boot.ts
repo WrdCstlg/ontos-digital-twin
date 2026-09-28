@@ -6,6 +6,7 @@ import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
 import { secretKey } from "./lib/secretBox";
+import { shutDownInOrder, type ClosableServer } from "./lib/shutdown";
 
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { secureHeaders } from "hono/secure-headers";
@@ -363,7 +364,7 @@ if (env.isProduction && !env.secretsKey) {
   );
 }
 
-let serverHandle: { close: (cb?: () => void) => void } | undefined;
+let serverHandle: ClosableServer | undefined;
 
 if (env.isProduction) {
   const { serve } = await import("@hono/node-server");
@@ -386,45 +387,33 @@ if (env.isProduction) {
   }
 }
 
-// Graceful process lifecycle supervisor (SIGTERM / SIGINT)
+// Graceful process lifecycle supervisor (SIGTERM / SIGINT): requests in flight
+// finish first, while the database is still there (lib/shutdown.ts).
+let shuttingDown = false;
 const gracefulShutdown = async (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`[process] Received ${signal}. Initiating deterministic graceful teardown...`);
-  try {
+  const code = await shutDownInOrder({
+    server: serverHandle,
+    graceMs: 5_000,
     // Before the pool closes: an embedded worker's job must finish or go back
     // to the queue while it still has a database.
-    const { embeddedWorker } = await import("./services/jobs/embedded");
-    await embeddedWorker()?.stop(5000);
-  } catch (err) {
-    console.error("[process] Error stopping the embedded job worker:", err);
-  }
-  try {
-    const { iotBrokerManager } = await import("./services/iot/iotBrokerManager");
-    await iotBrokerManager.shutdownAll();
-    console.log("[process] Disconnected all active IoT broker adapters.");
-  } catch (err) {
-    console.error("[process] Error during IoT broker disconnect:", err);
-  }
-
-  try {
-    const { closeDb } = await import("./queries/connection");
-    await closeDb();
-    console.log("[process] Drained and closed MySQL connection pool.");
-  } catch (err) {
-    console.error("[process] Error closing database connection pool:", err);
-  }
-
-  if (serverHandle) {
-    serverHandle.close(() => {
-      console.log("[process] HTTP server closed cleanly.");
-      process.exit(0);
-    });
-    setTimeout(() => {
-      console.error("[process] Shutdown timed out (5s). Forcing termination.");
-      process.exit(1);
-    }, 5000).unref();
-  } else {
-    process.exit(0);
-  }
+    stopJobs: async () => {
+      const { embeddedWorker } = await import("./services/jobs/embedded");
+      await embeddedWorker()?.stop(5000);
+    },
+    stopIot: async () => {
+      const { iotBrokerManager } = await import("./services/iot/iotBrokerManager");
+      await iotBrokerManager.shutdownAll();
+      console.log("[process] Disconnected all active IoT broker adapters.");
+    },
+    closeDatabase: async () => {
+      const { closeDb } = await import("./queries/connection");
+      await closeDb();
+    },
+  });
+  process.exit(code);
 };
 
 process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
