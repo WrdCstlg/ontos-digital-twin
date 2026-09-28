@@ -57,6 +57,13 @@
       "when": 1790538411566,
       "tag": "0007_mapping_shacl_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1790569856495,
+      "tag": "0008_audit_chain_lock",
+      "breakpoints": true
     }
   ]
 }
