@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Pool } from "mysql2/promise";
 import {
+  IDLE_HOURS,
   LIMIT_TIMEOUT_MS,
   RateLimitUnavailable,
   RateLimiter,
@@ -15,6 +16,7 @@ import {
   enforceLimit,
   limitSubject,
   slideWindow,
+  sweepIdleRateLimits,
 } from "../lib/rateLimit";
 import { memoryPool, type LimitTable } from "./memoryRateLimits";
 
@@ -255,6 +257,56 @@ describe("a limiter, kept in the database", () => {
     for (const bucket of ["", "Auth", "1st", "a b", "x".repeat(33)]) expect(() => new RateLimiter(bucket, ok), bucket).toThrow(/bucket/);
     for (const windowMs of [0, 1.5, 24 * 3_600_000 + 1]) expect(() => new RateLimiter("test", { windowMs, max: 3 }), String(windowMs)).toThrow(/window/);
     for (const max of [0, 2.5, 1_001]) expect(() => new RateLimiter("test", { windowMs: MINUTE, max }), String(max)).toThrow(/max/);
+  });
+});
+
+describe("the sweep of idle rows", () => {
+  const DAY = IDLE_HOURS * 3_600_000;
+  function seeded() {
+    const table = tableAt(() => T0);
+    const at = (updatedAt: number) => ({ hits: [], updatedAt });
+    table.rows.set("auth/oldest", at(T0 - 3 * DAY));
+    table.rows.set("nlq/older", at(T0 - 2 * DAY));
+    table.rows.set("api/old", at(T0 - DAY - 1));
+    table.rows.set("auth/almost", at(T0 - DAY + 1));
+    table.rows.set("scan/fresh", at(T0 - 1_000));
+    return table;
+  }
+  const keys = (table: LimitTable) => [...table.rows.keys()].sort();
+
+  it("deletes the rows idle for a day, oldest first and a batch at a time, and keeps the rest", async () => {
+    const table = seeded();
+    const sweep = () => sweepIdleRateLimits({ batch: 2, pool: () => memoryPool(table) });
+    expect(await sweep()).toBe(2);
+    expect(keys(table)).toEqual(["api/old", "auth/almost", "scan/fresh"]);
+    expect(await sweep()).toBe(1);
+    expect(await sweep()).toBe(0);
+    expect(keys(table)).toEqual(["auth/almost", "scan/fresh"]);
+    // One read of the idle rows, bounded; then each deleted by its key, if still idle.
+    expect(table.log?.slice(0, 3).map((s) => s.values)).toEqual([
+      [IDLE_HOURS, 2],
+      ["auth", "oldest", IDLE_HOURS],
+      ["nlq", "older", IDLE_HOURS],
+    ]);
+    expect(table.connections?.every((c) => c.released)).toBe(true);
+  });
+
+  it("keeps a row a check touched after the sweep read it", async () => {
+    const table = seeded();
+    table.onStatement = (sql) => {
+      if (sql.startsWith("DELETE")) table.rows.set("nlq/older", { hits: [T0], updatedAt: T0 });
+    };
+    expect(await sweepIdleRateLimits({ pool: () => memoryPool(table) })).toBe(2);
+    expect(keys(table)).toEqual(["auth/almost", "nlq/older", "scan/fresh"]);
+  });
+
+  it("fails, closing its connection, when the database cannot be reached", async () => {
+    const table = seeded();
+    table.failing = { match: /^DELETE/, error: outage() };
+    await expect(sweepIdleRateLimits({ pool: () => memoryPool(table) })).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    expect(table.connections).toEqual([{ released: false, destroyed: true }]);
+    table.down = outage();
+    await expect(sweepIdleRateLimits({ pool: () => memoryPool(table) })).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 });
 
