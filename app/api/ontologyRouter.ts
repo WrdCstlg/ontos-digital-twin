@@ -791,8 +791,7 @@ export const ontologyRouter = createRouter({
         message: input.message,
         severity: "Violation" as const,
       };
-      const { humanExplanation, remediationAction } =
-        generateExplanationAndRemediation(violation, sig);
+      const { humanExplanation, remediationAction } = generateExplanationAndRemediation(violation);
       const justificationTree = buildJustificationTree(violation, sig);
       return {
         signature: sig,

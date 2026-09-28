@@ -24,6 +24,7 @@ import {
 import { appRouter } from "../router";
 import { iotBrokerManager } from "../services/iot/iotBrokerManager";
 import { leaseLapse } from "../services/jobs/queue";
+import { explainShaclReport } from "../services/explainableShacl";
 import { createMockContext, mockAdminUser, mockOntologistUser, mockViewerUser, mockWorkspace, mockWorkspaceBeta } from "./testHarness";
 
 const store = vi.hoisted(() => ({ tables: new Map<string, Record<string, unknown>[]>() }));
@@ -153,6 +154,27 @@ describe("broker connectors are managed by the workspace's admins, and only its 
     expect(await caps("editor")).toEqual({ canManageBrokers: false, canIngest: true });
     expect(await caps("ontologist")).toEqual({ canManageBrokers: false, canIngest: true });
     expect(await caps("admin")).toEqual({ canManageBrokers: true, canIngest: true });
+  });
+});
+
+describe("SHACL explanations are each report's own", () => {
+  it("another workspace's report cannot be read, or written into, through explainViolation", async () => {
+    // Workspace A's import explains a violation on one of its people...
+    explainShaclReport({
+      conforms: false, focusNodes: 1, violationCount: 1,
+      violations: [{ focusNode: "https://acme.example/hr/Person/ALICE-SECRET", path: "hr:manager", constraint: "minCount", severity: "Violation" }],
+    });
+    // ...and a member of B asks for the same constraint and path.
+    const asked = await inB(mockViewerUser, "viewer").ontology.explainViolation({ constraint: "minCount", path: "hr:manager" });
+    expect(JSON.stringify(asked)).not.toContain("ALICE-SECRET");
+
+    // Nor does what B asks about reach A's next report.
+    await inB(mockViewerUser, "viewer").ontology.explainViolation({ constraint: "pattern", path: "hr:email", focusNode: "PLANTED-TEXT" });
+    const next = explainShaclReport({
+      conforms: false, focusNodes: 1, violationCount: 1,
+      violations: [{ focusNode: "https://acme.example/hr/Person/A-2", path: "hr:email", constraint: "pattern", severity: "Violation" }],
+    });
+    expect(JSON.stringify(next)).not.toContain("PLANTED-TEXT");
   });
 });
 
