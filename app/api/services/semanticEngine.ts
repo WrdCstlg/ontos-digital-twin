@@ -102,23 +102,41 @@ export type EngineLock = <T>(task: (signal: AbortSignal) => Promise<T>, signal?:
 type EngineTask = {
   /** Aborts when the task must stop. From then on the task sends the engine nothing. */
   signal: AbortSignal;
+  /** Requests the task has sent that have not yet answered or timed out. */
+  inFlight: Set<Promise<unknown>>;
   /** A request the task sent timed out: the engine may still be at it. */
   abandoned: boolean;
+  /** The task is over. Work it left behind (a timer, say) still sees it, and must not count as it. */
+  ended: boolean;
 };
 
 /** The exclusive() task a call runs in. */
 const currentTask = new AsyncLocalStorage<EngineTask>();
 
+/** The task a call runs in, unless that task is over. */
+const runningTask = () => {
+  const task = currentTask.getStore();
+  return task && !task.ended ? task : undefined;
+};
+
 /** The signal of a task nothing tells to stop. */
 const NEVER = new AbortController().signal;
 
 /**
- * How long a task waits, after a request of its timed out, for the engine to
- * answer one more query before it lets the engine go. The engine goes on with
- * a request its client gave up on, and its store takes one writer at a time,
- * so a query it answers began after that request's write had ended.
+ * How long a task tries, after a request of its timed out, to have the engine
+ * answer one more query before it lets the engine go. A best effort: the
+ * engine goes on with a request its client gave up on, and an answer to a
+ * later one says little about when that ends. The checks whose results
+ * matter look for its effects themselves (checkLoaded).
  */
 const SETTLE_MS = 30_000;
+
+/**
+ * The store changed while a task used it: another writer was at it, a
+ * request an earlier task gave up on, say. What the task saw is not what it
+ * loaded. A later try may find the store undisturbed.
+ */
+export class EngineInterference extends Error {}
 
 /** Resolves once `p` settles, or rejects as soon as `signal` aborts. */
 function untilSettled(p: Promise<unknown>, signal?: AbortSignal): Promise<void> {
@@ -175,7 +193,7 @@ export class SemanticEngineClient {
    * holding the lock. Called from inside a task, it throws.
    */
   public exclusive<T>(task: () => Promise<T>, opts: { signal?: AbortSignal } = {}): Promise<T> {
-    if (currentTask.getStore()) return Promise.reject(new Error("exclusive() is not re-entrant: this task already has the engine"));
+    if (runningTask()) return Promise.reject(new Error("exclusive() is not re-entrant: this task already has the engine"));
     const { signal } = opts;
     const lock = this.sharedLock;
     const previous = this.queue;
@@ -200,64 +218,122 @@ export class SemanticEngineClient {
 
   /**
    * Runs `task` as the engine's current task, and ends only once the engine
-   * has done what the task asked of it. The engine goes on with a request its
-   * client gives up on, so ending sooner would let the next task (or the next
-   * holder of the shared lock) clear and load the store while the engine
-   * still writes this task's data into it. So a task told to stop sends
-   * nothing more, but lets the requests it has already sent answer or time
-   * out; and after one timed out, it waits, at most SETTLE_MS, for the engine
-   * to answer one more query.
+   * has done what the task asked of it, as far as the client can tell. The
+   * engine goes on with a request its client gives up on, so ending sooner
+   * would let the next task (or the next holder of the shared lock) clear and
+   * load the store while the engine still writes this task's data into it.
+   * So a task told to stop sends nothing more, but every request it has sent
+   * answers or times out first, awaited or not; and after one timed out, it
+   * tries, for at most SETTLE_MS, to have the engine answer one more query.
    */
   private async runTask<T>(task: () => Promise<T>, signal: AbortSignal): Promise<T> {
-    const state: EngineTask = { signal, abandoned: false };
+    const state: EngineTask = { signal, inFlight: new Set(), abandoned: false, ended: false };
     try {
       return await currentTask.run(state, task);
     } finally {
+      // Each ends by its own timeout.
+      await Promise.allSettled([...state.inFlight]);
       if (state.abandoned) await this.settle();
+      state.ended = true;
     }
   }
 
-  /** Waits, at most SETTLE_MS, for the engine to answer a query: any write it was doing has then ended. */
+  /** Tries, for at most SETTLE_MS, to have the engine answer a query, a second apart. */
   private async settle(): Promise<void> {
-    await fetch(`${this.baseUrl}/api/query`, {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify({ query: "ASK { ?s ?p ?o }" }),
-      signal: AbortSignal.timeout(SETTLE_MS),
-    })
-      .then((res) => res.arrayBuffer())
-      .catch(() => undefined);
+    const deadline = Date.now() + SETTLE_MS;
+    for (;;) {
+      const left = deadline - Date.now();
+      if (left <= 0) return;
+      const answered = await fetch(`${this.baseUrl}/api/query`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify({ query: "ASK { ?s ?p ?o }" }),
+        signal: AbortSignal.timeout(left),
+      }).then(
+        async (res) => {
+          await res.arrayBuffer();
+          return res.ok;
+        },
+        () => false,
+      );
+      if (answered) return;
+      await new Promise((r) => setTimeout(r, Math.min(1_000, Math.max(0, deadline - Date.now()))));
+    }
   }
 
   /** The signal of the exclusive() task this call runs in, if any: it aborts when the task must stop. */
   public currentTaskSignal(): AbortSignal | undefined {
-    return currentTask.getStore()?.signal;
+    return runningTask()?.signal;
   }
 
   /**
    * Sends one request to the engine, bounded by its own timeout. In a task
    * told to stop, it sends nothing and throws the reason. A request already
    * sent is never cut short by the task's signal: the engine would go on
-   * with it regardless (see runTask), and one that times out marks the task.
+   * with it regardless. The task keeps it until it answers (see runTask), and
+   * one that times out marks the task.
    */
-  private async send(path: string, init: { method: "GET" | "POST"; body?: string }, timeoutMs: number): Promise<Response> {
-    const task = currentTask.getStore();
-    task?.signal.throwIfAborted();
-    const signal = AbortSignal.timeout(timeoutMs);
+  private send(path: string, init: { method: "GET" | "POST"; body?: string }, timeoutMs: number): Promise<Response> {
+    const task = runningTask();
     try {
-      return await fetch(`${this.baseUrl}${path}`, { ...init, headers: this.getHeaders(), signal });
+      task?.signal.throwIfAborted();
     } catch (err) {
-      if (task && signal.aborted) task.abandoned = true;
-      throw err;
+      return Promise.reject(err);
     }
+    const signal = AbortSignal.timeout(timeoutMs);
+    const sending = (async () => {
+      try {
+        return await fetch(`${this.baseUrl}${path}`, { ...init, headers: this.getHeaders(), signal });
+      } catch (err) {
+        if (task && signal.aborted) task.abandoned = true;
+        throw err;
+      }
+    })();
+    if (task) {
+      task.inFlight.add(sending);
+      sending.then(
+        () => task.inFlight.delete(sending),
+        () => task.inFlight.delete(sending),
+      );
+    }
+    return sending;
+  }
+
+  /** How many triples the store's default graph holds. */
+  public async countTriples(): Promise<number> {
+    const { results } = await this.querySparql("SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }");
+    const n = Number(/\d+/.exec(String(results[0]?.n ?? ""))?.[0]);
+    if (!Number.isSafeInteger(n)) throw new Error(`the engine counted '${String(results[0]?.n)}' triples`);
+    return n;
+  }
+
+  /**
+   * Empties the store, has `load` fill it (it answers how many triples it
+   * loaded), and runs `check` on it: a check that only reads, such as SHACL
+   * validation. Its result is refused with EngineInterference if the store
+   * held anything else at a moment it could tell: more triples than were
+   * loaded, none when some were, or a count that moved while the check ran.
+   * A request an earlier task gave up on, still writing, shows so. Call inside
+   * exclusive().
+   */
+  public async checkLoaded<T>(load: () => Promise<number>, check: () => Promise<T>): Promise<T> {
+    await this.clearStore();
+    const loaded = await load();
+    const before = await this.countTriples();
+    const result = await check();
+    const after = await this.countTriples();
+    if (before > loaded || (loaded > 0 && before === 0) || after !== before) {
+      throw new EngineInterference(`the engine's store changed under the check: ${loaded} triples loaded, ${before} there before it ran, ${after} after`);
+    }
+    return result;
   }
 
   /**
    * Declares that other processes use this engine too, and gives the lock they
    * all take around each exclusive() task (a worker's replicas share one
    * engine; services/engineLock.ts). With it, a task never trusts that the
-   * store still holds what an earlier one loaded, and its engine requests are
-   * aborted the moment the lock is lost.
+   * store still holds what an earlier one loaded, and sends the engine nothing
+   * more once the lock is lost.
    */
   public shareWith(lock: EngineLock | null): void {
     this.sharedLock = lock;

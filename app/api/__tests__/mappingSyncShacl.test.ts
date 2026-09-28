@@ -10,7 +10,7 @@ import { connectors, kgNodes, mappings, ontologyClasses, ontologyModules, ontolo
 import { runMappingSync } from "../services/mappingSync";
 import { PermanentJobError } from "../services/jobs/worker";
 import { writeAudit } from "../services/audit";
-import { EngineRequestError, semanticEngine } from "../services/semanticEngine";
+import { EngineInterference, EngineRequestError, semanticEngine } from "../services/semanticEngine";
 import { LockLost, LockUnavailable } from "../lib/namedLock";
 import { appRouter } from "../router";
 import { createMockContext, mockOntologistUser, mockViewerUser, mockWorkspace } from "./testHarness";
@@ -27,8 +27,13 @@ vi.mock("../services/semanticEngine", async (importOriginal) => ({
     ensureEngineRunning: vi.fn(async () => true),
     exclusive: vi.fn(async (f: () => unknown) => f()),
     clearStore: vi.fn(async () => undefined),
-    loadTurtle: vi.fn(async () => undefined),
+    loadTurtle: vi.fn(async () => ({ ok: true, triplesLoaded: 0 })),
     validateShacl: vi.fn(),
+    // The real one's order, without its counts: semanticEngine.test.ts runs those.
+    checkLoaded: vi.fn(async (load: () => Promise<number>, check: () => Promise<unknown>) => {
+      await load();
+      return check();
+    }),
   },
 }));
 
@@ -109,6 +114,31 @@ describe("a mapping set to block on SHACL", () => {
     const waiting = run();
     await expect(waiting).rejects.toThrow(/could not be checked just now: lost lock ontos:engine:x/);
     await expect(waiting).rejects.not.toBeInstanceOf(PermanentJobError);
+    expect(rows(kgNodes)).toEqual([]);
+  });
+
+  it("imports nothing on a check whose store changed under it, and the import is retried", async () => {
+    setUp("block");
+    vi.mocked(semanticEngine.exclusive).mockRejectedValueOnce(
+      new EngineInterference("the engine's store changed under the check: 14 triples loaded, 19 there before it ran, 19 after"),
+    );
+    const waiting = run();
+    await expect(waiting).rejects.toThrow(/could not be checked just now: the engine's store changed under the check/);
+    await expect(waiting).rejects.not.toBeInstanceOf(PermanentJobError);
+    expect(rows(kgNodes)).toEqual([]);
+  });
+
+  it("acts on no report once its job is told to stop while the check runs: nothing refused, nothing imported, retried", async () => {
+    setUp("block");
+    const job = new AbortController();
+    vi.mocked(semanticEngine.validateShacl).mockImplementation(async () => {
+      job.abort(new Error("worker stopping"));
+      return failing;
+    });
+    const stopped = runMappingSync(WS, { syncJobId: 7, mappingId: 100 }, "Amara Okafor", job.signal);
+    await expect(stopped).rejects.toThrow("import interrupted: worker stopping");
+    await expect(stopped).rejects.not.toBeInstanceOf(PermanentJobError);
+    expect(vi.mocked(writeAudit)).not.toHaveBeenCalled();
     expect(rows(kgNodes)).toEqual([]);
   });
 });

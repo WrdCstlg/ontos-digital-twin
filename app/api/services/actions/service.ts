@@ -21,7 +21,7 @@ import {
 import { getDb } from "../../queries/connection";
 import { canonicalize, writeAudit } from "../audit";
 import { enqueueJob } from "../jobs/queue";
-import { semanticEngine } from "../semanticEngine";
+import { EngineInterference, semanticEngine, type ShaclValidationResult } from "../semanticEngine";
 import { buildPrefixMap, expandIri, knowledgeGraphToTurtle, modulePrefixes, shaclJsonToTurtle } from "../rdfBridge";
 import { workspaceDatatypeRanges } from "../datatypeRanges";
 import { explainShaclReport } from "../explainableShacl";
@@ -231,11 +231,19 @@ export async function checkShacl(workspaceId: number, plan: EditPlan, objects: M
   const judged = new Set([...touchedIris].flatMap((i) => [i, expandIri(i, prefixMap)]));
   // Values typed as their properties declare, as the workspace's graph is.
   const ranges = await workspaceDatatypeRanges(workspaceId);
-  const report = await semanticEngine.exclusive(async () => {
-    await semanticEngine.clearStore();
-    await semanticEngine.loadTurtle(knowledgeGraphToTurtle(nodes, edges, prefixMap, ranges, modulePrefixes(mods)));
-    return semanticEngine.validateShacl(shaclJsonToTurtle(shaped, prefixMap));
-  });
+  let report: ShaclValidationResult;
+  try {
+    report = await semanticEngine.exclusive(() =>
+      semanticEngine.checkLoaded(
+        async () => (await semanticEngine.loadTurtle(knowledgeGraphToTurtle(nodes, edges, prefixMap, ranges, modulePrefixes(mods)))).triplesLoaded,
+        () => semanticEngine.validateShacl(shaclJsonToTurtle(shaped, prefixMap)),
+      ),
+    );
+  } catch (err) {
+    // Checked on a store something else was writing to: no check at all.
+    if (err instanceof EngineInterference) return { status: "unavailable", violations: [] };
+    throw err;
+  }
   if (report.error) return { status: "unavailable", violations: [] };
   const violations = explainShaclReport(report)
     .explainedViolations.filter((v) => judged.has(v.focusNode))

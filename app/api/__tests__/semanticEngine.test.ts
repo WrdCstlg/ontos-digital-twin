@@ -7,7 +7,7 @@ import {
   knowledgeGraphToTurtle,
   shaclJsonToTurtle,
 } from "../services/rdfBridge";
-import { semanticEngine } from "../services/semanticEngine";
+import { EngineInterference, semanticEngine } from "../services/semanticEngine";
 import { seedShaped } from "./rdfFixtures";
 import type { OntologyClass, OntologyModule, OntologyProperty, KgNode, KgEdge } from "@db/schema";
 
@@ -269,6 +269,22 @@ describe("Semantic Engine & RDF Bridge Integration", () => {
         "SELECT ?v WHERE { <https://ontos.dev/ontology/fin/Invoice/INV-1> <https://ontos.dev/ontology/fin/amount> ?v }",
       );
       expect(amount.results).toHaveLength(1);
+    });
+
+    it("checks what a task loaded, and refuses a check whose store another writer changed", async () => {
+      const { modules, nodes, edges, triples } = seedShaped;
+      const turtle = knowledgeGraphToTurtle(nodes, edges, buildPrefixMap(modules), undefined, modulePrefixes(modules));
+      const load = async () => (await semanticEngine.loadTurtle(turtle)).triplesLoaded;
+      // Undisturbed: the store holds exactly what was loaded, before and after.
+      await expect(semanticEngine.exclusive(() => semanticEngine.checkLoaded(load, () => semanticEngine.countTriples()))).resolves.toBe(triples);
+      // Another writer while the check runs, as a request an earlier task gave up on would be.
+      const intruder = () =>
+        fetch(`${semanticEngine.getUrl()}/api/update`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query: "INSERT DATA { <urn:intruder> <urn:p> <urn:o> }" }),
+        }).then(() => "a report on the wrong data");
+      await expect(semanticEngine.exclusive(() => semanticEngine.checkLoaded(load, intruder))).rejects.toBeInstanceOf(EngineInterference);
     });
 
     it("loads Turtle and runs SPARQL SELECT query", async () => {
