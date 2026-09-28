@@ -111,6 +111,10 @@ export function WorkersPanel({ workers, isLoading, error, fetchedAt, now, onOpen
                         >
                           <Loader2 className="size-3 animate-spin" /> job #{w.currentJobId}
                         </button>
+                      ) : w.busyElsewhere ? (
+                        <span className="font-mono text-[11px] text-text-secondary" title="Running another workspace's job">
+                          busy
+                        </span>
                       ) : (
                         <span className="font-mono text-[11px] text-text-muted">idle</span>
                       )}

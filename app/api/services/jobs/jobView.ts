@@ -44,6 +44,19 @@ export function jobErrorFor(text: string | null | undefined, audience: JobAudien
   return audience.workers ? shown : withoutWorkerNames(shown);
 }
 
+/**
+ * A worker as one workspace's admin sees it. Workers serve every workspace,
+ * so the job one is running is named only when it is this workspace's
+ * (`ownJobIds`); otherwise the worker is just busy.
+ */
+export function workerFor<W extends { currentJobId: number | null }>(
+  worker: W,
+  ownJobIds: ReadonlySet<number>,
+): W & { busyElsewhere: boolean } {
+  const own = worker.currentJobId != null && ownJobIds.has(worker.currentJobId);
+  return { ...worker, currentJobId: own ? worker.currentJobId : null, busyElsewhere: worker.currentJobId != null && !own };
+}
+
 /** A job as this audience may see it. */
 export function jobFor(job: Job, audience: JobAudience): Job {
   return {
