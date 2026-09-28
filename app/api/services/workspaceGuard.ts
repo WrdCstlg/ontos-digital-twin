@@ -22,6 +22,9 @@ import { DEMO_WORKSPACE_SLUG } from "./audit";
  * In production this includes system admins — the fabricated admin-membership
  * fallbacks exist only outside production so local demos and onboarding work.
  */
+/** The one refusal for a requested workspace, whether it exists or not. */
+const noAccess = () => new TRPCError({ code: "FORBIDDEN", message: "User does not have access to this workspace." });
+
 export async function resolveUserWorkspace(
   user: User,
   headers?: Headers,
@@ -63,12 +66,10 @@ export async function resolveUserWorkspace(
       ws = row;
     }
 
-    if (!ws) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: `Workspace not found.`,
-      });
-    }
+    // The same answer as for a workspace the user is not a member of (below):
+    // telling the two apart would let anyone signed in learn which ids and
+    // slugs exist.
+    if (!ws) throw noAccess();
 
     // Check membership in the target workspace
     const [membership] = await db
@@ -103,10 +104,7 @@ export async function resolveUserWorkspace(
 
     // Strict multi-tenant rejection. The message names no workspace: a slug
     // told to someone who is not a member would let ids be mapped to names.
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "User does not have access to this workspace.",
-    });
+    throw noAccess();
   }
 
   // 3. If no target workspace was specified, resolve user's primary membership

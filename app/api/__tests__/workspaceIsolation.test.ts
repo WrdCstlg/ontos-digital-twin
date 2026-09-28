@@ -166,21 +166,28 @@ describe("Multi-Tenant Geometric Isolation & Workspace Guard", () => {
         ]);
       });
 
-      it("requesting a workspace that does not exist is NOT_FOUND, without probing membership", async () => {
+      it("requesting a workspace that does not exist is answered as one the user is not in, so existence cannot be probed", async () => {
         const { resolveUserWorkspace } = await importGuardFresh(nodeEnv);
+        const refusal = { code: "FORBIDDEN", message: "User does not have access to this workspace." };
 
         dbState.whereLimitQueue.push([]);
         await expect(
           resolveUserWorkspace(mockViewerUser, new Headers({ "x-workspace-id": "999" })),
-        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+        ).rejects.toMatchObject(refusal);
         expect(dbState.whereLimitConditions).toHaveLength(1);
         expect(renderCondition(dbState.whereLimitConditions[0]).params).toEqual([999]);
 
         dbState.whereLimitQueue.push([]);
         await expect(
           resolveUserWorkspace(mockViewerUser, new Headers({ "x-workspace-slug": "no-such-tenant" })),
-        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+        ).rejects.toMatchObject(refusal);
         expect(dbState.whereLimitConditions).toHaveLength(2);
+
+        // An existing workspace the user is not in gets the very same answer.
+        dbState.whereLimitQueue.push([mockWorkspaceBeta], []);
+        await expect(
+          resolveUserWorkspace(mockViewerUser, new Headers({ "x-workspace-slug": mockWorkspaceBeta.slug })),
+        ).rejects.toMatchObject(refusal);
       });
 
       it("requesting their own workspace by header resolves their real membership row", async () => {
