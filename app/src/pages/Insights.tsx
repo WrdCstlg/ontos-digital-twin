@@ -343,7 +343,10 @@ export default function Insights() {
           <div className="flex items-center gap-1.5">
             <CalendarDays className="size-3.5 text-text-muted" />
             <Select value={String(dateRange)} onValueChange={(v) => setDateRange(Number(v) as DateRange)}>
-              <SelectTrigger className="h-8 w-[136px] border-border-hairline bg-bg-inset font-mono text-[11.5px] text-text-secondary">
+              <SelectTrigger
+                aria-label="Date range"
+                className="h-8 w-[136px] border-border-hairline bg-bg-inset font-mono text-[11.5px] text-text-secondary"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
