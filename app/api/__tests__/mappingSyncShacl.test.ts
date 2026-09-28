@@ -10,7 +10,7 @@ import { connectors, kgNodes, mappings, ontologyClasses, ontologyModules, ontolo
 import { runMappingSync } from "../services/mappingSync";
 import { PermanentJobError } from "../services/jobs/worker";
 import { writeAudit } from "../services/audit";
-import { semanticEngine } from "../services/semanticEngine";
+import { EngineRequestError, semanticEngine } from "../services/semanticEngine";
 import { appRouter } from "../router";
 import { createMockContext, mockOntologistUser, mockWorkspace } from "./testHarness";
 
@@ -20,7 +20,8 @@ vi.mock("../services/audit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/audit")>()),
   writeAudit: vi.fn(async () => undefined),
 }));
-vi.mock("../services/semanticEngine", () => ({
+vi.mock("../services/semanticEngine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/semanticEngine")>()),
   semanticEngine: {
     ensureEngineRunning: vi.fn(async () => true),
     exclusive: vi.fn(async (f: () => unknown) => f()),
@@ -118,6 +119,90 @@ describe("what the check sees", () => {
     expect(data).toContain('hr:manager "1"^^xsd:integer');
     expect(data).toContain('hr:salary "n/a"^^xsd:string');
   });
+
+  it("the links the rows make, to another row or to a node the graph holds, with that node's class", async () => {
+    withLinks();
+    vi.mocked(semanticEngine.validateShacl).mockResolvedValue({ ...conforming, focusNodes: 5 });
+    expect((await run()).nodesUpserted).toBe(4);
+    const data = vi.mocked(semanticEngine.loadTurtle).mock.calls.at(-1)![0];
+    expect(data).toContain("hr:reportsTo <https://ontos.dev/ontology/hr/person/1>");
+    expect(data).toContain("hr:reportsTo <https://ontos.dev/ontology/hr/person/99>");
+    expect(data).toContain("<https://ontos.dev/ontology/hr/person/99> a hr:Person");
+    // A link to nothing in the graph is dropped by the import, and so by the check.
+    expect(data).not.toContain("person/77");
+  });
+});
+
+/** Four people, three of whom name a manager: another row, a person already in the graph, and no one. */
+function withLinks() {
+  setUp("block");
+  put(mappings, [{ ...rows(mappings)[0], columnMapJson: { subject: "hr:person/{id}", label: "name", fields: {}, links: [{ column: "manager", predicate: "hr:reportsTo", target: "hr:person/{value}" }] } }]);
+  put(connectors, [{ ...rows(connectors)[0], configJson: { filename: "p.csv", csvText: "id,name,manager\n1,Ada,\n2,Grace,1\n3,Alan,99\n4,Ida,77\n" } }]);
+  put(kgNodes, [{ id: 500, workspaceId: WS, moduleKey: "hr", classIri: "hr:Person", iri: "hr:person/99", label: "Boss", propsJson: {}, deletedAt: null }]);
+}
+
+describe("what a mapping set to block refuses", () => {
+  it("only the rows' own violations: not those of the nodes they link to", async () => {
+    withLinks();
+    vi.mocked(semanticEngine.validateShacl).mockResolvedValue({
+      conforms: false, focusNodes: 5, violationCount: 1,
+      violations: [{ constraint: "sh:MinCountConstraintComponent", focusNode: "https://ontos.dev/ontology/hr/person/99", path: "hr:email", severity: "Violation" }],
+    });
+    expect((await run()).nodesUpserted).toBe(4);
+  });
+
+  it("a Violation, not a Warning or Info, which is recorded as warn records it", async () => {
+    setUp("block");
+    vi.mocked(semanticEngine.validateShacl).mockResolvedValue({
+      conforms: false, focusNodes: 2, violationCount: 2,
+      violations: [
+        { constraint: "sh:MinCountConstraintComponent", focusNode: "hr:person/1", path: "hr:manager", severity: "Warning" },
+        { constraint: "sh:PatternConstraintComponent", focusNode: "hr:person/2", path: "hr:manager", severity: "Info" },
+      ],
+    });
+    const result = await run();
+    expect(result.nodesUpserted).toBe(2);
+    expect(result.shacl).toMatchObject({ conforms: false, violationCount: 2 });
+  });
+
+  it("nothing when there are no rows to check", async () => {
+    setUp("block");
+    put(connectors, [{ ...rows(connectors)[0], configJson: { filename: "p.csv", csvText: "id,name,manager\n" } }]);
+    expect((await run()).nodesUpserted).toBe(0);
+    expect(semanticEngine.validateShacl).not.toHaveBeenCalled();
+  });
+
+  it("does not take a report on some other graph for this import's: the import waits", async () => {
+    setUp("block");
+    // Two rows loaded, seven judged: another process loaded its graph in between.
+    vi.mocked(semanticEngine.validateShacl).mockResolvedValue({ ...conforming, focusNodes: 7 });
+    const waiting = run();
+    await expect(waiting).rejects.toThrow(/could not be checked just now: the engine checked 7 node\(s\) of hr:Person where this import loaded 2/);
+    await expect(waiting).rejects.not.toBeInstanceOf(PermanentJobError);
+    expect(rows(kgNodes)).toEqual([]);
+  });
+
+  it("fails for good, with the engine's reason, when the engine cannot check the import", async () => {
+    setUp("block");
+    vi.mocked(semanticEngine.validateShacl).mockRejectedValue(new EngineRequestError("No such file or directory (os error 2)"));
+    const refused = run();
+    await expect(refused).rejects.toBeInstanceOf(PermanentJobError);
+    await expect(refused).rejects.toThrow(/the semantic engine cannot check this one: No such file or directory/);
+    expect(rows(kgNodes)).toEqual([]);
+  });
+
+  it("records the counts and the first groups of results, never every result", async () => {
+    setUp("block");
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      constraint: "sh:MinCountConstraintComponent", focusNode: i % 2 ? "hr:person/1" : "hr:person/2", path: `hr:field${i}`, severity: "Violation" as const,
+    }));
+    vi.mocked(semanticEngine.validateShacl).mockResolvedValue({ conforms: false, focusNodes: 2, violationCount: 40, violations: many, raw: { big: "x".repeat(10_000) } });
+    await expect(run()).rejects.toThrow(/SHACL: 40 violation\(s\)/);
+    const { payload } = vi.mocked(writeAudit).mock.calls[0][0] as { payload: { shacl: { violationCount: number; groups: unknown[] } } };
+    expect(payload.shacl.violationCount).toBe(40);
+    expect(payload.shacl.groups).toHaveLength(5);
+    expect(JSON.stringify(payload)).not.toMatch(/justificationTree|xxxxxxxxxx/);
+  });
 });
 
 describe("a mapping set to warn, the default", () => {
@@ -130,10 +215,13 @@ describe("a mapping set to warn, the default", () => {
     expect(vi.mocked(writeAudit).mock.calls[0][0].action).toMatch(/\[SHACL 1 violations\]/);
   });
 
-  it("imports while the engine is away, unchecked", async () => {
+  it("imports while the engine is away, unchecked, and says so in its record", async () => {
     setUp("warn");
     vi.mocked(semanticEngine.ensureEngineRunning).mockResolvedValue(false);
-    expect((await run()).nodesUpserted).toBe(2);
+    const result = await run();
+    expect(result.nodesUpserted).toBe(2);
+    expect(result.shacl).toBeNull();
+    expect(vi.mocked(writeAudit).mock.calls[0][0].payload).toMatchObject({ shacl: null, shaclNotChecked: "the semantic engine is not running" });
   });
 });
 

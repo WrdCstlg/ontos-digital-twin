@@ -75,6 +75,20 @@ export type SparqlResult = {
   results: Record<string, string>[];
 };
 
+/**
+ * The engine was reached, and answered that it cannot do what was asked: data
+ * it cannot parse, a shapes file it cannot read, a request it refuses (4xx).
+ * Asking again will not help. Anything else that fails (the engine away, a
+ * timeout, a 5xx) may pass on a later try.
+ */
+export class EngineRequestError extends Error {}
+
+/** A non-2xx answer: the request's fault (4xx, but a timeout or rate limit) or the engine's. */
+function httpFailure(what: string, res: Response): Error {
+  const message = `${what}: HTTP ${res.status} ${res.statusText}`.trim();
+  return res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429 ? new EngineRequestError(message) : new Error(message);
+}
+
 class SemanticEngineClient {
   private baseUrl: string;
   private token?: string;
@@ -240,11 +254,9 @@ class SemanticEngineClient {
       body: JSON.stringify({ turtle, base: baseIri }),
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) {
-      throw new Error(`Failed to load Turtle: HTTP ${res.status} ${res.statusText}`);
-    }
+    if (!res.ok) throw httpFailure("Failed to load Turtle", res);
     const data = (await res.json()) as { ok?: boolean; triples_loaded?: number; error?: string };
-    if (data.error) throw new Error(`Oxigraph load error: ${data.error}`);
+    if (data.error) throw new EngineRequestError(`Oxigraph load error: ${data.error}`);
     return { ok: true, triplesLoaded: data.triples_loaded ?? 0 };
   }
 
@@ -355,16 +367,14 @@ class SemanticEngineClient {
         body: JSON.stringify([{ command: "shacl", args: [shapesFile] }]),
         signal: AbortSignal.timeout(30000),
       });
-      if (!res.ok) {
-        throw new Error(`SHACL validation request failed: HTTP ${res.status}`);
-      }
+      if (!res.ok) throw httpFailure("SHACL validation request failed", res);
 
       const batch = (await res.json()) as BatchResp;
       const shaclRes = batch[0]?.result;
 
-      if (!shaclRes || shaclRes.error) {
-        throw new Error(shaclRes?.error || batch[0]?.error || "SHACL validation failed");
-      }
+      const refused = shaclRes?.error || batch[0]?.error;
+      if (refused) throw new EngineRequestError(refused);
+      if (!shaclRes) throw new Error("SHACL validation failed: the engine returned no result");
 
       const violations: ShaclViolation[] = (shaclRes.violations ?? []).map((v) => ({
         constraint: v.constraint ?? "unknown",
