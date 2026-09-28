@@ -20,6 +20,7 @@ import {
 } from "./lib/secretBox";
 import { actorLabelFor, writeAudit } from "./services/audit";
 import { publicConnector } from "./services/connectorView";
+import { jobAudience, jobErrorFor } from "./services/jobs/jobView";
 import {
   checkRunnableMapping,
   enqueueMappingSync,
@@ -403,14 +404,17 @@ export const mappingRouter = createRouter({
       const queueById = new Map(queueRows.map((q) => [q.id, q]));
       const mapById = new Map(maps.map((m) => [m.id, m]));
       const connById = new Map(conns.map((c) => [c.id, publicConnector(c)]));
+      // A sync job's error is its queue job's, copied: worker identities only to admins (jobView.ts).
+      const audience = jobAudience(ctx.membership, ctx.user);
       return rows.map((j) => {
         const m = mapById.get(j.mappingId) ?? null;
         const q = j.jobId != null ? queueById.get(j.jobId) : undefined;
         return {
           ...j,
+          error: jobErrorFor(j.error, audience),
           attempts: q?.attempts ?? null,
           maxAttempts: q?.maxAttempts ?? null,
-          lastError: q?.lastError ?? null,
+          lastError: jobErrorFor(q?.lastError, audience),
           result: (q?.resultJson as MappingSyncResult | null | undefined) ?? null,
           mapping: m,
           connector: m ? (connById.get(m.connectorId) ?? null) : null,

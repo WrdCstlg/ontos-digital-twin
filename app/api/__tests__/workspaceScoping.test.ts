@@ -7,9 +7,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTableName, type Table } from "drizzle-orm";
 import type { User } from "@db/schema";
-import { connectors, iotConnectors, jobs, mappings, ontologyModules, syncJobs, users, workspaceMembers } from "@db/schema";
+import {
+  actionSubmissions,
+  actionTypeVersions,
+  connectors,
+  iotConnectors,
+  jobs,
+  mappings,
+  ontologyModules,
+  syncJobs,
+  users,
+  workspaceMembers,
+} from "@db/schema";
 import { appRouter } from "../router";
 import { iotBrokerManager } from "../services/iot/iotBrokerManager";
+import { leaseLapse } from "../services/jobs/queue";
 import { createMockContext, mockAdminUser, mockOntologistUser, mockViewerUser, mockWorkspace, mockWorkspaceBeta } from "./testHarness";
 
 const store = vi.hoisted(() => ({ tables: new Map<string, Record<string, unknown>[]>() }));
@@ -154,7 +166,7 @@ describe("what members see of each other and of the workspace's work", () => {
     expect(story.grounding.syncJobsTotal).toBe(1);
   });
 
-  it("a member who is not an admin sees jobs without worker identities or webhook addresses; an admin sees them", async () => {
+  it("a viewer sees jobs without worker identities or webhook addresses; an admin sees them", async () => {
     const hook = "https://hooks.slack.com/services/T000/B000/SENTINEL-HOOK";
     put(jobs, [
       {
@@ -170,5 +182,50 @@ describe("what members see of each other and of the workspace's work", () => {
       expect(seen).toContain("https://hooks.slack.com/…");
       expect(JSON.stringify(await read(inB(mockAdminUser, "admin")))).toContain("SENTINEL-HOOK");
     }
+  });
+
+  it("worker identities reach no member but an admin by any route: jobs, imports, the dashboard, an action's deliveries", async () => {
+    const hook = "https://hooks.slack.com/services/T000/B000/SENTINEL-HOOK";
+    const [w1, w2] = ["prod-worker-7-4242-abcd1234", "prod-worker-9-77-ffff0000"];
+    put(syncJobs, [
+      { id: 1, mappingId: 200, status: "failed", jobId: 41, rowsProcessed: 0, error: leaseLapse.abandoned(w1, 3, 3), startedAt: at, finishedAt: at, createdAt: at },
+    ]);
+    const job = (id: number, kind: string, status: string, leaseOwner: string | null, lastError: string) => ({
+      id, workspaceId: B.id, kind, status, attempts: 3, maxAttempts: 3, payloadJson: {}, resultJson: null, leaseOwner, leaseExpiresAt: null,
+      lastError, createdBy: "Admin User", createdAt: at, startedAt: at, finishedAt: null,
+    });
+    put(jobs, [
+      job(41, "mapping.sync", "failed", null, leaseLapse.abandoned(w1, 3, 3)),
+      job(51, "action.webhook", "running", w2, leaseLapse.reclaimed(w1, w2)),
+      job(52, "action.webhook", "failed", null, `webhook ${hook} answered HTTP 500`),
+    ]);
+    put(actionSubmissions, [
+      { id: 1, workspaceId: B.id, actionTypeId: 7, actionKey: "notify", actionVersion: 1, sideEffectJobIds: [51, 52], status: "applied", createdAt: at },
+    ]);
+    const definition = {
+      parameters: [{ name: "person", type: "object", classIri: "hr:Person", required: true }], criteria: [], effects: [],
+      sideEffects: [{ type: "webhook", url: hook }, { type: "webhook", url: hook }],
+    };
+    put(actionTypeVersions, [{ id: 70, actionTypeId: 7, version: 1, definitionJson: definition, changedBy: "a", createdAt: at }]);
+
+    const everyRoute = async (c: ReturnType<typeof inB>) =>
+      JSON.stringify([
+        await c.operations.listJobs(),
+        await c.operations.getJob({ jobId: 51 }),
+        await c.mapping.listSyncJobs(),
+        (await c.dashboard.overview()).kpis.lastSync,
+        await c.actions.getSubmission({ id: 1 }),
+      ]);
+    const viewer = await everyRoute(inB(mockViewerUser, "viewer"));
+    expect(viewer).not.toContain("prod-worker");
+    expect(viewer).not.toContain("SENTINEL-HOOK");
+    expect(viewer).toContain("lease held by a worker expired on attempt 3 of 3");
+    // An ontologist authors actions, so sees where they deliver, but not who ran them.
+    const ontologist = await everyRoute(inB(mockOntologistUser, "ontologist"));
+    expect(ontologist).not.toContain("prod-worker");
+    expect(ontologist).toContain("SENTINEL-HOOK");
+    const admin = await everyRoute(inB(mockAdminUser, "admin"));
+    expect(admin).toContain(w1);
+    expect(admin).toContain(w2);
   });
 });

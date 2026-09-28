@@ -46,6 +46,17 @@ export async function enqueueJob(db: DbOrTx, opts: EnqueueOptions): Promise<numb
   return id;
 }
 
+/**
+ * What the queue writes when a lease lapses. Both messages name workers, which
+ * only workspace admins see: jobView.ts leaves the names out for everyone
+ * else, and its test builds messages here, so a new wording cannot slip past.
+ */
+export const leaseLapse = {
+  abandoned: (owner: string | null, attempts: number, maxAttempts: number) =>
+    `lease held by ${owner ?? "a worker"} expired on attempt ${attempts} of ${maxAttempts}; the worker stopped responding`,
+  reclaimed: (owner: string | null, by: string) => `lease held by ${owner ?? "a worker"} expired; reclaimed by ${by}`,
+};
+
 export type ClaimResult =
   | { kind: "claimed"; job: Job }
   // The job's lease lapsed on its last allowed attempt: it is now failed, and
@@ -76,9 +87,7 @@ export async function claimNextJob(
     if (!candidate) return null;
 
     if (candidate.status === "running" && candidate.attempts >= candidate.maxAttempts) {
-      const reason =
-        `lease held by ${candidate.leaseOwner ?? "a worker"} expired on attempt ` +
-        `${candidate.attempts} of ${candidate.maxAttempts}; the worker stopped responding`;
+      const reason = leaseLapse.abandoned(candidate.leaseOwner, candidate.attempts, candidate.maxAttempts);
       await tx
         .update(jobs)
         .set({
@@ -101,9 +110,7 @@ export async function claimNextJob(
         leaseExpiresAt: sql`now() + interval ${leaseSeconds} second`,
         attempts: sql`${jobs.attempts} + 1`,
         startedAt: sql`coalesce(${jobs.startedAt}, now())`,
-        lastError: reclaimed
-          ? `lease held by ${candidate.leaseOwner ?? "a worker"} expired; reclaimed by ${workerId}`
-          : candidate.lastError,
+        lastError: reclaimed ? leaseLapse.reclaimed(candidate.leaseOwner, workerId) : candidate.lastError,
       })
       .where(eq(jobs.id, candidate.id));
     const [claimed] = await tx.select().from(jobs).where(eq(jobs.id, candidate.id));

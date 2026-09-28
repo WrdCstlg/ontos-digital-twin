@@ -8,6 +8,9 @@
  * jobs that deliver to it.
  */
 
+/** Who may define action types (actionsRouter), and so see their webhook addresses in full. */
+export const ACTION_AUTHOR_ROLES = ["admin", "ontologist"];
+
 /** Where an address goes, and nothing that could let someone post to it. */
 export function redactUrl(url: string): string {
   try {
@@ -20,6 +23,8 @@ export function redactUrl(url: string): string {
 }
 
 /** Every http(s) address in a message (a delivery error quotes its URL), redacted. */
+export function redactUrlsIn(text: string): string;
+export function redactUrlsIn(text: string | null | undefined): string | null;
 export function redactUrlsIn(text: string | null | undefined): string | null {
   if (text === null || text === undefined) return null;
   return text.replace(/https?:\/\/[^\s"'<>]+/gi, (m) => redactUrl(m));
