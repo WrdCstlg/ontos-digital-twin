@@ -9,7 +9,7 @@
 #   init    one-shot: migrations, first-boot demo seed, admin account
 #   app     the Ontos server and web client, on ${ONTOS_PORT:-3000}
 #   worker  runs background jobs (CSV imports) from the queue in MySQL
-#   engine-worker  the worker's own semantic engine
+#   engine-worker  the workers' semantic engine, which their replicas share
 #
 # Images are pinned by digest so a rebuild months from now produces the same
 # stack. Bump the tag and digest together.

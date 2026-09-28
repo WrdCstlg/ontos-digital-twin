@@ -10,10 +10,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import mysql from "mysql2/promise";
 import { lockName, LockLost, LockUnavailable, withNamedLock } from "../../lib/namedLock";
 import { openConnection } from "../../queries/connection";
+import { testDatabase } from "./database";
 import { installEngineLock } from "../../services/engineLock";
 import { SemanticEngineClient } from "../../services/semanticEngine";
 
 const opts = { waitSeconds: 5, holdMs: 30_000 };
+/** Lock names are the server's: this run's database keeps them apart from another run's on the same server. */
+const testLock = (what: string) => lockName("test", `${testDatabase()} ${what}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Something a task waits for, and the test opens. */
 function latch() {
@@ -39,7 +42,7 @@ const heldBySomeone = (name: string) => vi.waitFor(async () => expect(await hold
 
 describe("a named lock on a real MySQL", () => {
   it("keeps a second session waiting while the first holds it, and lets it in once the first lets go", async () => {
-    const name = lockName("test", "exclusion");
+    const name = testLock("exclusion");
     const events: string[] = [];
     const first = latch();
     const a = withNamedLock(openConnection, name, opts, async () => {
@@ -59,7 +62,7 @@ describe("a named lock on a real MySQL", () => {
   });
 
   it("turns a session away that cannot have it in time, without running its task", async () => {
-    const name = lockName("test", "refusal");
+    const name = testLock("refusal");
     const first = latch();
     const a = withNamedLock(openConnection, name, opts, () => first.opened);
     await heldBySomeone(name);
@@ -74,7 +77,7 @@ describe("a named lock on a real MySQL", () => {
   });
 
   it("is lost the moment its session is killed: the task is stopped, another session takes it, and the result is refused", async () => {
-    const name = lockName("test", "killed");
+    const name = testLock("killed");
     let stoppedWith: unknown;
     const a = withNamedLock(openConnection, name, opts, async (signal) => {
       await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -95,7 +98,7 @@ describe("a named lock on a real MySQL", () => {
   });
 
   it("stops waiting at once when the wait is called off, and leaves the lock free for the next session", async () => {
-    const name = lockName("test", "called-off");
+    const name = testLock("called-off");
     const first = latch();
     const a = withNamedLock(openConnection, name, opts, () => first.opened);
     await heldBySomeone(name);
@@ -119,7 +122,7 @@ describe("a named lock on a real MySQL", () => {
 
 describe("two engine clients given one lock", () => {
   it("never run their tasks at once", async () => {
-    const name = lockName("test", "two-engines");
+    const name = testLock("two-engines");
     const engines = [new SemanticEngineClient(), new SemanticEngineClient()];
     for (const engine of engines) installEngineLock(engine, { connect: openConnection, name, waitSeconds: 10 });
     const spans: { who: number; from: number; to: number }[] = [];

@@ -22,6 +22,11 @@ describe("which engine a process uses", () => {
     expect(engineIdentity("http://engine-worker:8086")).not.toBe(id);
   });
 
+  it("and on loopback, the same however the URL spells loopback", () => {
+    const spellings = ["http://localhost:8085", "http://127.0.0.1:8085", "http://127.1.2.3:8085/", "http://[::1]:8085", "http://0.0.0.0:8085"];
+    expect(new Set(spellings.map((u) => engineIdentity(u, undefined, "host-a"))).size).toBe(1);
+  });
+
   it("and for an engine on loopback, which host it is on: each host's loopback is its own", () => {
     for (const url of ["http://127.0.0.1:8085", "http://localhost:8085", "http://[::1]:8085"]) {
       expect(engineIdentity(url, undefined, "host-a"), url).not.toBe(engineIdentity(url, undefined, "host-b"));

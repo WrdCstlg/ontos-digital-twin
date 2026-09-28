@@ -76,7 +76,7 @@ export const services: Service[] = [
     id: "engine",
     name: "Semantic engine",
     kind: "engine",
-    runtime: "open-ontologies over Oxigraph · one per process",
+    runtime: "open-ontologies over Oxigraph · one for the API, one the workers share",
     responsibilities: ["SPARQL, OWL-RL reasoning, SHACL validation", "Holds one graph at a time"],
   },
   {
@@ -269,7 +269,7 @@ export const capabilities: Capability[] = [
   {
     area: "Architecture and scale",
     palantir: "Distributed services for object storage, indexing, actions and functions, run at enterprise scale.",
-    ontos: "An API process and any number of workers over one MySQL database, each process with its own semantic engine.",
+    ontos: "An API process and any number of workers over one MySQL database. The API has a semantic engine of its own; the workers share one, taking turns under a MySQL lock.",
     status: "gap",
   },
   {

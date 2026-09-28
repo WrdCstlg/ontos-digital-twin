@@ -88,11 +88,22 @@ describe("withNamedLock", () => {
     }
   });
 
+  it("stops the task when a heartbeat goes unanswered, and lets MySQL's release decide whether the lock held", async () => {
+    const held = fakeLockConnection({ heartbeatFails: true });
+    const run = withNamedLock(async () => held, "l", { ...opts, heartbeatMs: 5 }, untilStopped);
+    await expect(run).rejects.toThrow("could not confirm lock l is still held: checking its session failed: read ECONNRESET");
+    // The release was confirmed, so the lock held: no LockLost.
+    await expect(run).rejects.not.toBeInstanceOf(LockLost);
+    expect(statements(held).at(-1)).toBe("SELECT RELEASE_LOCK(?)");
+
+    const lost = fakeLockConnection({ heartbeatFails: true, releaseFails: true });
+    await expect(withNamedLock(async () => lost, "l", { ...opts, heartbeatMs: 5 }, untilStopped)).rejects.toBeInstanceOf(LockLost);
+  });
+
   it("checks its session while the task runs, and stops the task once MySQL no longer answers it as the holder", async () => {
     for (const [script, why] of [
       [{ mine: 0 }, "MySQL no longer counts it as this session's"],
       [{ mine: null }, "MySQL no longer counts it as this session's"],
-      [{ heartbeatFails: true }, "checking its session failed: read ECONNRESET"],
     ] as const) {
       const conn = fakeLockConnection(script);
       await expect(withNamedLock(async () => conn, "l", { ...opts, heartbeatMs: 5 }, untilStopped)).rejects.toThrow(
@@ -136,6 +147,24 @@ describe("withNamedLock", () => {
     const connect = vi.fn(async () => fakeLockConnection());
     await expect(withNamedLock(connect, "l", { ...opts, signal: controller.signal }, task)).rejects.toBeInstanceOf(LockUnavailable);
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("calls the wait off when the caller's signal aborts while its session is still connecting", async () => {
+    const conn = fakeLockConnection();
+    const controller = new AbortController();
+    const task = vi.fn(async () => 1);
+    const connect = async () => {
+      controller.abort(new Error("worker stopping"));
+      await new Promise((r) => setTimeout(r, 20));
+      return conn;
+    };
+
+    await expect(withNamedLock(connect, "l", { ...opts, signal: controller.signal }, task)).rejects.toThrow(
+      new LockUnavailable("the wait for lock l was called off: worker stopping"),
+    );
+    expect(task).not.toHaveBeenCalled();
+    expect(statements(conn)).not.toContain("SELECT GET_LOCK(?,");
+    expect(conn.destroy).toHaveBeenCalledTimes(1);
   });
 
   it("stops the task when the caller's signal aborts, and still releases the lock", async () => {

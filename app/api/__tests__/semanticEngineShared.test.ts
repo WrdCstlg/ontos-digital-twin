@@ -100,6 +100,25 @@ describe("an engine shared with other processes", () => {
   });
 });
 
+describe("a reasoning run told to stop", () => {
+  it("fails, rather than reporting a consistent graph with nothing inferred", async () => {
+    const held = new AbortController();
+    semanticEngine.shareWith((task) => task(held.signal));
+    vi.spyOn(semanticEngine, "ensureEngineRunning").mockResolvedValue(true);
+    vi.spyOn(semanticEngine, "checkHealth").mockResolvedValue({ alive: true, url: "http://engine", version: "test" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init!.body)) as unknown;
+      if (Array.isArray(body) && (body[0] as { command?: string })?.command === "reason") {
+        held.abort(new LockLost("lost lock l: its connection closed"));
+        return new Response(JSON.stringify([{ command: "reason", result: { initial_triples: 1, final_triples: 1, inferred_count: 0, iterations: 1 } }]));
+      }
+      return untilStopped(init!.signal!);
+    });
+
+    await expect(semanticEngine.exclusive(() => semanticEngine.runReasoning())).rejects.toBeInstanceOf(LockLost);
+  });
+});
+
 describe("an engine of this process's own", () => {
   it("aborts a task's engine requests when the caller's signal aborts", async () => {
     const caller = new AbortController();
@@ -137,6 +156,12 @@ describe("an engine of this process's own", () => {
     finishFirst();
     await Promise.all([first, third]);
     expect(order).toEqual(["first in", "first out", "third in"]);
+  });
+
+  it("keeps no finished task's result: the queue settles to nothing", async () => {
+    await semanticEngine.exclusive(async () => ({ report: "x".repeat(1000) }));
+    await expect(semanticEngine.exclusive(async () => Promise.reject(new Error("engine answered 500")))).rejects.toThrow();
+    expect(await (semanticEngine as unknown as { queue: Promise<unknown> }).queue).toBeUndefined();
   });
 
   it("does not start a task whose caller has already given up", async () => {
