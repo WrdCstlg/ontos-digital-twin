@@ -36,8 +36,9 @@ It ships with a fully seeded demo workspace (Acme Corp) containing ~3,600 graph 
 - **Global search** — ⌘K / Ctrl+K searches instances, classes, properties, insights,
   action types and connectors in the current workspace.
 - **Background jobs** — a durable queue in MySQL with leases and retries; any number of
-  worker processes; a worker that dies mid-job has its job reclaimed. The Operations
-  page shows the queue and the workers.
+  worker processes, each with its own semantic engine (see
+  [Known limitations](#known-limitations)); a worker that dies mid-job has its job
+  reclaimed. The Operations page shows the queue and the workers.
 - **Action types** — named, parameterised edits to the knowledge graph: typed parameters
   (including objects of a class), submission criteria, declarative rules (create, change
   and delete objects; add, remove and replace links), a minimum role and module scopes,
@@ -626,13 +627,20 @@ These are tracked, known behaviours rather than surprises:
 - **SHACL validation is unavailable when the engine is offline.**
   `ontology.validateShacl` returns `conforms: null` with `engineOffline: true`
   when the semantic engine is down. An import whose mapping warns (the default) commits
-  with no SHACL report at all; one whose mapping blocks waits, retried, until the engine
-  can check it. Callers should check `engineOffline` and `conforms !== null` before
+  with no SHACL report, and its audit entry says why. An import whose mapping blocks is
+  retried within its job's three attempts, a few seconds apart. It then fails, and can be
+  run again once the engine is back. If the engine answers that it cannot check the import
+  at all (data it cannot parse, shapes it cannot read), the import fails at once, with the
+  engine's reason. Callers should check `engineOffline` and `conforms !== null` before
   trusting the result.
-- **Pre-commit SHACL checks warn by default.** Violations are recorded in the audit entry
-  and surfaced as a warning, and the import goes ahead. A mapping set to **block on SHACL
-  violations** imports nothing when its rows fail the class's shapes, records the refusal in
-  the audit log, and fails the sync with the reasons.
+- **Pre-commit SHACL checks warn by default.** The check sees what the import will write:
+  the rows, each value typed as its property's declared range, and the links the rows make.
+  Results on the import's own rows are recorded in the audit entry and surfaced as a
+  warning, and the import goes ahead. A mapping set to **block on SHACL violations** imports
+  nothing when its rows break the class's shapes with a Violation (a Warning or Info is
+  recorded, not refused). It records the refusal in the audit log and fails the sync with
+  the reasons. Each attempt decides for itself: a refusal does not undo rows an earlier
+  attempt wrote after passing the check, before its worker died.
 - **A later import replaces what an action changed.** A CSV import writes the properties of
   the objects it maps, so an import after an action overwrites that action's edits to the
   same object. The object's provenance then shows the import, not the action.
@@ -663,8 +671,11 @@ These are tracked, known behaviours rather than surprises:
   Oxigraph engine is not partitioned per workspace: reasoning, SHACL validation, CSV
   import and SPARQL each clear the store and load what they need. The app runs those
   sequences one at a time under a lock, so they no longer interfere, but a slow
-  reasoning run delays the next query. The lock lives in the app process, so several
-  app replicas must not share one engine.
+  reasoning run delays the next query. The lock lives in the process, so several app
+  replicas must not share one engine. Replicas of the worker do share `engine-worker` in
+  `compose.yaml`. An import whose SHACL report was taken on another replica's graph is
+  treated as unchecked (its mapping, if set to block, retries), but the other engine work
+  of concurrent imports is not yet kept apart. Run one worker per engine until it is.
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that
   has no hash yet will accept a known fixed bootstrap password and be upgraded to a real
