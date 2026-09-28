@@ -247,7 +247,7 @@ describe("what members see of each other and of the workspace's work", () => {
     for (const read of [(c: ReturnType<typeof inB>) => c.operations.listJobs(), (c: ReturnType<typeof inB>) => c.operations.getJob({ jobId: 31 })]) {
       const seen = JSON.stringify(await read(inB(mockViewerUser, "viewer")));
       expect(seen).not.toMatch(/SENTINEL/);
-      expect(seen).toContain("https://hooks.slack.com/…");
+      expect(seen).toContain("https://*.slack.com/…");
       expect(JSON.stringify(await read(inB(mockAdminUser, "admin")))).toContain("SENTINEL-HOOK");
     }
   });

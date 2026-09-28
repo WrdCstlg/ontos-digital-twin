@@ -2,21 +2,39 @@
  * An action's webhook address is often its credential: a Slack or Teams
  * incoming webhook, or a URL with a token in its path or query, lets anyone
  * who has it post as the integration. Only people who may author actions (who
- * wrote the address in) see it; everyone else sees where it goes: its origin.
- * The address travels in several places, and each is redacted here: action
- * definitions (current and every version), and the results and errors of the
- * jobs that deliver to it.
+ * wrote the address in) see it; everyone else sees where it goes: its scheme
+ * and its registrable domain. The address travels in several places, and each
+ * is redacted here: action definitions (current and every version), and the
+ * results and errors of the jobs that deliver to it.
  */
+import { isIP } from "node:net";
 
 /** Who may define action types (actionsRouter), and so see their webhook addresses in full. */
 export const ACTION_AUTHOR_ROLES = ["admin", "ontologist"];
+
+/**
+ * A host as far as it tells where an address goes: its registrable domain,
+ * with the labels before it masked (hooks.slack.com is *.slack.com). Some
+ * services put the credential in the host itself: a Pipedream or ngrok
+ * subdomain, an AWS Lambda function URL. The domain is the last two labels,
+ * or three under a two-letter country code with a short second level
+ * (example.co.uk). An IP address or a single-label host is kept as it is.
+ */
+export function maskedHost(hostname: string): string {
+  if (isIP(hostname.replace(/^\[|\]$/g, "")) || !hostname.includes(".")) return hostname;
+  const labels = hostname.split(".");
+  const [tld, second] = [labels[labels.length - 1], labels[labels.length - 2]];
+  const keep = labels.length >= 3 && tld.length === 2 && second.length <= 3 ? 3 : 2;
+  return labels.length > keep ? `*.${labels.slice(-keep).join(".")}` : hostname;
+}
 
 /** Where an address goes, and nothing that could let someone post to it. */
 export function redactUrl(url: string): string {
   try {
     const u = new URL(url);
     if (u.protocol !== "http:" && u.protocol !== "https:") return "(hidden)";
-    return u.pathname === "/" && !u.search && !u.hash ? u.origin : `${u.origin}/…`;
+    const where = `${u.protocol}//${maskedHost(u.hostname)}${u.port ? `:${u.port}` : ""}`;
+    return u.pathname === "/" && !u.search && !u.hash ? where : `${where}/…`;
   } catch {
     return "(hidden)";
   }

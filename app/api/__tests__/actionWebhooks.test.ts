@@ -59,7 +59,7 @@ describe("action webhook addresses", () => {
       const c = caller(mockViewerUser, role);
       const seen = JSON.stringify([await c.actions.listTypes(), await c.actions.getType({ key: "notify" })]);
       expect(seen, role).not.toContain("SENTINEL-HOOK");
-      expect(seen, role).toContain("https://hooks.slack.com/…");
+      expect(seen, role).toContain("https://*.slack.com/…");
     }
   });
 
@@ -83,8 +83,8 @@ describe("action webhook addresses", () => {
     const asViewer = await caller(mockViewerUser, "viewer").actions.getSubmission({ id: 1 });
     const viewer = JSON.stringify(asViewer);
     expect(viewer).not.toContain("SENTINEL-HOOK");
-    expect(viewer).toContain("webhook https://hooks.slack.com/… answered HTTP 500");
-    expect(asViewer.definition?.sideEffects[0].url).toBe("https://hooks.slack.com/…");
+    expect(viewer).toContain("webhook https://*.slack.com/… answered HTTP 500");
+    expect(asViewer.definition?.sideEffects[0].url).toBe("https://*.slack.com/…");
     const asAdmin = await caller(mockAdminUser, "admin").actions.getSubmission({ id: 1 });
     expect(JSON.stringify(asAdmin)).toContain("SENTINEL-HOOK");
     expect(asAdmin.definition?.sideEffects[0].url).toBe(HOOK);
@@ -92,13 +92,25 @@ describe("action webhook addresses", () => {
 });
 
 describe("webhookView", () => {
-  it("keeps an address's origin, and never its path, query, fragment or user name", () => {
-    expect(redactUrl("https://hooks.slack.com/services/T/B/X")).toBe("https://hooks.slack.com/…");
-    expect(redactUrl("https://user:pw@hooks.example.com/")).toBe("https://hooks.example.com");
-    expect(redactUrl("https://hooks.example.com/?token=X")).toBe("https://hooks.example.com/…");
-    expect(redactUrl("https://hooks.example.com")).toBe("https://hooks.example.com");
+  it("keeps where an address goes, and never its path, query, fragment or user name", () => {
+    expect(redactUrl("https://hooks.slack.com/services/T/B/X")).toBe("https://*.slack.com/…");
+    expect(redactUrl("https://user:pw@hooks.example.com/")).toBe("https://*.example.com");
+    expect(redactUrl("https://hooks.example.com/?token=X")).toBe("https://*.example.com/…");
+    expect(redactUrl("https://hooks.example.com")).toBe("https://*.example.com");
     expect(redactUrl("ftp://files.example.com/x")).toBe("(hidden)");
     expect(redactUrl("not a url")).toBe("(hidden)");
+  });
+
+  it("masks a host down to its registrable domain, since some services keep the credential in the host", () => {
+    expect(redactUrl("https://eo1a2b3c4d5e6f7.m.pipedream.net")).toBe("https://*.pipedream.net");
+    expect(redactUrl("https://abcdefgh1234.lambda-url.us-east-1.on.aws/")).toBe("https://*.on.aws");
+    expect(redactUrl("https://7f3c-81-2-69-160.ngrok-free.app/hook")).toBe("https://*.ngrok-free.app/…");
+    expect(redactUrl("https://hooks.example.co.uk/x")).toBe("https://*.example.co.uk/…");
+    // Nothing before the domain to mask; a port is kept; an IP or single-label host is shown as it is.
+    expect(redactUrl("https://example.com:8443/x")).toBe("https://example.com:8443/…");
+    expect(redactUrl("http://93.184.216.34/hook")).toBe("http://93.184.216.34/…");
+    expect(redactUrl("https://[2606:4700::1111]/hook")).toBe("https://[2606:4700::1111]/…");
+    expect(redactUrl("http://localhost:3000/x")).toBe("http://localhost:3000/…");
   });
 
   it("redacts every address in a message, and leaves other words alone", () => {
@@ -116,7 +128,7 @@ describe("webhookView", () => {
       'https://hooks.example.com/a"b SECRETTAIL',
     ]) {
       expect(redactUrlsIn(`webhook ${url} answered HTTP 302 (redirects are not followed)`), url).toBe(
-        "webhook https://hooks.example.com/… answered HTTP 302 (redirects are not followed)",
+        "webhook https://*.example.com/… answered HTTP 302 (redirects are not followed)",
       );
     }
     expect(redactUrlsIn("not a URL: https://exa mple.com/SECRETTAIL")).toBe("not a URL: (hidden)");
@@ -141,11 +153,11 @@ describe("webhookView", () => {
   it("redacts a definition's side effects and a delivery result, leaving anything else as it is", () => {
     expect(redactDefinition({ parameters: [], sideEffects: [{ type: "webhook", url: HOOK }, { type: "other" }] })).toEqual({
       parameters: [],
-      sideEffects: [{ type: "webhook", url: "https://hooks.slack.com/…" }, { type: "other" }],
+      sideEffects: [{ type: "webhook", url: "https://*.slack.com/…" }, { type: "other" }],
     });
     expect(redactDefinition(null)).toBeNull();
     expect(redactDefinition({ parameters: [] })).toEqual({ parameters: [] });
-    expect(redactDeliveryResult({ url: HOOK, status: 200 })).toEqual({ url: "https://hooks.slack.com/…", status: 200 });
+    expect(redactDeliveryResult({ url: HOOK, status: 200 })).toEqual({ url: "https://*.slack.com/…", status: 200 });
     expect(redactDeliveryResult({ rows: 3 })).toEqual({ rows: 3 });
   });
 });

@@ -5,7 +5,7 @@ import { actionSubmissions, actionTypeVersions } from "@db/schema";
 import { actionDefinitionSchema } from "@contracts/actions";
 import { getDb } from "../../queries/connection";
 import { PermanentJobError, type JobHandler } from "../jobs/worker";
-import { redactUrl } from "./webhookView";
+import { maskedHost, redactUrl } from "./webhookView";
 
 /**
  * Side effects of applied actions, run by the worker after the edits commit:
@@ -82,10 +82,12 @@ export async function assertDeliverable(url: string, allowInternal = process.env
   if (allowInternal) return;
   const host = u.hostname.replace(/^\[|\]$/g, "");
   const addrs = isIP(host) ? [{ address: host }] : await lookup(host, { all: true }).catch(() => []);
-  if (addrs.length === 0) throw new Error(`cannot resolve ${host}`);
+  // The host is named as redactUrl shows it, and the address it resolved to
+  // not at all: the error is stored and shown to members who may not see either.
+  if (addrs.length === 0) throw new Error(`cannot resolve ${maskedHost(host)}`);
   const internal = addrs.find((a) => isInternalAddress(a.address));
   if (internal) {
-    throw new PermanentJobError(`${host} resolves to ${internal.address}, an internal address; set ACTION_WEBHOOK_ALLOW_PRIVATE=true to allow it`);
+    throw new PermanentJobError(`${maskedHost(host)} resolves to an internal address; set ACTION_WEBHOOK_ALLOW_PRIVATE=true to allow it`);
   }
 }
 

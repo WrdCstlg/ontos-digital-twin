@@ -40,7 +40,7 @@ describe("jobErrorFor", () => {
 
   it("shows each detail only to whom it is for", () => {
     expect(jobErrorFor(message, viewer)).toBe(
-      "webhook https://hooks.slack.com/… answered HTTP 500; lease held by a worker expired; reclaimed by another worker",
+      "webhook https://*.slack.com/… answered HTTP 500; lease held by a worker expired; reclaimed by another worker",
     );
     expect(jobErrorFor(message, author)).toBe(
       `webhook ${HOOK} answered HTTP 500; lease held by a worker expired; reclaimed by another worker`,
@@ -72,7 +72,7 @@ describe("jobFor", () => {
   });
 
   it("redacts a webhook delivery's address for non-authors, and leaves other jobs' results alone", () => {
-    expect(jobFor(job("action.webhook"), viewer).resultJson).toEqual({ url: "https://hooks.slack.com/…", status: 200 });
+    expect(jobFor(job("action.webhook"), viewer).resultJson).toEqual({ url: "https://*.slack.com/…", status: 200 });
     expect(jobFor(job("action.webhook"), author).resultJson).toEqual({ url: HOOK, status: 200 });
     expect(jobFor(job("mapping.sync"), viewer).resultJson).toEqual({ url: HOOK, status: 200 });
   });
