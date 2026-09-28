@@ -308,6 +308,7 @@ Run from `app/`.
 | `npm run format` | Prettier |
 | `npm test` | Vitest suite |
 | `npm run test:mysql` | Server tests on a real MySQL 8.4 (see [Testing](#testing)) |
+| `npm run test:e2e` | Playwright browser tests against a running stack — see [Testing](#testing) |
 | `npm run db:generate` | Generate a SQL migration into `db/migrations` after a schema change |
 | `npm run db:migrate` | Apply pending migrations with drizzle-kit |
 | `npm run db:push` | Push the schema straight to MySQL, bypassing migrations — prototyping only |
@@ -613,7 +614,8 @@ binary in place (see [Semantic engine](#semantic-engine)) but not a daemon alrea
 
 Router tests call tRPC procedures with a mock context and a mocked or in-memory database,
 and `bootRoutes.test.ts` does the same for the plain HTTP routes. They check permissions,
-workspace scoping and responses. A few React components have render tests; pages do not.
+workspace scoping and responses. A few React components have render tests; pages are
+exercised by the browser tests below.
 
 CI has no `app/.env`. To run the suite as CI does, point dotenv at a missing file:
 `DOTENV_CONFIG_PATH=does-not-exist.env npm test`.
@@ -656,6 +658,38 @@ migration history in order and append-only: drizzle skips, on a database already
 a migration dated before the last it applied, and never runs an edited one again. The Docker
 job still boots the full stack and smoke-tests login, the seeded graph and an import run by
 the worker.
+
+### Browser tests
+
+`app/e2e` holds Playwright tests that drive the web app in Chromium against a running
+stack: the landing page and sign-in, each persona's way into the workspace shell and its
+navigation, the graph explorer, and what each role is offered on the twin, IoT, insights
+and mapping pages. A test that checks a control is withheld first waits for the page's
+`capabilities` answer from the server, since a page withholds such controls until it has
+one.
+
+CI runs them on every push and pull request, in the `e2e` job: it boots the compose stack
+with persona login on and runs the suite against it. When the job fails it keeps the
+Playwright report and traces as a build artifact for 14 days.
+
+To run them locally, start a stack with persona login on, `ALLOW_DEMO_LOGIN=true` in the
+root `.env`, then:
+
+```bash
+cd app
+npx playwright install chromium                   # once
+npm run test:e2e                                  # the stack at http://localhost:3000
+BASE_URL=http://localhost:3100 npm run test:e2e   # a stack on another ONTOS_PORT
+```
+
+The tests exercise what the stack serves, so after changing the app, rebuild it with
+`docker compose up --build` first. `npm run dev` works too: persona login is always on
+outside production.
+
+Most tests only look. The mapping test has to change data every test can see: it sets a
+seeded mapping's SHACL check to block, then back to warn. It is tagged `@shared-state`,
+and tests with that tag run one at a time in a project of their own, so two runs of one
+never overlap, under `--repeat-each` as under retries.
 
 ---
 
