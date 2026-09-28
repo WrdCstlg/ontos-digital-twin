@@ -1,0 +1,146 @@
+{
+  "compose_project": "thesis-ontos-39e811c0",
+  "driver": {
+    "drain": {
+      "deadline_ms": 10000,
+      "drained": true,
+      "outcome": "completed",
+      "waited_ms": 1
+    },
+    "exit_code": 0,
+    "started": true,
+    "stopped": false
+  },
+  "oracles": [
+    {
+      "class": "crash",
+      "explanation": "all 8 node process(es) ran to the end of the world without an unplanned exit",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "no_crash",
+      "status": "ok",
+      "valid_phases": [
+        "BOOT",
+        "SEED",
+        "DRIVE",
+        "PERTURB",
+        "HEAL",
+        "QUIESCE",
+        "ASSERT",
+        "TEARDOWN"
+      ]
+    },
+    {
+      "class": "crash",
+      "explanation": "scanned 247 line(s) across 8 log stream(s) against 12 crash signature(s) with no match",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "no_panic_log",
+      "status": "ok",
+      "valid_phases": [
+        "BOOT",
+        "SEED",
+        "DRIVE",
+        "PERTURB",
+        "HEAL",
+        "QUIESCE",
+        "ASSERT",
+        "TEARDOWN"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "all 6 node(s) with a declared health probe answered it after HEAL (within 2014ms convergence window); not judged, no health entry declared: db, sink",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "availability_after_heal",
+      "status": "ok",
+      "valid_phases": [
+        "QUIESCE",
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "all 293 operation(s) completed within SLO ceiling (5000ms) after HEAL",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "no_stuck_op",
+      "status": "ok",
+      "valid_phases": [
+        "HEAL",
+        "QUIESCE",
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "every side effect of an applied action was delivered: 155 side-effect job(s): succeeded 155.",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "actions.delivered",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "safety",
+      "explanation": "every acknowledged action is applied, every submission has one audit entry, every edit traces to an applied submission, and every latest gate note is in place: 157 submission(s), 156 applied; the driver recorded 39 action(s) (ok 38, fail 0, info 1).",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "actions.durable",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "consistency",
+      "explanation": "every acknowledged submission through the Ontology API was visible, as applied, to the client's next read: 120 submission(s) through the API, 117 acknowledged; 117 judged by the client's next read (117 saw their own write, 0 a later one, 0 of those by a write the history does not name), 0 not judged.",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "api.read_your_writes",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "safety",
+      "explanation": "no lease lapsed across 170 job(s).",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "jobs.lease_lapse",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "safety",
+      "explanation": "no operation of the signed-in driver was refused as signed out: 293 operation(s) completed (action 39, api_action 120, api_read 117, sync 17).",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "session.honoured",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    },
+    {
+      "class": "liveness",
+      "explanation": "no sync job is left queued or running: sync_jobs holds 21 row(s): failed 1, succeeded 20. The driver recorded 17 sync operations (ok 16, fail 1, info 0, never completed 0).",
+      "first_seen_ms": 0,
+      "observed_phase": "ASSERT",
+      "oracle": "sync_jobs.settle",
+      "status": "ok",
+      "valid_phases": [
+        "ASSERT"
+      ]
+    }
+  ],
+  "outcome": "harness_error",
+  "seed": 4415405792204367376,
+  "world": 1
+}
