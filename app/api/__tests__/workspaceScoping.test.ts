@@ -24,7 +24,6 @@ import {
   workspaceMembers,
 } from "@db/schema";
 import { appRouter } from "../router";
-import { iotBrokerManager } from "../services/iot/iotBrokerManager";
 import { leaseLapse } from "../services/jobs/queue";
 import { explainShaclReport } from "../services/explainableShacl";
 import { createMockContext, mockAdminUser, mockOntologistUser, mockViewerUser, mockWorkspace, mockWorkspaceBeta } from "./testHarness";
@@ -55,6 +54,7 @@ const mapping = (id: number, connectorId: number, moduleId: number, name: string
 const broker = (id: number, workspaceId: number) => ({
   id, workspaceId, name: `Broker ${id}`, brokerType: "mqtt", endpointUrl: `mqtts://broker-${id}.example:8883`, topicPattern: null, clientId: null,
   authType: "none", status: "connected", configJson: {}, lastConnectedAt: null, messageCount: 0, errorCount: 0, lastError: null, createdAt: at,
+  enabled: true, configVersion: 1, observedVersion: 1, consumerOwner: "prod-worker-7-4242-abcd1234", observedAt: at,
 });
 
 beforeEach(() => {
@@ -132,22 +132,34 @@ describe("broker connectors are managed by the workspace's admins, and only its 
   });
 
   it("an admin cannot restart, stop or delete another workspace's live broker", async () => {
-    const start = vi.spyOn(iotBrokerManager, "startBroker").mockResolvedValue(true);
-    const stop = vi.spyOn(iotBrokerManager, "stopBroker").mockResolvedValue(undefined);
     const admin = inB(mockAdminUser, "admin");
     await expect(admin.iot.upsertConnector(upsert(5))).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(admin.iot.toggleConnector({ id: 5, enable: false })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(admin.iot.deleteConnector({ id: 5 })).rejects.toMatchObject({ code: "NOT_FOUND" });
-    expect(start).not.toHaveBeenCalled();
-    expect(stop).not.toHaveBeenCalled();
-    expect(rows(iotConnectors).find((c) => c.id === 5)).toMatchObject({ workspaceId: A.id, name: "Broker 5", status: "connected" });
+    // What it should do is untouched, so the IoT consumer leaves it running.
+    expect(rows(iotConnectors).find((c) => c.id === 5)).toMatchObject({ workspaceId: A.id, name: "Broker 5", enabled: true, configVersion: 1 });
   });
 
-  it("but manages their own", async () => {
-    const stop = vi.spyOn(iotBrokerManager, "stopBroker").mockResolvedValue(undefined);
-    await inB(mockAdminUser, "admin").iot.deleteConnector({ id: 6 });
-    expect(stop).toHaveBeenCalledWith(6);
+  it("but manages their own: what they set is what the consumer acts on, and it is pending until it has", async () => {
+    const admin = inB(mockAdminUser, "admin");
+    expect(await admin.iot.toggleConnector({ id: 6, enable: false })).toEqual({ success: true, enabled: false, pending: true });
+    expect(rows(iotConnectors).find((c) => c.id === 6)).toMatchObject({ enabled: false, configVersion: 2, status: "connected" });
+    expect((await admin.iot.listConnectors())[0]).toMatchObject({ id: 6, enabled: false, status: "disconnecting", pending: true });
+
+    expect(await admin.iot.upsertConnector({ ...upsert(6), connectNow: true })).toEqual({ success: true, id: 6, pending: true });
+    expect(rows(iotConnectors).find((c) => c.id === 6)).toMatchObject({ name: "Mine", enabled: true, configVersion: 3 });
+
+    expect(await admin.iot.deleteConnector({ id: 6 })).toEqual({ success: true, pending: true });
     expect(rows(iotConnectors).map((c) => c.id)).toEqual([5]);
+  });
+
+  it("the process that connects a broker is named to admins alone, as a worker is", async () => {
+    for (const role of ["viewer", "editor", "ontologist"] as const) {
+      const [c] = await inB(mockViewerUser, role).iot.listConnectors();
+      expect(c.consumerOwner, role).toBeNull();
+    }
+    const [own] = await inB(mockAdminUser, "admin").iot.listConnectors();
+    expect(own.consumerOwner).toBe("prod-worker-7-4242-abcd1234");
   });
 
   it("a member who does not manage brokers sees where one points, never the login written into its URL", async () => {

@@ -319,11 +319,6 @@ app.use("/api/trpc/*", async (c) => {
 app.route("/api/v1", publicApi);
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
-// Initialize background IoT broker connectors if configured
-import("./services/iot/iotBrokerManager")
-  .then(({ iotBrokerManager }) => iotBrokerManager.init())
-  .catch((err) => console.warn("[boot] IoT broker auto-start error:", err));
-
 // Global Error Handler
 app.onError((err, c) => {
   const reqId = c.req.header("x-request-id") || "unknown";
@@ -379,11 +374,19 @@ if (env.isProduction) {
 
 // Background jobs normally run in the worker process (dist/worker.js). In local
 // development this process runs one itself, so a single command runs everything.
+// The IoT consumer goes where the jobs go: in the worker, or here when this
+// process runs them (ONTOS_IOT_CONSUMER decides otherwise). However many
+// processes run it, only the one holding its lease connects to brokers.
 {
   const { embeddedWorkerEnabled, startEmbeddedWorker } = await import("./services/jobs/embedded");
   if (embeddedWorkerEnabled()) {
     const w = await startEmbeddedWorker();
     console.log(`[boot] embedded job worker ${w.id} started`);
+  }
+  const { iotConsumerEnabled, startIotConsumer } = await import("./services/iot/iotConsumer");
+  if (iotConsumerEnabled(embeddedWorkerEnabled())) {
+    const consumer = await startIotConsumer();
+    console.log(`[boot] IoT consumer ${consumer.owner} started`);
   }
 }
 
@@ -403,10 +406,15 @@ const gracefulShutdown = async (signal: string) => {
       const { embeddedWorker } = await import("./services/jobs/embedded");
       await embeddedWorker()?.stop(5000);
     },
+    // Its connections closed and its lease released, so another process takes
+    // over at once rather than when the lease lapses.
     stopIot: async () => {
-      const { iotBrokerManager } = await import("./services/iot/iotBrokerManager");
-      await iotBrokerManager.shutdownAll();
-      console.log("[process] Disconnected all active IoT broker adapters.");
+      const { localIotConsumer } = await import("./services/iot/iotConsumer");
+      const consumer = localIotConsumer();
+      if (consumer) {
+        await consumer.stop();
+        console.log("[process] Stopped the IoT consumer and released its lease.");
+      }
     },
     closeDatabase: async () => {
       const { closeDb } = await import("./queries/connection");

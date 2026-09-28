@@ -98,8 +98,13 @@ export function IotConnectorsModal({
   const [showAddForm, setShowAddForm] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Queries & Mutations
-  const connectors = trpc.iot.listConnectors.useQuery(undefined, { enabled: open });
+  // Queries & Mutations. A broker is connected by the IoT consumer, in whichever
+  // process holds its lease, which reports back within seconds: while a change
+  // is pending, ask again every two.
+  const connectors = trpc.iot.listConnectors.useQuery(undefined, {
+    enabled: open,
+    refetchInterval: (query) => (query.state.data?.some((c) => c.pending) ? 2000 : false),
+  });
   const webhookConfig = trpc.iot.getWebhookConfig.useQuery(undefined, { enabled: open });
   // Brokers (and their credentials) are a workspace admin's; sending telemetry
   // writes twin state, an editor's or above. Controls a role cannot use are
@@ -113,8 +118,8 @@ export function IotConnectorsModal({
   const canManageBrokers = caps.data?.canManageBrokers ?? false;
   const canIngest = caps.data?.canIngest ?? false;
   const upsertConnector = trpc.iot.upsertConnector.useMutation({
-    onSuccess: () => {
-      toast.success('IoT Broker connection saved');
+    onSuccess: (data) => {
+      toast.success(data.pending ? 'IoT Broker saved: connecting…' : 'IoT Broker saved');
       setShowAddForm(false);
       utils.iot.listConnectors.invalidate();
     },
@@ -122,7 +127,7 @@ export function IotConnectorsModal({
   });
   const toggleConnector = trpc.iot.toggleConnector.useMutation({
     onSuccess: (data) => {
-      toast.success(`Broker ${data.status === 'connected' ? 'connected' : 'disconnected'}`);
+      toast.success(data.enabled ? 'Connecting the broker…' : 'Disconnecting the broker…');
       utils.iot.listConnectors.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -153,6 +158,7 @@ export function IotConnectorsModal({
   const [formUrl, setFormUrl] = useState('');
   const [formTopic, setFormTopic] = useState('ontos/twins/+/telemetry');
   const [formAuthType, setFormAuthType] = useState<'none' | 'basic' | 'tls_cert'>('none');
+  const [formVersion, setFormVersion] = useState<4 | 5>(4);
   const [formUsername, setFormUsername] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [formCert, setFormCert] = useState('');
@@ -182,6 +188,8 @@ export function IotConnectorsModal({
       brokerType: formType,
       endpointUrl: formUrl,
       topicPattern: formTopic,
+      // Azure IoT Hub's device endpoint speaks MQTT 3.1.1 only.
+      protocolVersion: formType === 'azure_iot' ? 4 : formVersion,
       authType: formAuthType,
       username: formUsername || undefined,
       password: formPassword || undefined,
@@ -287,15 +295,31 @@ export function IotConnectorsModal({
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <Label htmlFor="iot-broker-url" className="text-xs">Endpoint URL</Label>
-                  <Input
-                    id="iot-broker-url"
-                    placeholder="mqtts://... or mqtt://..."
-                    value={formUrl}
-                    onChange={(e) => setFormUrl(e.target.value)}
-                    required
-                  />
+                <div className="grid grid-cols-[1fr_auto] gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="iot-broker-url" className="text-xs">Endpoint URL</Label>
+                    <Input
+                      id="iot-broker-url"
+                      placeholder="mqtts://... or mqtt://..."
+                      value={formUrl}
+                      onChange={(e) => setFormUrl(e.target.value)}
+                      required
+                    />
+                  </div>
+                  {formType !== 'azure_iot' && (
+                    <div className="space-y-1">
+                      <Label htmlFor="iot-mqtt-version" className="text-xs">MQTT Version</Label>
+                      <select
+                        id="iot-mqtt-version"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                        value={formVersion}
+                        onChange={(e) => setFormVersion(e.target.value === '5' ? 5 : 4)}
+                      >
+                        <option value={4}>3.1.1</option>
+                        <option value={5}>5.0</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -371,7 +395,7 @@ export function IotConnectorsModal({
                     Cancel
                   </Button>
                   <Button type="submit" size="sm" disabled={upsertConnector.isPending}>
-                    {upsertConnector.isPending ? 'Connecting...' : 'Save & Connect'}
+                    {upsertConnector.isPending ? 'Saving…' : 'Save & Connect'}
                   </Button>
                 </div>
               </form>
@@ -400,7 +424,11 @@ export function IotConnectorsModal({
                           <Badge variant="outline" className="text-[10px] uppercase font-mono">
                             {c.brokerType}
                           </Badge>
-                          {c.status === 'connected' ? (
+                          {c.pending ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground font-medium">
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" /> {c.enabled ? 'Connecting…' : 'Disconnecting…'}
+                            </span>
+                          ) : c.status === 'connected' ? (
                             <span className="inline-flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
                               <CheckCircle2 className="w-3.5 h-3.5" /> Connected
                             </span>
@@ -431,11 +459,11 @@ export function IotConnectorsModal({
                           <Button
                             size="icon"
                             variant="ghost"
-                            title={c.status === 'connected' ? 'Disconnect' : 'Connect'}
-                            aria-label={c.status === 'connected' ? `Disconnect ${c.name}` : `Connect ${c.name}`}
-                            onClick={() => toggleConnector.mutate({ id: c.id, enable: c.status !== 'connected' })}
+                            title={c.enabled ? 'Disconnect' : 'Connect'}
+                            aria-label={c.enabled ? `Disconnect ${c.name}` : `Connect ${c.name}`}
+                            onClick={() => toggleConnector.mutate({ id: c.id, enable: !c.enabled })}
                           >
-                            <Power className={`w-4 h-4 ${c.status === 'connected' ? 'text-emerald-500' : 'text-muted-foreground'}`} />
+                            <Power className={`w-4 h-4 ${c.enabled ? 'text-emerald-500' : 'text-muted-foreground'}`} />
                           </Button>
                           <Button
                             size="icon"

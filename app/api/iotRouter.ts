@@ -1,29 +1,47 @@
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { iotConnectors } from "@db/schema";
+import { iotConnectors, type IotConnector } from "@db/schema";
 import { createRouter, EDITOR_ROLES, workspaceAdminMutation, workspaceOntologistMutation, workspaceQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { displayUrl, withoutUserinfo } from "./services/connectorView";
-import { brokerConfigFrom, iotBrokerManager, unreadableBrokerSecretMessage } from "./services/iot/iotBrokerManager";
+import { brokerConfigFrom, unreadableBrokerSecretMessage } from "./services/iot/brokerConfig";
+import { nudgeIotConsumer } from "./services/iot/iotConsumer";
 import { credentialInputProblem, sealSecret, secretContext, SecretUnreadableError } from "./lib/secretBox";
 import { ingestTelemetry, sampleDeviceId, webhookWorkspaceId } from "./services/iot/iotIngestion";
 import { hasWorkspaceRole } from "./services/workspaceGuard";
-import type { IotBrokerConfig, RawTelemetryPoint } from "./services/iot/types";
+import { CONNECTED_BROKER_TYPES, type BrokerType, type RawTelemetryPoint } from "./services/iot/types";
 
 /**
- * The workspace's own broker connector, or NOT_FOUND. The broker manager keys
- * live connections by connector id alone, so every procedure that starts or
- * stops one checks the id is this workspace's first.
+ * The workspace's own broker connector, or NOT_FOUND. Connectors are found by
+ * id, so every procedure that changes one checks the id is this workspace's first.
  */
 async function ownConnector(id: number, workspaceId: number) {
   const [row] = await getDb()
-    .select({ id: iotConnectors.id, workspaceId: iotConnectors.workspaceId })
+    .select({ id: iotConnectors.id, workspaceId: iotConnectors.workspaceId, brokerType: iotConnectors.brokerType })
     .from(iotConnectors)
     .where(and(eq(iotConnectors.id, id), eq(iotConnectors.workspaceId, workspaceId)))
     .limit(1);
   if (!row || row.workspaceId !== workspaceId) throw new TRPCError({ code: "NOT_FOUND", message: "IoT connector not found" });
   return row;
+}
+
+/** A connector the IoT consumer connects to; a webhook connector receives instead. */
+const connects = (brokerType: BrokerType) => CONNECTED_BROKER_TYPES.includes(brokerType);
+
+type ShownStatus = IotConnector["status"] | "connecting" | "disconnecting";
+
+/**
+ * What a connector's row says to show. The IoT consumer holding the lease, in
+ * whichever process, writes what it observed and the settings version it
+ * observed. Until that version is the current one, a change is pending, and
+ * shown as connecting or disconnecting. A webhook connector has nothing to
+ * observe: it is as its admins set it.
+ */
+function shownStatus(r: IotConnector): ShownStatus {
+  if (!connects(r.brokerType)) return r.enabled ? "connected" : "disconnected";
+  if (r.observedVersion !== r.configVersion) return r.enabled ? "connecting" : "disconnecting";
+  return r.status;
 }
 
 export const iotRouter = createRouter({
@@ -33,7 +51,7 @@ export const iotRouter = createRouter({
     canIngest: hasWorkspaceRole(ctx.membership, ctx.user, EDITOR_ROLES),
   })),
 
-  /** List all configured IoT connectors with live runtime status and stats. */
+  /** The workspace's connectors: what their admins set, and what the IoT consumer last observed. */
   listConnectors: workspaceQuery.query(async ({ ctx }) => {
     const ws = ctx.workspace;
     const db = getDb();
@@ -43,14 +61,12 @@ export const iotRouter = createRouter({
       .where(eq(iotConnectors.workspaceId, ws.id))
       .orderBy(desc(iotConnectors.createdAt));
 
-    const liveStats = iotBrokerManager.getAllStats();
     // A broker URL can carry its login (mqtt.js reads user:password@ from it):
     // in full to the admins who manage brokers, to everyone else where it points.
     const admin = hasWorkspaceRole(ctx.membership, ctx.user, ["admin"]);
     const shownError = (e: string | null) => (e === null || admin ? e : withoutUserinfo(e));
 
     return rows.map((r) => {
-      const live = liveStats[String(r.id)];
       const config = (r.configJson ?? {}) as Record<string, unknown>;
       return {
         id: r.id,
@@ -60,20 +76,27 @@ export const iotRouter = createRouter({
         topicPattern: r.topicPattern,
         clientId: r.clientId,
         authType: r.authType,
-        // Meant to be connected, but not running, with a reason: in error. The
-        // stored status stays, so the next start tries again (iotBrokerManager).
-        status: live ? live.status : r.status === "connected" && r.lastError ? "error" : r.status,
-        lastConnectedAt: live?.lastConnectedAt ?? r.lastConnectedAt,
-        messageCount: live ? live.messageCount : r.messageCount,
-        errorCount: live ? live.errorCount : r.errorCount,
-        lastError: shownError(live?.lastError ?? r.lastError),
+        enabled: r.enabled,
+        status: shownStatus(r),
+        pending: connects(r.brokerType) && r.observedVersion !== r.configVersion,
+        lastConnectedAt: r.lastConnectedAt,
+        messageCount: r.messageCount,
+        errorCount: r.errorCount,
+        lastError: shownError(r.lastError),
+        observedAt: r.observedAt,
+        // The process that observed it: like a worker's, its name is for admins.
+        consumerOwner: admin ? r.consumerOwner : null,
         hasCert: Boolean(config.clientCert),
         createdAt: r.createdAt,
       };
     });
   }),
 
-  /** Create or update an IoT broker connector: a workspace admin's, as other connectors are. */
+  /**
+   * Create or update an IoT broker connector: a workspace admin's, as other
+   * connectors are. It records what the connector should be; the IoT consumer
+   * connects it (or not) and reports back, so the answer is pending.
+   */
   upsertConnector: workspaceAdminMutation
     .input(
       z.object({
@@ -83,6 +106,7 @@ export const iotRouter = createRouter({
         endpointUrl: z.string().min(1).max(512),
         topicPattern: z.string().max(512).optional(),
         clientId: z.string().max(255).optional(),
+        protocolVersion: z.union([z.literal(4), z.literal(5)]).optional(),
         authType: z.enum(["none", "basic", "tls_cert", "sas_token", "api_key"]).default("none"),
         username: z.string().optional(),
         password: z.string().optional(),
@@ -107,67 +131,43 @@ export const iotRouter = createRouter({
       if (input.caCert) configJson.caCert = input.caCert;
       if (input.clientCert) configJson.clientCert = input.clientCert;
       if (input.clientKey) configJson.clientKey = sealSecret(input.clientKey, context("clientKey"));
+      if (input.protocolVersion === 5) configJson.protocolVersion = 5;
 
       let connectorId = input.id;
+      const settings = {
+        name: input.name,
+        brokerType: input.brokerType,
+        endpointUrl: input.endpointUrl,
+        topicPattern: input.topicPattern ?? null,
+        clientId: input.clientId ?? null,
+        authType: input.authType,
+        configJson,
+        enabled: input.connectNow,
+      };
 
       if (connectorId) {
-        // Only this workspace's connector: the running broker is found by id, so
-        // an id from elsewhere must be refused before anything starts or stops.
+        // Only this workspace's connector: it is found by id.
         await ownConnector(connectorId, ws.id);
         await db
           .update(iotConnectors)
-          .set({
-            name: input.name,
-            brokerType: input.brokerType,
-            endpointUrl: input.endpointUrl,
-            topicPattern: input.topicPattern ?? null,
-            clientId: input.clientId ?? null,
-            authType: input.authType,
-            configJson,
-            status: input.connectNow ? "connected" : "disconnected",
-          })
+          // A new settings version: the consumer restarts the connection with them.
+          .set({ ...settings, configVersion: sql`${iotConnectors.configVersion} + 1` })
           .where(and(eq(iotConnectors.id, connectorId), eq(iotConnectors.workspaceId, ws.id)));
       } else {
         const [inserted] = await db.insert(iotConnectors).values({
           workspaceId: ws.id,
-          name: input.name,
-          brokerType: input.brokerType,
-          endpointUrl: input.endpointUrl,
-          topicPattern: input.topicPattern ?? null,
-          clientId: input.clientId ?? null,
-          authType: input.authType,
-          configJson,
-          status: input.connectNow ? "connected" : "disconnected",
+          ...settings,
+          configVersion: 1,
+          status: "disconnected",
         });
         connectorId = inserted.insertId;
       }
 
-      const brokerConfig: IotBrokerConfig = {
-        id: connectorId,
-        workspaceId: ws.id,
-        name: input.name,
-        brokerType: input.brokerType,
-        endpointUrl: input.endpointUrl,
-        topicPattern: input.topicPattern,
-        clientId: input.clientId,
-        authType: input.authType,
-        username: input.username,
-        password: input.password,
-        caCert: input.caCert,
-        clientCert: input.clientCert,
-        clientKey: input.clientKey,
-      };
-
-      if (input.connectNow && (input.brokerType === "mqtt" || input.brokerType === "aws_iot" || input.brokerType === "azure_iot")) {
-        await iotBrokerManager.startBroker(brokerConfig);
-      } else if (!input.connectNow && connectorId) {
-        await iotBrokerManager.stopBroker(connectorId);
-      }
-
-      return { success: true, id: connectorId };
+      nudgeIotConsumer();
+      return { success: true, id: connectorId, pending: connects(input.brokerType) };
     }),
 
-  /** Connect or disconnect a specific broker connector. */
+  /** Connect or disconnect a broker connector: it records which, and the consumer acts on it. */
   toggleConnector: workspaceAdminMutation
     .input(z.object({ id: z.number(), enable: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
@@ -183,42 +183,39 @@ export const iotRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "IoT connector not found" });
       }
 
+      // The consumer, in whatever process, opens the stored credentials to
+      // connect. One it could not open is refused here, with the reason, rather
+      // than left to fail out of sight.
       if (input.enable) {
-        let brokerConfig: IotBrokerConfig;
         try {
-          brokerConfig = brokerConfigFrom(connector);
+          brokerConfigFrom(connector);
         } catch (err) {
           if (!(err instanceof SecretUnreadableError)) throw err;
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: unreadableBrokerSecretMessage(err) });
         }
-        const connected = await iotBrokerManager.startBroker(brokerConfig);
-        await db
-          .update(iotConnectors)
-          .set({ status: connected ? "connected" : "error" })
-          .where(and(eq(iotConnectors.id, input.id), eq(iotConnectors.workspaceId, ws.id)));
-        return { success: true, status: connected ? "connected" : "error" };
-      } else {
-        await iotBrokerManager.stopBroker(input.id);
-        await db
-          .update(iotConnectors)
-          .set({ status: "disconnected" })
-          .where(and(eq(iotConnectors.id, input.id), eq(iotConnectors.workspaceId, ws.id)));
-        return { success: true, status: "disconnected" };
       }
+      // A new version even when switching on one that is on: "connect" then
+      // starts it again, as it always did.
+      await db
+        .update(iotConnectors)
+        .set({ enabled: input.enable, configVersion: sql`${iotConnectors.configVersion} + 1` })
+        .where(and(eq(iotConnectors.id, input.id), eq(iotConnectors.workspaceId, ws.id)));
+      nudgeIotConsumer();
+      return { success: true, enabled: input.enable, pending: connects(connector.brokerType) };
     }),
 
-  /** Delete an IoT connector. */
+  /** Delete an IoT connector. The consumer closes its connection. */
   deleteConnector: workspaceAdminMutation
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const ws = ctx.workspace;
       const db = getDb();
-      await ownConnector(input.id, ws.id);
-      await iotBrokerManager.stopBroker(input.id);
+      const connector = await ownConnector(input.id, ws.id);
       await db
         .delete(iotConnectors)
         .where(and(eq(iotConnectors.id, input.id), eq(iotConnectors.workspaceId, ws.id)));
-      return { success: true };
+      nudgeIotConsumer();
+      return { success: true, pending: connects(connector.brokerType) };
     }),
 
   /** Directly ingest telemetry payload via tRPC: writing data, so an editor's at least. */
