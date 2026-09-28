@@ -105,9 +105,12 @@ describe("the migrated database is the one schema.ts describes", () => {
       .filter((r) => !fkNames.has(`${r.t}.${r.i}`))
       .map((r) => `${r.t}.${r.i} ${Number(r.nonUnique) ? "index" : "unique"} (${r.cols})`)
       .sort(byName);
+    // A key on one column is the column's; one on several, the table's.
+    const primaryKey = (t: (typeof declared)[number]) =>
+      (t.primaryKeys.length ? t.primaryKeys[0].columns : t.columns.filter((c) => c.primary)).map((c) => c.name).join(",");
     const expected = declared
       .flatMap((t) => [
-        `${t.name}.PRIMARY unique (${t.columns.filter((c) => c.primary).map((c) => c.name).join(",")})`,
+        `${t.name}.PRIMARY unique (${primaryKey(t)})`,
         ...t.columns.filter((c) => c.isUnique).map((c) => `${t.name}.${c.uniqueName} unique (${c.name})`),
         ...t.indexes.map(
           (i) =>

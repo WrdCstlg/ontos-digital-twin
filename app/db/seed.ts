@@ -49,6 +49,7 @@
 import { createHash } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../api/queries/connection";
+import { recordGraphReplaced } from "../api/services/graphChanges";
 import {
   actionSubmissions,
   actionTypeVersions,
@@ -1515,6 +1516,9 @@ async function main() {
   for (const [actor, action, et, eid] of FILLER) await audit(actor, action, et, eid, {}, at());
 
   console.log("audit entries chained");
+
+  // A graph made anew: every copy of it in a semantic engine is rebuilt.
+  await recordGraphReplaced(workspaceId);
   console.log("SEED COMPLETE", {
     nodes: allNodes.length,
     edges: allEdges.length,

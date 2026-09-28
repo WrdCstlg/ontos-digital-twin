@@ -64,6 +64,13 @@
       "when": 1790569856495,
       "tag": "0008_audit_chain_lock",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1790585320974,
+      "tag": "0009_graph_change_capture",
+      "breakpoints": true
     }
   ]
 }

@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, like } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { kgNodes, twinStateLog } from "@db/schema";
 import { getDemoWorkspace, writeAudit } from "../audit";
+import { recordGraphChange } from "../graphChanges";
 import { reconcileInsights } from "../../insightsRouter";
 import { DTDL_UNITS, LOGGED_NUMERIC_KEYS, TWIN_MODULE_KEY, type TwinState } from "../twinModels";
 import type { IngestResult, RawTelemetryPoint } from "./types";
@@ -242,7 +243,11 @@ export async function ingestTelemetry(
 
     if (changedKeys.length > 0) {
       nextProps.lastTickAt = validRecordedAt.toISOString();
-      await db.update(kgNodes).set({ propsJson: nextProps }).where(eq(kgNodes.id, twin.id));
+      // The twin's new state and the graph's change, together (graphChanges.ts).
+      await db.transaction(async (tx) => {
+        await tx.update(kgNodes).set({ propsJson: nextProps }).where(eq(kgNodes.id, twin.id));
+        await recordGraphChange(tx, ws.id, { nodes: [twin.id] });
+      });
 
       const existing = updatedTwinsMap.get(twin.iri) ?? {
         twinIri: twin.iri,
