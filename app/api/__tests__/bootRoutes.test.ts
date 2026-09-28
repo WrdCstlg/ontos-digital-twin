@@ -42,8 +42,12 @@ const ingest = vi.hoisted(() => ({
 
 vi.mock("../services/semanticEngine", () => ({ semanticEngine: engine }));
 vi.mock("../services/iot/iotIngestion", () => ingest);
-vi.mock("../services/iot/iotBrokerManager", () => ({
-  iotBrokerManager: { init: vi.fn(async () => undefined) },
+// The IoT consumer is off here, as it is in any process that is not told to run it.
+vi.mock("../services/iot/iotConsumer", () => ({
+  iotConsumerEnabled: () => false,
+  startIotConsumer: vi.fn(),
+  localIotConsumer: () => undefined,
+  nudgeIotConsumer: () => undefined,
 }));
 vi.mock("../auth/service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auth/service")>()),

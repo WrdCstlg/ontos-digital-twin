@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { EventEmitter } from "node:events";
 import { getTableName, type SQL, type Table } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { KgNode } from "@db/schema";
 import type { RawTelemetryPoint } from "../services/iot/types";
 import {
+  brokerMessagePoints,
+  ingestBrokerMessage,
   ingestTelemetry,
+  messageFingerprint,
+  readBrokerMessage,
+  reconcileInsightsSoon,
   resolveTwinNode,
   webhookWorkspaceId,
 } from "../services/iot/iotIngestion";
-import { MqttBrokerAdapter } from "../services/iot/mqttAdapter";
 import { getDemoWorkspace, writeAudit } from "../services/audit";
 import { reconcileInsights, runRules } from "../insightsRouter";
 import { recordGraphChange } from "../services/graphChanges";
@@ -87,33 +90,6 @@ vi.mock("../insightsRouter", async (importOriginal) => ({
   reconcileInsights: vi.fn().mockResolvedValue({ scanned: { nodes: 0, edges: 0 }, results: [] }),
 }));
 
-// The real ingestTelemetry, wrapped in a spy so MQTT routing into it is observable.
-vi.mock("../services/iot/iotIngestion", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../services/iot/iotIngestion")>();
-  return { ...actual, ingestTelemetry: vi.fn(actual.ingestTelemetry) };
-});
-
-// A fake MQTT client: the adapter's real handlers are attached to it and the
-// tests drive them by emitting broker events.
-const mqttState = vi.hoisted(() => ({ client: null as unknown }));
-vi.mock("mqtt", async () => {
-  const { EventEmitter: Emitter } = await import("node:events");
-  return {
-    default: {
-      connect: vi.fn(() => {
-        const client = Object.assign(new Emitter(), {
-          connected: false,
-          subscribe: vi.fn((_topic: string, cb?: (err: Error | null) => void) => cb?.(null)),
-          end: vi.fn((_force: boolean, cb?: () => void) => cb?.()),
-        });
-        mqttState.client = client;
-        return client;
-      }),
-    },
-  };
-});
-
-type FakeMqttClient = EventEmitter & { connected: boolean; subscribe: ReturnType<typeof vi.fn> };
 type PropsWrite = { propsJson: Record<string, unknown> };
 type LogRow = { nodeId: number; key: string; valueNum: number | null; valueText: string | null; unit: string | null; recordedAt: Date };
 
@@ -160,72 +136,31 @@ afterEach(() => {
 });
 
 describe("IoT Telemetry Ingestion Subsystem", () => {
-  describe("MQTT topic parsing & payload normalisation (MqttBrokerAdapter)", () => {
-    async function connectAdapter(topicPattern?: string) {
-      const adapter = new MqttBrokerAdapter({
-        workspaceId: 7,
-        name: "plant-a",
-        brokerType: "mqtt",
-        endpointUrl: "mqtt://broker.test:1883",
-        authType: "none",
-        topicPattern,
-        deviceMappings: { "tracker-1": "dtwin:log/shipment-1" },
-      });
-      const connecting = adapter.connect();
-      const client = mqttState.client as FakeMqttClient;
-      client.connected = true;
-      client.emit("connect");
-      await expect(connecting).resolves.toBe(true);
-      return { adapter, client };
-    }
+  describe("reading a broker message (readBrokerMessage)", () => {
+    const read = (topic: string, payload: unknown, pattern = "ontos/twins/+/telemetry") =>
+      readBrokerMessage(topic, Buffer.from(typeof payload === "string" ? payload : JSON.stringify(payload)), pattern);
 
-    async function publish(client: FakeMqttClient, topic: string, payload: unknown) {
-      const before = vi.mocked(ingestTelemetry).mock.calls.length;
-      client.emit("message", topic, Buffer.from(typeof payload === "string" ? payload : JSON.stringify(payload)));
-      await vi.waitFor(() => expect(vi.mocked(ingestTelemetry).mock.calls.length).toBe(before + 1));
-      return vi.mocked(ingestTelemetry).mock.calls.at(-1)!;
-    }
-
-    it("subscribes to the default '+' pattern and takes the device id from that topic segment", async () => {
-      const { client } = await connectAdapter();
-      expect(client.subscribe).toHaveBeenCalledWith("ontos/twins/+/telemetry", expect.any(Function));
-
-      const [points, options] = await publish(client, "ontos/twins/WarehouseTwin_1/telemetry", {
-        temperature: 4.2,
-        humidity: 65,
-      });
-
-      expect(points).toEqual([
+    it("takes the device id from the '+' segment of the topic", () => {
+      expect(read("ontos/twins/WarehouseTwin_1/telemetry", { temperature: 4.2, humidity: 65 }).points).toEqual([
         { twinIri: undefined, deviceId: "WarehouseTwin_1", timestamp: undefined, telemetry: { temperature: 4.2, humidity: 65 } },
       ]);
-      expect(options).toEqual({
-        workspaceId: 7,
-        source: "mqtt:plant-a",
-        deviceMappings: { "tracker-1": "dtwin:log/shipment-1" },
-      });
     });
 
-    it("extracts the device id from an Azure/AWS style {deviceId} placeholder pattern", async () => {
-      const { client } = await connectAdapter("devices/{deviceId}/messages/events");
-      expect(client.subscribe).toHaveBeenCalledWith("devices/{deviceId}/messages/events", expect.any(Function));
-
-      const [points] = await publish(client, "devices/Sensor_ColdRoom_9/messages/events", { temperature: 3.9 });
-
+    it("extracts the device id from an Azure/AWS style {deviceId} placeholder pattern", () => {
+      const { points } = read("devices/Sensor_ColdRoom_9/messages/events", { temperature: 3.9 }, "devices/{deviceId}/messages/events");
       expect(points).toHaveLength(1);
       expect(points[0].deviceId).toBe("Sensor_ColdRoom_9");
       expect(points[0].telemetry).toEqual({ temperature: 3.9 });
     });
 
-    it("unwraps a nested telemetry object and prefers the payload's own deviceId/timestamp over the topic", async () => {
-      const { client } = await connectAdapter();
-
-      const [points] = await publish(client, "ontos/twins/topic-device/telemetry", {
-        deviceId: "Zone_WH1_Cold1",
-        timestamp: "2026-09-21T20:00:00Z",
-        telemetry: { temperature: 4.8, humidity: 68.2, doorOpen: false },
-      });
-
-      expect(points).toEqual([
+    it("unwraps a nested telemetry object and prefers the payload's own deviceId/timestamp over the topic", () => {
+      expect(
+        read("ontos/twins/topic-device/telemetry", {
+          deviceId: "Zone_WH1_Cold1",
+          timestamp: "2026-09-21T20:00:00Z",
+          telemetry: { temperature: 4.8, humidity: 68.2, doorOpen: false },
+        }).points,
+      ).toEqual([
         {
           twinIri: undefined,
           deviceId: "Zone_WH1_Cold1",
@@ -235,29 +170,55 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       ]);
     });
 
-    it("turns an array payload into one point per element, falling back to the topic device id", async () => {
-      const { client } = await connectAdapter();
-
-      const [points] = await publish(client, "ontos/twins/Gateway_3/telemetry", [
-        { temperature: 5.1 },
-        { twinIri: "dtwin:log/shipment-2", telemetry: { etaMinutes: 40 } },
-      ]);
-
-      expect(points).toEqual([
+    it("turns an array payload into one point per element, falling back to the topic device id", () => {
+      expect(
+        read("ontos/twins/Gateway_3/telemetry", [{ temperature: 5.1 }, { twinIri: "dtwin:log/shipment-2", telemetry: { etaMinutes: 40 } }]).points,
+      ).toEqual([
         { twinIri: undefined, deviceId: "Gateway_3", timestamp: undefined, telemetry: { temperature: 5.1 } },
         { twinIri: "dtwin:log/shipment-2", deviceId: "Gateway_3", timestamp: undefined, telemetry: { etaMinutes: 40 } },
       ]);
     });
 
-    it("counts a malformed JSON message as an error without calling ingestion", async () => {
-      const { adapter, client } = await connectAdapter();
+    it("keeps a top-level message id out of the readings", () => {
+      expect(read("ontos/twins/T1/telemetry", { messageId: "m-1", msgId: 7, temperature: 4 }).points[0].telemetry).toEqual({ temperature: 4 });
+    });
 
-      client.emit("message", "ontos/twins/X/telemetry", Buffer.from("{not json"));
+    it("gives a payload that is not an object no points, and refuses one that is not JSON or is too large", () => {
+      expect(read("ontos/twins/T1/telemetry", 42).points).toEqual([]);
+      expect(brokerMessagePoints(null)).toEqual([]);
+      expect(() => read("ontos/twins/X/telemetry", "{not json")).toThrow(SyntaxError);
+      expect(() => readBrokerMessage("t", Buffer.alloc(2 * 1024 * 1024 + 1, 32), "t")).toThrow(/more than the 2097152 accepted/);
+    });
+  });
 
-      await vi.waitFor(() => expect(adapter.stats.errorCount).toBe(1));
-      expect(adapter.stats.messageCount).toBe(1);
-      expect(adapter.stats.lastError).toMatch(/^Message processing error:/);
-      expect(ingestTelemetry).not.toHaveBeenCalled();
+  describe("what recognises a message delivered again (messageFingerprint)", () => {
+    const payload = (o: unknown) => Buffer.from(JSON.stringify(o));
+
+    it("is the same for the same bytes on the same topic, and differs by topic or by a byte", () => {
+      const a = messageFingerprint("ontos/twins/T1/telemetry", payload({ temperature: 4, timestamp: 1 }));
+      expect(a).toMatch(/^[0-9a-f]{64}$/);
+      expect(messageFingerprint("ontos/twins/T1/telemetry", payload({ temperature: 4, timestamp: 1 }))).toBe(a);
+      expect(messageFingerprint("ontos/twins/T2/telemetry", payload({ temperature: 4, timestamp: 1 }))).not.toBe(a);
+      expect(messageFingerprint("ontos/twins/T1/telemetry", payload({ temperature: 4, timestamp: 2 }))).not.toBe(a);
+    });
+
+    it("follows the payload's own message id when it has one, whatever else the payload holds", () => {
+      const first = { messageId: "m-7", temperature: 4, sentAt: "10:00" };
+      const resent = { messageId: "m-7", temperature: 4, sentAt: "10:05" };
+      const id = (o: Record<string, unknown>, topic = "ontos/twins/T1/telemetry") => messageFingerprint(topic, payload(o), o);
+      expect(id(resent)).toBe(id(first));
+      expect(id({ msgId: 7 })).toBe(id({ msgId: "7" }));
+      expect(id({ messageId: "m-8", temperature: 4, sentAt: "10:00" })).not.toBe(id(first));
+      // A device's own counter is not unique across devices: the topic still counts.
+      expect(id(first, "ontos/twins/T2/telemetry")).not.toBe(id(first));
+      // An array's elements carry no id for the whole message.
+      const arr = [{ messageId: "m-7" }];
+      expect(messageFingerprint("t", payload(arr), arr)).toBe(messageFingerprint("t", payload(arr)));
+    });
+
+    it("comes out the same from reading the message", () => {
+      const o = { messageId: "m-9", temperature: 4 };
+      expect(readBrokerMessage("t/T1", payload(o), "t/+").fingerprint).toBe(messageFingerprint("t/T1", payload(o), o));
     });
   });
 
@@ -624,6 +585,92 @@ describe("IoT Telemetry Ingestion Subsystem", () => {
       expect(freshAudit.getDemoWorkspace).not.toHaveBeenCalled();
       expect(mockSelect).not.toHaveBeenCalled();
       expect(mockUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("broker messages (ingestBrokerMessage)", () => {
+    const lease = { name: "iot-consumer", owner: "worker-a", generation: 7 };
+    const from = { lease, connectorId: 5, workspaceId: 1, source: "mqtt:Plant broker" };
+    const message = (telemetry: Record<string, unknown>) =>
+      readBrokerMessage("ontos/twins/T1/telemetry", Buffer.from(JSON.stringify({ twinIri: coldZone.iri, telemetry })), "ontos/twins/+/telemetry");
+    const duplicate = () => Object.assign(new Error("Duplicate entry"), { code: "ER_DUP_ENTRY", errno: 1062 });
+
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+    // The rules run a test scheduled finish before the next test starts.
+    afterEach(() => vi.runOnlyPendingTimersAsync());
+
+    it("checks the lease first, marks the message seen, then writes the twin, all in one transaction", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      const msg = message({ temperature: 4.4 });
+      await expect(ingestBrokerMessage(from, msg)).resolves.toBe("recorded");
+
+      expect(writes).toEqual([
+        `begin {"isolationLevel":"read committed"}`,
+        "insert iot_message_seen",
+        "update kg_nodes",
+        "insert twin_state_log",
+        "audit",
+        "commit",
+      ]);
+      // The lease as this consumer took it, held shared until the commit.
+      expect(mockFence).toHaveBeenCalledWith("share");
+      const fenceWhere = mockWhere.mock.calls.map((c) => dialect.sqlToQuery(c[0] as SQL)).find((q) => q.sql.includes("`leases`"));
+      expect(fenceWhere?.params).toEqual(["iot-consumer", "worker-a", 7]);
+      expect(mockValues).toHaveBeenCalledWith({ connectorId: 5, fingerprint: msg.fingerprint });
+      expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ actor: "mqtt:Plant broker", entityType: "iot_telemetry" }), mockDb);
+    });
+
+    it("writes nothing when the lease is no longer this consumer's", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      mockFence.mockResolvedValueOnce([]);
+      await expect(ingestBrokerMessage(from, message({ temperature: 4.4 }))).resolves.toBe("fenced");
+      expect(writes.filter((w) => w !== "commit" && !w.startsWith("begin"))).toEqual([]);
+      expect(mockSet).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing more for a message recorded before: its seen mark is refused", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      mockValues.mockImplementationOnce(async () => {
+        throw duplicate();
+      });
+      await expect(ingestBrokerMessage(from, message({ temperature: 4.4 }))).resolves.toBe("duplicate");
+      expect(mockSet).not.toHaveBeenCalled();
+      expect(writeAudit).not.toHaveBeenCalled();
+    });
+
+    it("throws when it cannot record it, so the message is not acknowledged", async () => {
+      mockLimit.mockResolvedValueOnce([coldZone]);
+      mockValues.mockImplementationOnce(async () => {
+        throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+      });
+      await expect(ingestBrokerMessage(from, message({ temperature: 4.4 }))).rejects.toThrow("ECONNREFUSED");
+    });
+
+    it("runs the insight rules shortly after, once for however many messages came meanwhile", async () => {
+      for (let i = 0; i < 3; i++) {
+        mockLimit.mockResolvedValueOnce([coldZone]);
+        await ingestBrokerMessage(from, message({ temperature: 4 + i }));
+      }
+      expect(reconcileInsights).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(reconcileInsights).toHaveBeenCalledOnce();
+      expect(reconcileInsights).toHaveBeenCalledWith(1);
+    });
+
+    it("and never two runs at once: one asked for during a run follows it", async () => {
+      let finish = () => undefined as void;
+      vi.mocked(reconcileInsights).mockImplementationOnce(
+        () => new Promise((resolve) => (finish = () => resolve({ scanned: { nodes: 0, edges: 0 }, results: [] }))),
+      );
+      reconcileInsightsSoon(3, 10);
+      await vi.advanceTimersByTimeAsync(10);
+      reconcileInsightsSoon(3, 10);
+      reconcileInsightsSoon(3, 10);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(reconcileInsights).toHaveBeenCalledTimes(1);
+      finish();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(reconcileInsights).toHaveBeenCalledTimes(2);
     });
   });
 

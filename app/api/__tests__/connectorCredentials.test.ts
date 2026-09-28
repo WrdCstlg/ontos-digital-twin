@@ -1,7 +1,7 @@
 /**
  * Connector credentials are sealed at rest and opened only to connect: what
  * the routers store, what the drivers and brokers receive, what an import
- * sees, what start-up does with a credential it cannot open, and what the
+ * sees, what is shown of a credential that cannot be opened, and what the
  * bootstrap does with credentials earlier builds stored as plain text.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +12,8 @@ import { connectorEndpoint, isSealed, openSecret, sealSecret, sealedUnderCurrent
 import { appRouter } from "../router";
 import { checkRunnableMapping } from "../services/mappingSync";
 import { sealStoredSecrets } from "../services/secretSealing";
-import { iotBrokerManager } from "../services/iot/iotBrokerManager";
+import { brokerConfigFrom } from "../services/iot/brokerConfig";
+import type { IotConnector } from "@db/schema";
 import { createMockContext, mockAdminMembership, mockAdminUser, mockViewerMembership, mockViewerUser, mockWorkspace } from "./testHarness";
 
 // Reads answer with the rows of the table read (or, for the import check's
@@ -90,7 +91,8 @@ const BROKER_ENDPOINT = "mqtts://broker.acme.corp:8883";
 const brokerRow = (id: number, password: unknown, clientKey: unknown) => ({
   id, workspaceId: WS, name: `Broker ${id}`, brokerType: "mqtt", endpointUrl: BROKER_ENDPOINT, topicPattern: null,
   clientId: null, authType: "tls_cert", status: "connected", lastConnectedAt: null, messageCount: 0, errorCount: 0, lastError: null,
-  createdAt: new Date(0), configJson: { username: "ingest", password, caCert: "CA-PEM", clientCert: "CERT-PEM", clientKey },
+  enabled: true, configVersion: 1, observedVersion: 1, consumerOwner: null, observedAt: null,
+  createdAt: new Date(0), updatedAt: new Date(0), configJson: { username: "ingest", password, caCert: "CA-PEM", clientCert: "CERT-PEM", clientKey },
 });
 const sqlContext = secretContext.connector(WS, "password", connectorEndpoint(SQL_CONFIG));
 const iotContext = (field: string) => secretContext.iotConnector(WS, field, BROKER_ENDPOINT);
@@ -206,7 +208,6 @@ describe("entering a SQL connector's password again", () => {
 
 describe("a broker connector's password and client key are sealed at rest and opened only to connect", () => {
   it("saving one seals the password and client key for its endpoint, and leaves the certificates as they are", async () => {
-    vi.spyOn(iotBrokerManager, "stopBroker").mockResolvedValue(undefined);
     await admin().iot.upsertConnector({
       name: "Plant broker", brokerType: "mqtt", endpointUrl: BROKER_ENDPOINT, authType: "tls_cert",
       username: "ingest", password: "pw-1", caCert: "CA-PEM", clientCert: "CERT-PEM", clientKey: "KEY-1", connectNow: false,
@@ -218,53 +219,44 @@ describe("a broker connector's password and client key are sealed at rest and op
   });
 
   it("saving one refuses a password or client key that is a sealed value", async () => {
-    vi.spyOn(iotBrokerManager, "stopBroker").mockResolvedValue(undefined);
     const base = { name: "Mine", brokerType: "mqtt" as const, endpointUrl: "mqtts://attacker.example:8883", authType: "basic" as const, connectNow: false };
     await expect(admin().iot.upsertConnector({ ...base, password: sealSecret("pw-1", iotContext("password")) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(admin().iot.upsertConnector({ ...base, clientKey: sealSecret("KEY-1", iotContext("clientKey")) })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(db.inserts).toEqual([]);
   });
 
-  it("connecting opens them for the broker, and only at the endpoint they were sealed for", async () => {
-    const start = vi.spyOn(iotBrokerManager, "startBroker").mockResolvedValue(true);
-    db.tables.set(getTableName(iotConnectors), [brokerRow(5, sealSecret("pw-1", iotContext("password")), sealSecret("KEY-1", iotContext("clientKey")))]);
-    await admin().iot.toggleConnector({ id: 5, enable: true });
-    expect(start.mock.calls[0][0]).toMatchObject({ id: 5, username: "ingest", password: "pw-1", clientKey: "KEY-1", caCert: "CA-PEM" });
-    // The endpoint changed in the database: nothing opens, and nothing is sent.
-    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, sealSecret("pw-1", iotContext("password")), undefined), endpointUrl: "mqtts://attacker.example:8883" }]);
-    await expect(admin().iot.toggleConnector({ id: 5, enable: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    expect(start).toHaveBeenCalledTimes(1);
+  it("the consumer opens them to connect, and only at the endpoint they were sealed for", () => {
+    const row = brokerRow(5, sealSecret("pw-1", iotContext("password")), sealSecret("KEY-1", iotContext("clientKey"))) as unknown as IotConnector;
+    expect(brokerConfigFrom(row)).toMatchObject({ id: 5, username: "ingest", password: "pw-1", clientKey: "KEY-1", caCert: "CA-PEM" });
+    // The endpoint changed in the database: nothing opens, so nothing is sent.
+    expect(() => brokerConfigFrom({ ...row, endpointUrl: "mqtts://attacker.example:8883" })).toThrow(/sealed for another connector or endpoint/);
   });
 
-  it("one it cannot open is refused with the reason, and no connection is tried", async () => {
-    const start = vi.spyOn(iotBrokerManager, "startBroker").mockResolvedValue(true);
-    db.tables.set(getTableName(iotConnectors), [brokerRow(5, sealSecret("pw-1", iotContext("password")), undefined)]);
+  it("switching one on checks they open, and refuses it with the reason when they do not", async () => {
+    db.tables.set(getTableName(iotConnectors), [brokerRow(5, sealSecret("pw-1", iotContext("password")), sealSecret("KEY-1", iotContext("clientKey")))]);
+    expect(await admin().iot.toggleConnector({ id: 5, enable: true })).toEqual({ success: true, enabled: true, pending: true });
+    expect(db.updates).toEqual([{ table: getTableName(iotConnectors), set: { enabled: true, configVersion: expect.anything() } }]);
+
+    db.updates.length = 0;
     env.secretsKey = KEY_B;
     await expect(admin().iot.toggleConnector({ id: 5, enable: true })).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
       message: expect.stringMatching(/stored password or client key cannot be read/),
     });
-    expect(start).not.toHaveBeenCalled();
+    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, sealSecret("pw-1", iotContext("password")), undefined), endpointUrl: "mqtts://attacker.example:8883" }]);
+    await expect(admin().iot.toggleConnector({ id: 5, enable: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(db.updates).toEqual([]);
   });
 
-  it("at start-up, one it cannot open stops only itself, keeps its status to be tried again, and shows why", async () => {
-    const start = vi.spyOn(iotBrokerManager, "startBroker").mockResolvedValue(true);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("one the consumer could not open is listed in error, with why, until it is put right", async () => {
+    // The consumer (iotConsumer.test.ts) starts the rest and reports this one.
     env.secretsKey = KEY_B;
     const unreadable = sealSecret("old-pw", iotContext("password"));
     env.secretsKey = KEY_A;
-    db.tables.set(getTableName(iotConnectors), [brokerRow(5, unreadable, undefined), brokerRow(6, sealSecret("pw-6", iotContext("password")), undefined)]);
-    (iotBrokerManager as unknown as { initialized: boolean }).initialized = false;
-    await iotBrokerManager.init();
-    expect(start.mock.calls.map(([c]) => [c.id, c.password])).toEqual([[6, "pw-6"]]);
-    expect(db.updates).toEqual([
-      { table: getTableName(iotConnectors), set: { lastError: expect.stringMatching(/cannot be read: it was sealed under a key this server does not have/) } },
-    ]);
-    // Listed as in error meanwhile; the stored status stays "connected", so the next start tries again.
-    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, unreadable, undefined), lastError: db.updates[0].set.lastError }]);
-    vi.spyOn(iotBrokerManager, "getAllStats").mockReturnValue({});
+    const why = "The connector's stored password or client key cannot be read: it was sealed under a key this server does not have";
+    db.tables.set(getTableName(iotConnectors), [{ ...brokerRow(5, unreadable, undefined), status: "error", lastError: why }]);
     const [listed] = await admin().iot.listConnectors();
-    expect(listed.status).toBe("error");
+    expect(listed).toMatchObject({ status: "error", pending: false, lastError: why, enabled: true });
   });
 });
 

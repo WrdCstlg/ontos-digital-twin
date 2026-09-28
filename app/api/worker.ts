@@ -7,6 +7,7 @@ import { secretKey } from "./lib/secretBox";
 import { engineLockName, installEngineLock } from "./services/engineLock";
 import { jobHandlers } from "./services/jobs/handlers";
 import { JobWorker } from "./services/jobs/worker";
+import { iotConsumerEnabled, startIotConsumer } from "./services/iot/iotConsumer";
 import { semanticEngine } from "./services/semanticEngine";
 
 /**
@@ -17,6 +18,9 @@ import { semanticEngine } from "./services/semanticEngine";
  * each engine task takes a MySQL named lock, one per engine and database, that
  * every replica takes too (services/engineLock.ts). The app never takes it, so
  * a worker must not share the app's engine.
+ *
+ * It also runs the IoT consumer, unless ONTOS_IOT_CONSUMER=false: of all the
+ * processes that run one, the one holding its lease connects to the brokers.
  *
  * GET /health on WORKER_PORT (default 3001) answers 200 while the job loop is
  * alive and the database answers, 503 otherwise.
@@ -45,6 +49,9 @@ const worker = new JobWorker({
 });
 worker.start();
 
+// It holds the IoT lease under the worker's own name, the one its row in `workers` has.
+const iot = iotConsumerEnabled(true) ? await startIotConsumer({ owner: worker.id }) : null;
+
 const health = new Hono();
 health.get("/health", async (c) => {
   const s = worker.status();
@@ -67,6 +74,9 @@ health.get("/health", async (c) => {
       jobsFailed: s.failed,
       lastLoopAgoMs: s.lastLoopAt ? Date.now() - s.lastLoopAt : null,
       database,
+      // Whether this worker is the one connected to the brokers: informative,
+      // since only one worker holds the IoT lease at a time.
+      iot: iot ? { holdsLease: iot.status().holdsLease, connections: iot.status().connections } : null,
     },
     ok ? 200 : 503,
   );
@@ -86,6 +96,8 @@ async function shutdown(signal: string) {
   // queue, so another worker (or this one, restarted) picks it up. One with an
   // engine request on its way ends when the engine has answered it.
   await worker.stop(5000);
+  // Its connections closed and its lease released: another worker takes over at once.
+  await iot?.stop().catch((err) => console.error("[worker] stopping the IoT consumer failed:", err));
   server.close();
   await closeDb().catch(() => undefined);
   process.exit(0);

@@ -22,14 +22,16 @@ let refuse: string | null = null;
 
 const broker = {
   id: 6, name: "Plant broker", brokerType: "mqtt", endpointUrl: "mqtts://broker.example:8883", topicPattern: null, clientId: null,
-  authType: "none", status: "connected", lastConnectedAt: null, messageCount: 3, errorCount: 0, lastError: null, hasCert: false,
-  createdAt: new Date("2026-01-01T00:00:00Z"),
+  authType: "none", enabled: true, status: "connected", pending: false, lastConnectedAt: null, messageCount: 3, errorCount: 0, lastError: null,
+  observedAt: null, consumerOwner: null, hasCert: false, createdAt: new Date("2026-01-01T00:00:00Z"),
 };
+let listed: unknown[] = [broker];
 const answers: Record<string, () => unknown> = {
   "iot.capabilities": () => caps,
-  "iot.listConnectors": () => [broker],
+  "iot.listConnectors": () => listed,
   "iot.getWebhookConfig": () => ({ endpointUrl: "/api/iot/telemetry", fullEndpointUrl: "http://localhost:3000/api/iot/telemetry", apiKey: "(hidden)", configured: false, workspaceSlug: "b", sampleCurl: "#" }),
-  "iot.deleteConnector": () => ({ success: true }),
+  "iot.deleteConnector": () => ({ success: true, pending: true }),
+  "iot.toggleConnector": () => ({ success: true, enabled: false, pending: true }),
 };
 
 const fakeLink: TRPCLink<AppRouter> = () => ({ op }) =>
@@ -67,6 +69,7 @@ afterEach(() => {
   cleanup();
   calls.length = 0;
   refuse = null;
+  listed = [broker];
 });
 
 describe("IotConnectorsModal", () => {
@@ -97,4 +100,20 @@ describe("IotConnectorsModal", () => {
     await act(async () => void fireEvent.click(screen.getByRole("button", { name: "Delete Plant broker" })));
     expect(await screen.findByText("Insufficient permissions")).toBeTruthy();
   });
+
+  it("switches a broker by what it should do, and shows it connecting until the consumer reports", async () => {
+    await renderModal({ canManageBrokers: true, canIngest: true });
+    await act(async () => void fireEvent.click(screen.getByRole("button", { name: "Disconnect Plant broker" })));
+    expect(calls.filter((c) => c.path === "iot.toggleConnector")).toEqual([{ path: "iot.toggleConnector", input: { id: 6, enable: false } }]);
+    expect(await screen.findByText("Disconnecting the broker…")).toBeTruthy();
+
+    cleanup();
+    listed = [{ ...broker, status: "connecting", pending: true }];
+    await renderModal({ canManageBrokers: true, canIngest: true });
+    expect(screen.getByText("Connecting…")).toBeTruthy();
+    expect(screen.queryByText("Connected")).toBeNull();
+    // It asks again while a change is pending, and shows what the consumer reported.
+    listed = [broker];
+    expect(await screen.findByText("Connected", undefined, { timeout: 5000 })).toBeTruthy();
+  }, 15_000);
 });
