@@ -107,6 +107,14 @@ describe("actionWebhookHandler", () => {
     await expect(run()).rejects.toThrow(/redirects are not followed/);
   });
 
+  it("names the address in an error only by where it goes: errors are stored, logged and shown", async () => {
+    answers.push([submission], [version("http://93.184.216.34/services/T000/SECRET-PATH?token=SECRET-QUERY")]);
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 500 }));
+    const err = (await run().catch((e) => e)) as Error;
+    expect(err.message).toBe("webhook http://93.184.216.34/… answered HTTP 500");
+    await expect(assertDeliverable("https://exa mple.com/SECRET-PATH", true)).rejects.toThrow("the webhook address is not a URL");
+  });
+
   it("never calls an internal address, and fails for good on a bad payload or a missing record", async () => {
     answers.push([submission], [version("http://10.0.0.8/hook")]);
     await expect(run()).rejects.toBeInstanceOf(PermanentJobError);

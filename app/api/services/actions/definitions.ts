@@ -18,6 +18,7 @@ import {
 import { getDb } from "../../queries/connection";
 import { writeAudit } from "../audit";
 import { parseDefinition } from "./service";
+import { webhookAddressProblem } from "./webhookView";
 
 /** Creating, changing and listing action types. Every saved change is a new version. */
 
@@ -40,7 +41,15 @@ export function validateDefinition(raw: unknown): { definition: ActionDefinition
       problems: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
     };
   }
-  const problems = checkDefinition(parsed.data);
+  const problems = [
+    ...checkDefinition(parsed.data),
+    // Checked when a definition is written, not when a stored one is read, so
+    // an address saved before the rule still delivers.
+    ...parsed.data.sideEffects.flatMap((s, i) => {
+      const problem = webhookAddressProblem(s.url);
+      return problem ? [{ path: `sideEffects.${i}.url`, message: problem }] : [];
+    }),
+  ];
   return { definition: problems.length ? null : parsed.data, problems };
 }
 

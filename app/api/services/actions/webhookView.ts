@@ -22,12 +22,36 @@ export function redactUrl(url: string): string {
   }
 }
 
-/** Every http(s) address in a message (a delivery error quotes its URL), redacted. */
+/**
+ * Every http(s) address in a message, redacted. An address in free text ends
+ * at a space, a quote or an angle bracket; a new address may hold none of
+ * them (webhookAddressProblem), and delivery errors now name only the origin
+ * (sideEffects.ts). Errors stored before then quote the address whole, so the
+ * two forms they took are redacted to their known ends first.
+ */
 export function redactUrlsIn(text: string): string;
 export function redactUrlsIn(text: string | null | undefined): string | null;
 export function redactUrlsIn(text: string | null | undefined): string | null {
   if (text === null || text === undefined) return null;
-  return text.replace(/https?:\/\/[^\s"'<>]+/gi, (m) => redactUrl(m));
+  return text
+    .replace(/\bwebhook (.+?) answered HTTP (\d{3})/g, (_, url: string, status: string) => `webhook ${redactUrl(url)} answered HTTP ${status}`)
+    .replace(/\bnot a URL: .*/g, "not a URL: (hidden)")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (m) => redactUrl(m));
+}
+
+/**
+ * Characters a webhook address may not hold unencoded: whitespace, quotes,
+ * angle brackets and the others no URL needs raw. Each can end an address
+ * early in a message, which would leave the rest of it, often its token, in
+ * plain view after redaction. Percent-encoded, they mean the same.
+ */
+const UNSAFE_IN_ADDRESS = /[\s"'<>\\^`{|}\p{Cc}]/u;
+
+/** Why an address cannot be saved for a webhook, or null if it can. */
+export function webhookAddressProblem(url: string): string | null {
+  return UNSAFE_IN_ADDRESS.test(url)
+    ? "holds a space, quote or other character that must be percent-encoded (a space as %20, a quote as %22 or %27)"
+    : null;
 }
 
 /** An action definition (parsed or as stored) with each side effect's address redacted. */

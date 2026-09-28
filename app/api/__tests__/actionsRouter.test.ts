@@ -122,6 +122,17 @@ describe("authoring action types", () => {
     expect(res.problems[0]).toMatchObject({ path: "rules" });
     await expect(as("viewer").actions.validateDefinition({ definition })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
+
+  it("refuses a webhook address holding a space or a quote, which redaction could not find the end of, and says how to write it", async () => {
+    const withHook = (url: string) => ({ ...definition, sideEffects: [{ kind: "webhook", url }] });
+    for (const url of ["https://hooks.example.com/hook?token=abc SECRET", "https://hooks.example.com/hook/ab'SECRET"]) {
+      const res = await as("ontologist").actions.validateDefinition({ definition: withHook(url) });
+      expect(res.ok, url).toBe(false);
+      expect(res.problems, url).toEqual([expect.objectContaining({ path: "sideEffects.0.url", message: expect.stringMatching(/percent-encoded/) })]);
+    }
+    const encoded = await as("ontologist").actions.validateDefinition({ definition: withHook("https://hooks.example.com/hook/ab%27SECRET?token=abc%20x") });
+    expect(encoded).toEqual({ ok: true, problems: [] });
+  });
 });
 
 describe("listing action types", () => {
