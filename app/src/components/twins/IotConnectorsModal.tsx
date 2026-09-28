@@ -252,8 +252,9 @@ export function IotConnectorsModal({
                 <div className="font-medium text-sm">Configure External IoT Broker</div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label className="text-xs">Broker Name</Label>
+                    <Label htmlFor="iot-broker-name" className="text-xs">Broker Name</Label>
                     <Input
+                      id="iot-broker-name"
                       placeholder="e.g. AWS Fleet Broker"
                       value={formName}
                       onChange={(e) => setFormName(e.target.value)}
@@ -261,8 +262,9 @@ export function IotConnectorsModal({
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">Broker Protocol</Label>
+                    <Label htmlFor="iot-broker-protocol" className="text-xs">Broker Protocol</Label>
                     <select
+                      id="iot-broker-protocol"
                       className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
                       value={formType}
                       onChange={(e) => {
@@ -286,8 +288,9 @@ export function IotConnectorsModal({
                 </div>
 
                 <div className="space-y-1">
-                  <Label className="text-xs">Endpoint URL</Label>
+                  <Label htmlFor="iot-broker-url" className="text-xs">Endpoint URL</Label>
                   <Input
+                    id="iot-broker-url"
                     placeholder="mqtts://... or mqtt://..."
                     value={formUrl}
                     onChange={(e) => setFormUrl(e.target.value)}
@@ -297,16 +300,18 @@ export function IotConnectorsModal({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label className="text-xs">Topic Subscription Pattern</Label>
+                    <Label htmlFor="iot-broker-topic" className="text-xs">Topic Subscription Pattern</Label>
                     <Input
+                      id="iot-broker-topic"
                       placeholder="ontos/twins/+/telemetry"
                       value={formTopic}
                       onChange={(e) => setFormTopic(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">Authentication Type</Label>
+                    <Label htmlFor="iot-broker-auth" className="text-xs">Authentication Type</Label>
                     <select
+                      id="iot-broker-auth"
                       className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
                       value={formAuthType}
                       onChange={(e) => setFormAuthType(e.target.value as 'none' | 'basic' | 'tls_cert')}
@@ -321,12 +326,17 @@ export function IotConnectorsModal({
                 {formAuthType === 'basic' && (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label className="text-xs">Username</Label>
-                      <Input value={formUsername} onChange={(e) => setFormUsername(e.target.value)} />
+                      <Label htmlFor="iot-broker-username" className="text-xs">Username</Label>
+                      <Input id="iot-broker-username" value={formUsername} onChange={(e) => setFormUsername(e.target.value)} />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Password</Label>
-                      <Input type="password" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} />
+                      <Label htmlFor="iot-broker-password" className="text-xs">Password</Label>
+                      <Input
+                        id="iot-broker-password"
+                        type="password"
+                        value={formPassword}
+                        onChange={(e) => setFormPassword(e.target.value)}
+                      />
                     </div>
                   </div>
                 )}
@@ -334,8 +344,9 @@ export function IotConnectorsModal({
                 {formAuthType === 'tls_cert' && (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label className="text-xs">Client Certificate (PEM)</Label>
+                      <Label htmlFor="iot-broker-cert" className="text-xs">Client Certificate (PEM)</Label>
                       <Textarea
+                        id="iot-broker-cert"
                         placeholder="-----BEGIN CERTIFICATE-----..."
                         rows={3}
                         value={formCert}
@@ -343,8 +354,9 @@ export function IotConnectorsModal({
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Client Private Key (PEM)</Label>
+                      <Label htmlFor="iot-broker-key" className="text-xs">Client Private Key (PEM)</Label>
                       <Textarea
+                        id="iot-broker-key"
                         placeholder="-----BEGIN RSA PRIVATE KEY-----..."
                         rows={3}
                         value={formKey}
