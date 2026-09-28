@@ -58,14 +58,13 @@ const mockDb = {
       return [{ insertId: 1 }];
     }),
   })),
+  // A transaction on the same mock: what one guarantees is tested on a real MySQL.
   transaction: vi.fn(async (body: (tx: unknown) => Promise<unknown>, config?: unknown) => {
     writes.push(`begin ${JSON.stringify(config ?? {})}`);
     const result = await body(mockDb);
     writes.push("commit");
     return result;
   }),
-  // A transaction on the same mock: what one guarantees is tested on a real MySQL.
-  transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(mockDb)),
 };
 
 vi.mock("../queries/connection", () => ({
