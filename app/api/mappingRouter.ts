@@ -227,16 +227,19 @@ export const mappingRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: `Connector ${input.connectorId} not found` });
 
       let id = input.id;
+      // The SHACL mode before this save, so the audit shows a check switched on or off.
+      let modeWas: string | null = null;
       if (id) {
         // Only this workspace's mapping may be changed: a mapping is a
         // workspace's through its connector.
         const [existing] = await db
-          .select({ id: mappings.id })
+          .select({ id: mappings.id, shaclMode: mappings.shaclMode })
           .from(mappings)
           .innerJoin(connectors, eq(mappings.connectorId, connectors.id))
           .where(and(eq(mappings.id, id), eq(connectors.workspaceId, ws.id)))
           .limit(1);
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: `Mapping ${id} not found` });
+        modeWas = existing.shaclMode;
         await db
           .update(mappings)
           .set({
@@ -266,15 +269,21 @@ export const mappingRouter = createRouter({
           .$returningId();
         id = newId;
       }
+      const [row] = await db.select().from(mappings).where(eq(mappings.id, id!));
+      const modeChanged = modeWas !== null && modeWas !== row.shaclMode;
       await writeAudit({
         workspaceId: ws.id,
         actor: actorLabelFor(ctx.user),
-        action: `${input.id ? "Updated" : "Created"} mapping '${input.name}'`,
+        action: `${input.id ? "Updated" : "Created"} mapping '${input.name}'${
+          modeChanged ? `: its SHACL check now ${row.shaclMode === "block" ? "blocks imports that do not conform" : "only warns"}` : ""
+        }`,
         entityType: "mapping",
         entityId: id,
-        payload: { name: input.name, sourceTable: input.sourceTable, classIri: input.classIri, status: input.status, shaclMode: input.shaclMode },
+        payload: {
+          name: input.name, sourceTable: input.sourceTable, classIri: input.classIri, status: input.status,
+          shaclMode: row.shaclMode, ...(modeChanged ? { shaclModeWas: modeWas } : {}),
+        },
       });
-      const [row] = await db.select().from(mappings).where(eq(mappings.id, id!));
       return row;
     }),
 

@@ -243,6 +243,17 @@ describe("saving a mapping's SHACL mode", () => {
     expect(rows(mappings)[0]).toMatchObject({ name: "People (renamed)", shaclMode: "block" });
   });
 
+  it("audits switching the check on or off as such, with the mode it was", async () => {
+    setUp("block");
+    await ontologist().mapping.upsertMapping(save({ shaclMode: "warn" }));
+    await ontologist().mapping.upsertMapping(save({ name: "People (renamed)" }));
+    const [off, rename] = vi.mocked(writeAudit).mock.calls.map(([e]) => e);
+    expect(off.action).toBe("Updated mapping 'People': its SHACL check now only warns");
+    expect(off.payload).toMatchObject({ shaclMode: "warn", shaclModeWas: "block" });
+    expect(rename.action).toBe("Updated mapping 'People (renamed)'");
+    expect(rename.payload).not.toHaveProperty("shaclModeWas");
+  });
+
   it("gives a new mapping warn unless told otherwise", async () => {
     setUp("warn");
     const created = await ontologist().mapping.upsertMapping(save({ id: undefined, name: "New" }));
