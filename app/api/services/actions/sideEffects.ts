@@ -5,6 +5,7 @@ import { actionSubmissions, actionTypeVersions } from "@db/schema";
 import { actionDefinitionSchema } from "@contracts/actions";
 import { getDb } from "../../queries/connection";
 import { PermanentJobError, type JobHandler } from "../jobs/worker";
+import { redactUrl } from "./webhookView";
 
 /**
  * Side effects of applied actions, run by the worker after the edits commit:
@@ -17,6 +18,10 @@ import { PermanentJobError, type JobHandler } from "../jobs/worker";
  * cannot point it at services inside the network. The address is checked when
  * the job runs; a DNS answer that changes between the check and the request
  * is not caught.
+ *
+ * An error names the address only by where it goes (webhookView.ts): the
+ * address is often the credential, and an error is stored with the job,
+ * copied into logs and shown to members who may not see the address.
  */
 
 export const ACTION_WEBHOOK_KIND = "action.webhook";
@@ -71,7 +76,7 @@ export async function assertDeliverable(url: string, allowInternal = process.env
   try {
     u = new URL(url);
   } catch {
-    throw new PermanentJobError(`not a URL: ${url}`);
+    throw new PermanentJobError("the webhook address is not a URL");
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new PermanentJobError(`webhooks use http or https, not ${u.protocol}`);
   if (allowInternal) return;
@@ -132,7 +137,7 @@ export const actionWebhookHandler: JobHandler = {
     });
     if (res.ok) return { url: effect.url, status: res.status };
     const retryable = res.status >= 500 || res.status === 408 || res.status === 429;
-    const message = `webhook ${effect.url} answered HTTP ${res.status}`;
+    const message = `webhook ${redactUrl(effect.url)} answered HTTP ${res.status}`;
     if (retryable) throw new Error(message);
     throw new PermanentJobError(res.status >= 300 && res.status < 400 ? `${message} (redirects are not followed)` : message);
   },

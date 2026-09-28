@@ -10,7 +10,7 @@ import { getTableName, type Table } from "drizzle-orm";
 import type { User } from "@db/schema";
 import { actionSubmissions, actionTypeVersions, jobs } from "@db/schema";
 import { appRouter } from "../router";
-import { redactDefinition, redactDeliveryResult, redactUrl, redactUrlsIn } from "../services/actions/webhookView";
+import { redactDefinition, redactDeliveryResult, redactUrl, redactUrlsIn, webhookAddressProblem } from "../services/actions/webhookView";
 import { createMockContext, mockAdminUser, mockOntologistUser, mockViewerUser, mockWorkspace } from "./testHarness";
 
 const store = vi.hoisted(() => ({ tables: new Map<string, Record<string, unknown>[]>() }));
@@ -99,6 +99,35 @@ describe("webhookView", () => {
     );
     expect(redactUrlsIn(null)).toBeNull();
     expect(redactUrlsIn("no address here")).toBe("no address here");
+  });
+
+  it("redacts the whole address an older delivery error quoted, spaces and quotes included", () => {
+    for (const url of [
+      "https://hooks.example.com/hook?token=abc SECRETTAIL",
+      "https://hooks.example.com/hook/ab'SECRETTAIL",
+      'https://hooks.example.com/a"b SECRETTAIL',
+    ]) {
+      expect(redactUrlsIn(`webhook ${url} answered HTTP 302 (redirects are not followed)`), url).toBe(
+        "webhook https://hooks.example.com/… answered HTTP 302 (redirects are not followed)",
+      );
+    }
+    expect(redactUrlsIn("not a URL: https://exa mple.com/SECRETTAIL")).toBe("not a URL: (hidden)");
+  });
+
+  it("reads the same when redacted twice", () => {
+    for (const text of [`webhook ${HOOK} answered HTTP 500`, "webhook https://hooks.example.com answered HTTP 500", "webhook not-a-url answered HTTP 500"]) {
+      const once = redactUrlsIn(text);
+      expect(redactUrlsIn(once), text).toBe(once);
+    }
+  });
+
+  it("names what an address may not hold raw, and lets anything else through", () => {
+    for (const bad of ["https://h.example/a b", "https://h.example/a'b", 'https://h.example/a"b', "https://h.example/a<b>", "https://h.example/a`b", "https://h.example/a\tb", "https://h.example/a b", "https://h.example/a\u0000b"]) {
+      expect(webhookAddressProblem(bad), JSON.stringify(bad)).toMatch(/percent-encoded/);
+    }
+    for (const good of ["https://hooks.slack.com/services/T000/B000/XXXX", "https://h.example/a%20b?x=1&y=%27", "https://bücher.example/hook"]) {
+      expect(webhookAddressProblem(good), good).toBeNull();
+    }
   });
 
   it("redacts a definition's side effects and a delivery result, leaving anything else as it is", () => {
