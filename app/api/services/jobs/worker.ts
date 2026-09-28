@@ -2,6 +2,7 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import type { Job } from "@db/schema";
 import { sweepIdleRateLimits } from "../../lib/rateLimit";
+import { workspaceGraphs } from "../workspaceGraph";
 import * as queue from "./queue";
 
 /** A failure that retrying cannot fix, such as a job whose target was deleted. */
@@ -34,6 +35,8 @@ export type QueueOps = {
   heartbeat: typeof queue.workerHeartbeat;
   /** Housekeeping beside the queue: deletes rate-limit rows idle for a day, a batch at a time. */
   sweep: () => Promise<number>;
+  /** With the engine host configured: catches up to 50 behind workspaces' copies. Answers how many. */
+  catchUpGraphs?: () => Promise<number>;
 };
 
 const mysqlQueue: QueueOps = {
@@ -44,6 +47,7 @@ const mysqlQueue: QueueOps = {
   register: queue.registerWorker,
   heartbeat: queue.workerHeartbeat,
   sweep: () => sweepIdleRateLimits(),
+  catchUpGraphs: () => workspaceGraphs()?.catchUpBehind() ?? Promise.resolve(0),
 };
 
 export type WorkerOptions = {
@@ -57,6 +61,8 @@ export type WorkerOptions = {
   heartbeatMs?: number;
   /** How often, at the most, a heartbeat also sweeps (QueueOps.sweep). */
   sweepMs?: number;
+  /** How often, at the most, a heartbeat also catches up behind workspace graphs (QueueOps.catchUpGraphs). */
+  graphSweepMs?: number;
   queue?: Partial<QueueOps>;
   log?: (line: string) => void;
 };
@@ -87,6 +93,7 @@ export class JobWorker {
   private readonly pollMs: number;
   private readonly heartbeatMs: number;
   private readonly sweepMs: number;
+  private readonly graphSweepMs: number;
   private readonly version: string | null;
   private readonly log: (line: string) => void;
 
@@ -97,6 +104,8 @@ export class JobWorker {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private sweeping: Promise<void> | null = null;
   private lastSweepAt = 0;
+  private catchingUpGraphs: Promise<void> | null = null;
+  private lastGraphSweepAt = 0;
   private succeeded = 0;
   private failed = 0;
   private lastLoopAt = 0;
@@ -110,6 +119,7 @@ export class JobWorker {
     this.pollMs = opts.pollMs ?? 1000;
     this.heartbeatMs = opts.heartbeatMs ?? 5000;
     this.sweepMs = opts.sweepMs ?? 60_000;
+    this.graphSweepMs = opts.graphSweepMs ?? 5000;
     this.version = opts.version ?? null;
     this.log = opts.log ?? ((line) => console.log(`[worker ${this.id}] ${line}`));
   }
@@ -143,8 +153,9 @@ export class JobWorker {
     }
     await this.loopDone;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-    // A sweep under way finishes (its statements are bounded) before the pool closes.
+    // A sweep, or a graph catch-up, under way finishes (both are bounded) before the pool closes.
     await this.sweeping;
+    await this.catchingUpGraphs;
     this.state = "stopped";
     await this.beat();
   }
@@ -179,6 +190,13 @@ export class JobWorker {
       });
       await this.sweeping;
     }
+    if (this.state === "running" && this.q.catchUpGraphs && !this.catchingUpGraphs && Date.now() - this.lastGraphSweepAt >= this.graphSweepMs) {
+      this.lastGraphSweepAt = Date.now();
+      this.catchingUpGraphs = this.catchUpGraphsOnce().finally(() => {
+        this.catchingUpGraphs = null;
+      });
+      await this.catchingUpGraphs;
+    }
   }
 
   /**
@@ -193,6 +211,22 @@ export class JobWorker {
     } catch (err) {
       this.lastError = message(err);
       this.log(`sweep failed: ${this.lastError}`);
+    }
+  }
+
+  /**
+   * With the engine host configured, brings up to 50 workspaces whose graph
+   * changed since their copy was built up to date, one heartbeat at a time, so
+   * a read of one seldom has to catch it up itself. A failed round is logged,
+   * and the next one tries again.
+   */
+  private async catchUpGraphsOnce(): Promise<void> {
+    try {
+      const caught = await this.q.catchUpGraphs!();
+      if (caught > 0) this.log(`caught up ${caught} workspace graph(s) behind MySQL`);
+    } catch (err) {
+      this.lastError = message(err);
+      this.log(`graph catch-up failed: ${this.lastError}`);
     }
   }
 

@@ -21,6 +21,7 @@ import { writeAudit } from "./audit";
 import { recordGraphChange } from "./graphChanges";
 import { EngineRequestError, semanticEngine, type ShaclValidationResult } from "./semanticEngine";
 import { buildPrefixMap, expandIri, knowledgeGraphSubjects, modulePrefixes, shaclJsonToTurtle } from "./rdfBridge";
+import { scratchShacl, workspaceGraphs } from "./workspaceGraph";
 import { workspaceDatatypeRanges } from "./datatypeRanges";
 import { explainShaclReport, type ExplainedShaclReport } from "./explainableShacl";
 import { enqueueJob } from "./jobs/queue";
@@ -297,7 +298,8 @@ export async function checkImportShacl(
     }
   }
   if (own.size === 0) return { kind: "none" };
-  if (!(await semanticEngine.ensureEngineRunning())) return { kind: "unchecked", reason: "the semantic engine is not running" };
+  const hosted = workspaceGraphs() !== null;
+  if (!hosted && !(await semanticEngine.ensureEngineRunning())) return { kind: "unchecked", reason: "the semantic engine is not running" };
 
   const outside = [...new Set(links.map((l) => l.to))].filter((iri) => !own.has(iri));
   const existing: { iri: string; classIri: string; moduleKey: string; label: string }[] = [];
@@ -339,15 +341,19 @@ export async function checkImportShacl(
   const data = knowledgeGraphSubjects(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId), modulePrefixes(mods));
   let raw: ShaclValidationResult;
   try {
-    // A store that changed under the check (EngineInterference) makes it unchecked.
-    raw = await semanticEngine.exclusive(
-      () =>
-        semanticEngine.checkLoaded(
-          async () => (await semanticEngine.loadSubjects(prefixMap, data)).triplesLoaded,
-          () => semanticEngine.validateShacl(shapesTtl),
-        ),
-      { signal },
-    );
+    // With the engine host, on a scratch engine that holds only these rows.
+    // Without it, on the one engine, emptied and loaded under its lock; a
+    // store that changed under the check (EngineInterference) makes it unchecked.
+    raw = hosted
+      ? await scratchShacl(prefixMap, data, shapesTtl, signal)
+      : await semanticEngine.exclusive(
+          () =>
+            semanticEngine.checkLoaded(
+              async () => (await semanticEngine.loadSubjects(prefixMap, data)).triplesLoaded,
+              () => semanticEngine.validateShacl(shapesTtl),
+            ),
+          { signal },
+        );
   } catch (err) {
     // An interrupted job stops here: it is not an import that went unchecked.
     if (signal?.aborted) interrupted(signal);

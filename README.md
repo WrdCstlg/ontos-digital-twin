@@ -237,7 +237,7 @@ required; `docker compose` refuses to start without them.
 | `SECRETS_KEY_PREVIOUS` | no | When rotating `SECRETS_KEY`, the old key: the next start re-seals what it sealed under the new one. Remove it afterwards. |
 | `ALLOW_DEMO_LOGIN` | no | `true` re-enables persona login. Local demos only — see [Signing in](#signing-in). |
 | `ALLOWED_ORIGINS` | no | Cross-origin allowlist. The bundled client is same-origin and needs nothing here. |
-| `ENGINE_HOST_TOKEN` | no | Only for the `engine-host` service (profile `engine-host`, not used yet), which refuses to start without it. See [Engine host](#engine-host-not-used-yet). |
+| `ENGINE_HOST_TOKEN` | no | For the `engine-host` service (profile `engine-host`), which refuses to start without it, and for the app and worker to reach it (`ENGINE_HOST_URL`). See [Engine host](#engine-host). |
 
 ### Application
 
@@ -268,7 +268,7 @@ required; `docker compose` refuses to start without them.
 | `ONTOS_IOT_CONSUMER` | no | on in the worker; in the web process, as `ONTOS_EMBEDDED_WORKER` | Whether a process runs the IoT consumer. Of those that do, only the one holding its lease connects to brokers, so `true` on several adds standbys, not connections. The Docker stack runs it in the worker |
 | `IOT_MQTT_VERSION` | no | `4` (MQTT 3.1.1) | `5` connects the `IOT_BROKER_URL` broker with MQTT 5.0 |
 | `VITE_APP_ID` | no | — | Application identifier exposed to the browser |
-| `ENGINE_HOST_*` | no | — | The engine host's settings: see [Engine host](#engine-host-not-used-yet) |
+| `ENGINE_HOST_*` | no | — | The engine host's settings: see [Engine host](#engine-host) |
 
 ---
 
@@ -317,11 +317,41 @@ in-process subclass walker, and SHACL validation is skipped — see
 
 ---
 
-## Engine host (not used yet)
+## Change capture
 
-`dist/engineHost.js` is the service that runs one semantic engine per workspace. Nothing
-uses it yet: the app and the worker still use `engine` and `engine-worker`, and moving
-their reads and writes over is a later change.
+MySQL is always the graph's system of record. `graph_versions` holds each workspace's
+current version and epoch (one row, bumped by every change); `graph_dirty` holds which
+subjects — a node, the nodes linking to one that came or went, a class, a property, or the
+whole workspace — changed since which version. `recordGraphChange` (`services/graphChanges.ts`)
+is called as the last write of any transaction that changes what a workspace's graph renders
+to, after its audit write if it has one; `recordGraphReplaced` starts a new epoch when the
+graph itself was replaced (a seed, a restore), so every copy of it rebuilds instead of trying
+to catch up.
+
+A copy of a workspace's graph — an engine host's store, in `services/graphCopy.ts` — reads its
+own version from a named graph in the store, compares it with a consistent snapshot of MySQL,
+and either does nothing (already current), rebuilds from nothing (no version held yet, another
+epoch, ahead of MySQL, or a change reached every subject), or catches up: replacing just the
+subjects marked dirty since its version, in fenced SPARQL UPDATE requests of bounded size, each
+naming the writer taking the copy over so a writer that stalls or is replayed changes nothing
+once another has taken over. `services/workspaceGraph.ts` is what reads go through: fresh by
+default (catching the copy up first when it is behind), or at whatever version the copy already
+holds. `graph.syncStore` / `x-auto-sync: false` control that per request; every worker also
+catches up to 50 behind workspaces every few seconds on its own, so a read seldom has to wait.
+
+---
+
+## Engine host
+
+`dist/engineHost.js` is the service that runs one semantic engine per workspace. With
+`ENGINE_HOST_URL` set, `services/workspaceGraph.ts` reads through it: SPARQL (`/api/sparql`,
+`graph.sparqlQuery`), the NLQ path's LLM-generated queries, and the SHACL check an edit plan
+or an import runs use it, each workspace's copy kept up to date from MySQL's change capture
+rather than reloaded for every read. Module SHACL checks and reasoning
+(`ontology.validateShacl`, `runReasoner`) still use the one process-local `engine`, workspace
+by workspace; moving those over, as whole-workspace operations rather than per module, is a
+later change. Without `ENGINE_HOST_URL`, everything uses the one process-local engine, as
+before.
 
 It keeps one open-ontologies process per workspace, each with a persistent RocksDB store
 of its own in `ENGINE_HOST_DATA_DIR/ws-<id>`, and it is the only process that starts them.
@@ -455,7 +485,7 @@ app/
 │   │   ├── twinModels.ts        DTDL model definitions
 │   │   └── audit.ts             Hash-linked audit chain
 │   ├── boot.ts              App entry: middleware, health, SPARQL, tRPC mount
-│   ├── engineHost.ts        Engine host entry: one engine per workspace (not used yet)
+│   ├── engineHost.ts        Engine host entry: one engine per workspace
 │   ├── middleware.ts        Procedure builders (public/authed/ontologist/admin)
 │   └── *Router.ts           ontology, graph, mapping, insights, nlq, twin, dashboard, admin
 ├── contracts/               Types and constants shared by client and server
@@ -958,9 +988,11 @@ These are tracked, known behaviours rather than surprises:
   between that check and the request is not caught.
 - **Some state still lives in the API process.** Background jobs and IoT broker
   connections are safe to spread across processes (one holds the brokers at a time), and
-  the rate limits and login lockout, kept in MySQL, hold across API processes too. But a
-  second API process would need its own semantic engine. Run one API process until that
-  moves out.
+  the rate limits and login lockout, kept in MySQL, hold across API processes too. With
+  `ENGINE_HOST_URL` configured, so do SPARQL, NLQ, and the SHACL check an edit or an import
+  runs: every process reads and checks through the same engine host. Module SHACL checks and
+  reasoning still run on the one process-local engine, so a second API process would need its
+  own for those; run one process until they move over too.
 - **Broker connectors wait for a consumer.** A broker shows as connecting until the
   process holding the IoT lease reports on it. If no process runs the consumer (no worker
   in a production deployment, or `ONTOS_IOT_CONSUMER=false` everywhere), it stays so, and

@@ -16,6 +16,7 @@ import { csrf } from "hono/csrf";
 import { sql } from "drizzle-orm";
 import { getDb } from "./queries/connection";
 import { semanticEngine } from "./services/semanticEngine";
+import { graphReadFailure, queryWorkspaceGraph, workspaceGraphs } from "./services/workspaceGraph";
 import { sessionUser } from "./auth/service";
 import { sparqlRateLimiter } from "./lib/rateLimit";
 import { isReadOnlySparql, MAX_SPARQL_LENGTH } from "./lib/sparqlGuard";
@@ -219,6 +220,27 @@ app.post("/api/sparql", async (c) => {
     );
   }
 
+  // By default the answer is current: it holds every change committed before
+  // the query. x-auto-sync: false answers at whatever version the workspace's
+  // graph is at, without waiting for it to catch up, and never from another
+  // workspace's.
+  const resync = c.req.header("x-auto-sync") !== "false";
+
+  // With the engine host, the workspace's own copy answers (workspaceGraph.ts),
+  // and says which version it holds.
+  if (workspaceGraphs()) {
+    let answer;
+    try {
+      answer = await queryWorkspaceGraph(workspace.id, queryText, { fresh: resync });
+    } catch (err) {
+      const failure = graphReadFailure(err);
+      if (failure.retryAfterSeconds) c.header("retry-after", String(failure.retryAfterSeconds));
+      return c.json({ error: failure.message }, failure.status);
+    }
+    if (answer.version !== null) c.header("x-ontos-graph-version", String(answer.version));
+    return c.json(sparqlJson(answer));
+  }
+
   const isAlive = await semanticEngine.ensureEngineRunning();
   if (!isAlive) {
     return c.json(
@@ -227,11 +249,9 @@ app.post("/api/sparql", async (c) => {
     );
   }
 
-  // The engine holds one graph at a time, so the sync and the query run together
-  // under its lock. By default the workspace is re-synced first so answers are
-  // current. x-auto-sync: false skips the re-sync only when the store already
-  // holds this workspace (e.g. repeated queries in one batch) — never another's.
-  const resync = c.req.header("x-auto-sync") !== "false";
+  // The one engine holds one graph at a time, so the sync and the query run
+  // together under its lock. x-auto-sync: false skips the re-sync only when
+  // the store already holds this workspace (e.g. repeated queries in one batch).
   const outcome = await semanticEngine.exclusive(async () => {
     if (resync) {
       await semanticEngine.syncWorkspace(workspace.id);
@@ -249,10 +269,15 @@ app.post("/api/sparql", async (c) => {
     return c.json({ error: outcome.error }, 400);
   }
 
-  return c.json({
-    head: { vars: outcome.res.variables },
+  return c.json(sparqlJson(outcome.res));
+});
+
+/** Rows as SPARQL 1.1 JSON results: each value a uri or a literal. */
+function sparqlJson(res: { variables: string[]; results: Record<string, string>[] }) {
+  return {
+    head: { vars: res.variables },
     results: {
-      bindings: outcome.res.results.map((r) => {
+      bindings: res.results.map((r) => {
         const row: Record<string, { type: string; value: string }> = {};
         for (const [k, v] of Object.entries(r)) {
           const clean = v.replace(/^<|>$/g, "");
@@ -264,8 +289,8 @@ app.post("/api/sparql", async (c) => {
         return row;
       }),
     },
-  });
-});
+  };
+}
 
 /** Constant-time comparison, so response timing reveals nothing about the key. */
 function keysMatch(given: string | undefined, expected: string): boolean {

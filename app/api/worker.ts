@@ -18,7 +18,9 @@ import { semanticEngine } from "./services/semanticEngine";
  * each engine task takes a MySQL named lock, one per engine and database, that
  * every replica takes too (services/engineLock.ts). The app never takes it, so
  * a worker must not share the app's engine. Each also sweeps, every minute, the
- * rate-limit rows idle for a day.
+ * rate-limit rows idle for a day, and, with the engine host configured
+ * (ENGINE_HOST_URL), catches up to 50 workspaces whose graph changed since
+ * their copy was built, every few seconds.
  *
  * It also runs the IoT consumer, unless ONTOS_IOT_CONSUMER=false: of all the
  * processes that run one, the one holding its lease connects to the brokers.
