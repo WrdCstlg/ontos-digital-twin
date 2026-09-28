@@ -52,11 +52,13 @@ const STATEMENT_MS = 10_000;
  * requests, and a session lost without a sound (the database gone and back,
  * its connection not yet noticed) may already have freed the lock.
  */
-const HEARTBEAT_ANSWER_MS = 3_000;
+const HEARTBEAT_ANSWER_MS = 5_000;
 /** How long opening the lock's session may take. */
 const CONNECT_MS = 10_000;
 /** MySQL's longest lock name. A longer one is an error GET_LOCK answers every time. */
 const MAX_LOCK_NAME = 64;
+/** MySQL's answer to a SET of a variable the server does not have. */
+const ER_UNKNOWN_SYSTEM_VARIABLE = 1193;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const reasonOf = (signal: AbortSignal) => (signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
@@ -123,12 +125,13 @@ export async function withNamedLock<T>(
   if (signal?.aborted) throw calledOff();
 
   let conn: LockConnection;
-  const connecting = connect();
+  let connecting: Promise<LockConnection> | undefined;
   try {
+    connecting = connect();
     conn = await bounded(connecting, CONNECT_MS, () => new Error(`no connection in ${CONNECT_MS} ms`), signal);
   } catch (err) {
     // A connection that opens after all is closed at once: its session would hold nothing.
-    connecting.then((late) => late.destroy(), () => undefined);
+    connecting?.then((late) => late.destroy(), () => undefined);
     if (signal?.aborted) throw calledOff();
     throw new LockUnavailable(`could not reach the database for lock ${name}: ${message(err)}`);
   }
@@ -156,10 +159,19 @@ export async function withNamedLock<T>(
   try {
     let granted: unknown;
     try {
-      // A server-wide max_execution_time would cut the wait short: it applies
-      // to SELECT, and GET_LOCK is asked for in one.
       await bounded(
-        conn.query("SET SESSION wait_timeout = ?, max_execution_time = 0", [LOCK_SESSION_IDLE_SECONDS]),
+        conn.query("SET SESSION wait_timeout = ?", [LOCK_SESSION_IDLE_SECONDS]),
+        STATEMENT_MS,
+        () => new Error(`no answer in ${STATEMENT_MS} ms`),
+        signal,
+      );
+      // A server-wide max_execution_time would cut the wait short: it applies
+      // to SELECT, and GET_LOCK is asked for in one. A server without it
+      // (MariaDB) has nothing to cut the wait short with.
+      await bounded(
+        conn.query("SET SESSION max_execution_time = 0").catch((err: unknown) => {
+          if ((err as { errno?: number }).errno !== ER_UNKNOWN_SYSTEM_VARIABLE) throw err;
+        }),
         STATEMENT_MS,
         () => new Error(`no answer in ${STATEMENT_MS} ms`),
         signal,

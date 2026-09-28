@@ -117,11 +117,13 @@ services:
     restart: unless-stopped
     # On SIGTERM the worker finishes its job within 5 s or hands it back to the
     # queue, then closes its pool. A job stopped with an engine request on its
-    # way holds the engine until the engine has answered it (30 s at most), so
-    # the next worker never clears the store under it. Docker's own default can
-    # be as short as 1 s, which kills it mid-job, leaves the job to its lease,
-    # and frees the engine lock while the engine may still be at its request.
-    stop_grace_period: 45s
+    # way holds the engine until the engine has answered it (30 s at most), and
+    # after one that timed out, until the engine answers another (30 s more), so
+    # the next worker never clears the store under it: 85 s in the worst case.
+    # Docker's own default can be as short as 1 s, which kills it mid-job,
+    # leaves the job to its lease, and frees the engine lock while the engine
+    # may still be at its request.
+    stop_grace_period: 90s
     environment:
       <<: *app-env
       OPEN_ONTOLOGIES_URL: http://engine-worker:8085

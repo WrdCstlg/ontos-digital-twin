@@ -24,12 +24,14 @@ describe("withNamedLock", () => {
     });
 
     expect(result).toBe(42);
+    // The task ran after the session was set up and the lock granted.
     expect(conn.calls).toEqual([
-      `SET SESSION wait_timeout = ?, max_execution_time = 0 [${LOCK_SESSION_IDLE_SECONDS}]`,
+      `SET SESSION wait_timeout = ? [${LOCK_SESSION_IDLE_SECONDS}]`,
+      "SET SESSION max_execution_time = 0 []",
       'SELECT GET_LOCK(?, ?) AS granted ["ontos:engine:x",60]',
       'SELECT RELEASE_LOCK(?) AS released ["ontos:engine:x"]',
     ]);
-    expect(seen).toEqual(["task after 2 statements, signal live"]);
+    expect(seen).toEqual(["task after 3 statements, signal live"]);
     expect(conn.end).toHaveBeenCalledTimes(1);
     expect(conn.destroy).not.toHaveBeenCalled();
     expect(LOCK_SESSION_IDLE_SECONDS).toBeLessThanOrEqual(60);
@@ -84,7 +86,7 @@ describe("withNamedLock", () => {
         expect(conn.calls).toEqual([]);
       }));
 
-    it("stops the task when a heartbeat goes unanswered for 3 s", () =>
+    it("stops the task when a heartbeat goes unanswered for 5 s", () =>
       withFakeTime(async () => {
         const conn = fakeLockConnection({ heartbeatHangs: true });
         let stoppedAt: number | null = null;
@@ -92,11 +94,11 @@ describe("withNamedLock", () => {
           signal.addEventListener("abort", () => (stoppedAt = Date.now()));
           return untilStopped(signal);
         });
-        const outcome = expect(run).rejects.toThrow("could not confirm lock l is still held: checking its session failed: no answer in 3000 ms");
+        const outcome = expect(run).rejects.toThrow("could not confirm lock l is still held: checking its session failed: no answer in 5000 ms");
         const start = Date.now();
-        await vi.advanceTimersByTimeAsync(4_000);
+        await vi.advanceTimersByTimeAsync(6_000);
         await outcome;
-        expect(stoppedAt! - start).toBe(4_000);
+        expect(stoppedAt! - start).toBe(6_000);
       }));
 
     it("refuses the task's result when the release never answers, and destroys the session", () =>
@@ -276,10 +278,20 @@ describe("withNamedLock", () => {
     expect(() => conn.emit("error", new Error("late"))).not.toThrow();
   });
 
-  it("says the database could not be reached when no session could be had", async () => {
+  it("says the database could not be reached when no session could be had, however opening it failed", async () => {
     await expect(withNamedLock(async () => Promise.reject(new Error("ECONNREFUSED")), "l", opts, async () => 1)).rejects.toThrow(
       new LockUnavailable("could not reach the database for lock l: ECONNREFUSED"),
     );
+    const throwsAtOnce = () => {
+      throw new Error("Invalid URL");
+    };
+    await expect(withNamedLock(throwsAtOnce, "l", opts, async () => 1)).rejects.toThrow(new LockUnavailable("could not reach the database for lock l: Invalid URL"));
+  });
+
+  it("takes the lock on a server without max_execution_time (MariaDB), which has nothing to cut the wait short", async () => {
+    const conn = fakeLockConnection({ noMaxExecutionTime: true });
+    await expect(withNamedLock(async () => conn, "l", opts, async () => "ran")).resolves.toBe("ran");
+    expect(statements(conn)).toContain("SELECT GET_LOCK(?,");
   });
 });
 

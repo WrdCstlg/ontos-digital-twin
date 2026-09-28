@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENGINE_LOCK_HOLD_MS, ENGINE_LOCK_WAIT_SECONDS, engineIdentity, engineLockName, installEngineLock } from "../services/engineLock";
 import { SemanticEngineClient } from "../services/semanticEngine";
 import { LockLost } from "../lib/namedLock";
-import { fakeLockConnection } from "./fakeLockConnection";
+import { fakeLockConnection, untilStopped } from "./fakeLockConnection";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -128,6 +128,27 @@ describe("an engine given the lock", () => {
     await expect(run).resolves.toEqual({ variables: [], results: [] });
     expect(conn.calls.at(-1)).toBe('SELECT RELEASE_LOCK(?) AS released ["l"]');
   });
+
+  it("keeps the lock, after a request of its task timed out, until the engine has answered one more query", async () => {
+    const conn = fakeLockConnection();
+    const engine = new SemanticEngineClient();
+    installEngineLock(engine, { connect: async () => conn, name: "l" });
+    let settled: ((r: Response) => void) | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      // The health check's own timeout (2 s) runs out: the engine may still be at it.
+      if (String(url).endsWith("/health")) return untilStopped(init!.signal!);
+      return new Promise<Response>((resolve) => (settled = resolve));
+    });
+
+    const run = engine.exclusive(() => engine.checkHealth());
+    await vi.waitFor(() => expect(settled).toBeDefined(), { timeout: 5_000 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(conn.calls.some((c) => c.startsWith("SELECT RELEASE_LOCK"))).toBe(false);
+
+    settled!(Response.json({ head: {}, boolean: true }));
+    await expect(run).resolves.toMatchObject({ alive: false });
+    expect(conn.calls.at(-1)).toBe('SELECT RELEASE_LOCK(?) AS released ["l"]');
+  }, 10_000);
 
   it("stops waiting for the lock when the caller's signal aborts", async () => {
     const conn = fakeLockConnection({ getHangs: true });

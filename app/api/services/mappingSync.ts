@@ -334,12 +334,13 @@ export async function checkImportShacl(
   const dataTtl = knowledgeGraphToTurtle(nodes, edges, prefixMap, await workspaceDatatypeRanges(workspaceId), modulePrefixes(mods));
   let raw: ShaclValidationResult;
   try {
+    // A store that changed under the check (EngineInterference) makes it unchecked.
     raw = await semanticEngine.exclusive(
-      async () => {
-        await semanticEngine.clearStore();
-        await semanticEngine.loadTurtle(dataTtl);
-        return semanticEngine.validateShacl(shapesTtl);
-      },
+      () =>
+        semanticEngine.checkLoaded(
+          async () => (await semanticEngine.loadTurtle(dataTtl)).triplesLoaded,
+          () => semanticEngine.validateShacl(shapesTtl),
+        ),
       { signal },
     );
   } catch (err) {
@@ -348,6 +349,9 @@ export async function checkImportShacl(
     const reason = err instanceof Error ? err.message : String(err);
     return err instanceof EngineRequestError ? { kind: "uncheckable", reason } : { kind: "unchecked", reason };
   }
+  // A job stopped while its check ran lets the check finish (the engine would
+  // go on with it anyway), and stops here: it does not act on the report.
+  if (signal?.aborted) interrupted(signal);
 
   // The engine holds one graph. The lock around clear, load and validate keeps
   // out every process that takes it, but not one that does not (the app, or a

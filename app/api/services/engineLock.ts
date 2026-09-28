@@ -5,12 +5,15 @@ import type { EngineLock } from "./semanticEngine";
 /**
  * How long an engine task waits for other processes' before giving up. A
  * worker's SHACL check holds the engine for under a minute, so this lets a
- * few replicas queue ahead. Past it, the import is treated as not checked just
- * now: a mapping set to block retries it, and one that warns (the default)
- * imports and records that it was not checked (mappingSync.ts). A job aborted
- * while it waits (its worker stopping, its lease lost) stops waiting at once.
+ * few replicas queue ahead, and is longer than the most one holder can keep
+ * it: ENGINE_LOCK_HOLD_MS, then its requests' last timeout and the settling
+ * after it (semanticEngine.runTask). Past it, the import is treated as not
+ * checked just now: a mapping set to block retries it, and one that warns (the
+ * default) imports and records that it was not checked (mappingSync.ts). A
+ * job aborted while it waits (its worker stopping, its lease lost) stops
+ * waiting at once.
  */
-export const ENGINE_LOCK_WAIT_SECONDS = 180;
+export const ENGINE_LOCK_WAIT_SECONDS = 240;
 
 /** How long an engine task may hold the engine before it is told to stop. */
 export const ENGINE_LOCK_HOLD_MS = 120_000;

@@ -792,7 +792,9 @@ These are tracked, known behaviours rather than surprises:
   engine has answered what it already sent: the engine goes on with a request its client
   gives up on. A worker killed before then (sooner than `stop_grace_period`) frees the
   lock with its connection, and a request of its may still write into the next
-  holder's store. The lock holds only among workers whose `DATABASE_URL` reaches the same MySQL
+  holder's store. So each check also counts the store's triples before and after it
+  runs, and one whose store held more than it loaded, or changed while it ran, is
+  treated as unchecked. The lock holds only among workers whose `DATABASE_URL` reaches the same MySQL
   server: named locks are a server's own, so a read replica behind a proxy has its own.
 - **A development bootstrap path exists for credential login.** Passwords are verified with
   constant-time scrypt against `users.passwordHash`, but outside production an account that

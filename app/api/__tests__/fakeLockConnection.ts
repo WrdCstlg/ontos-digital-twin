@@ -25,6 +25,8 @@ export type LockScript = {
   releaseHangs?: boolean;
   /** Closing the session never finishes. */
   endHangs?: boolean;
+  /** The server has no max_execution_time, as MariaDB has none. */
+  noMaxExecutionTime?: boolean;
 };
 
 export function fakeLockConnection(script: LockScript = {}) {
@@ -40,6 +42,9 @@ export function fakeLockConnection(script: LockScript = {}) {
     listening: (event: "error" | "end") => (listeners[event] ?? []).length > 0,
     query: vi.fn(async (sql: string, values: unknown[] = []) => {
       calls.push(`${sql} ${JSON.stringify(values)}`);
+      if (sql.startsWith("SET SESSION max_execution_time") && script.noMaxExecutionTime) {
+        throw Object.assign(new Error("Unknown system variable 'max_execution_time'"), { errno: 1193 });
+      }
       if (sql.startsWith("SET SESSION")) return [{}, []];
       if (sql.startsWith("SELECT GET_LOCK")) {
         if (script.getFails) throw new Error("Connection lost: The server closed the connection.");

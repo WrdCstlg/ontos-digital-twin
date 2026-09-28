@@ -9,7 +9,7 @@
  * store. A task called off while it waits for its turn lets nobody in early.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { semanticEngine } from "../services/semanticEngine";
+import { EngineInterference, semanticEngine } from "../services/semanticEngine";
 import { LockLost, LockUnavailable } from "../lib/namedLock";
 import { untilStopped } from "./fakeLockConnection";
 
@@ -188,6 +188,90 @@ describe("an engine of this process's own", () => {
     answer!(Response.json({ variables: [], results: [] }));
     await Promise.all([first, second]);
     expect(events).toEqual(["first answered", "second in"]);
+  });
+
+  it("holds the engine for a request the task sent and did not wait for, as when a Promise.all fails fast", async () => {
+    vi.spyOn(semanticEngine, "ensureEngineRunning").mockResolvedValue(true);
+    let answerSlow: ((r: Response) => void) | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const { query } = JSON.parse(String(init!.body)) as { query: string };
+      if (query.includes("fast")) return new Response("refused", { status: 400 });
+      return new Promise<Response>((resolve) => (answerSlow = resolve));
+    });
+    const events: string[] = [];
+    const first = semanticEngine
+      .exclusive(() => Promise.all([semanticEngine.querySparql("SELECT * WHERE { ?slow ?p ?o }"), semanticEngine.querySparql("SELECT * WHERE { ?fast ?p ?o }")]))
+      .catch(() => events.push("first failed fast"));
+    const second = semanticEngine.exclusive(async () => void events.push("second in"));
+    await vi.waitFor(() => expect(answerSlow).toBeDefined());
+    await new Promise((r) => setTimeout(r, 20));
+    // The first task failed, but the engine is still at its slow request.
+    expect(events).toEqual([]);
+
+    answerSlow!(Response.json({ variables: [], results: [] }));
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first failed fast", "second in"]);
+  });
+
+  it("does not count work a task left behind (a timer) as the task once it is over", async () => {
+    let later: Promise<string> | undefined;
+    await new Promise<void>((ran) => {
+      void semanticEngine.exclusive(async () => {
+        // Scheduled inside the task, run after it ended: it may ask for a turn of its own.
+        setTimeout(() => {
+          later = semanticEngine.exclusive(async () => "a turn of its own");
+          ran();
+        }, 20);
+      });
+    });
+    await expect(later).resolves.toBe("a turn of its own");
+  });
+
+  it("tries again, for a bounded time, a settling query the engine did not answer", async () => {
+    const sent: string[] = [];
+    let settles = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      sent.push(new URL(String(url)).pathname);
+      if (String(url).endsWith("/health")) return untilStopped(init!.signal!);
+      // The settling query: refused twice, then answered.
+      return ++settles < 3 ? new Response("busy", { status: 503 }) : Response.json({ head: {}, boolean: true });
+    });
+    await semanticEngine.exclusive(() => semanticEngine.checkHealth());
+    expect(settles).toBe(3);
+    expect(sent).toEqual(["/health", "/api/query", "/api/query", "/api/query"]);
+  }, 10_000);
+
+  describe("a check on what a task loaded", () => {
+    /** An engine whose store counts `counts` in turn: after the load, then after the check. */
+    function counting(counts: number[]) {
+      vi.spyOn(semanticEngine, "ensureEngineRunning").mockResolvedValue(true);
+      vi.spyOn(semanticEngine, "clearStore").mockResolvedValue(true);
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ variables: ["n"], results: [{ n: `"${counts.shift()}"^^xsd:integer` }] }));
+    }
+    const check = () =>
+      semanticEngine.exclusive(() =>
+        semanticEngine.checkLoaded(
+          async () => 14,
+          async () => "the report",
+        ),
+      );
+
+    it("stands when the store held what was loaded, before and after", async () => {
+      counting([14, 14]);
+      await expect(check()).resolves.toBe("the report");
+    });
+
+    it("is refused when the store held more than was loaded, none of it, or changed while the check ran", async () => {
+      for (const counts of [
+        [19, 19],
+        [0, 0],
+        [14, 20],
+        [14, 0],
+      ]) {
+        counting([...counts]);
+        await expect(check(), counts.join(" then ")).rejects.toBeInstanceOf(EngineInterference);
+      }
+    });
   });
 
   it("after a request of its times out, lets the engine go only once the engine has answered one more query", async () => {
