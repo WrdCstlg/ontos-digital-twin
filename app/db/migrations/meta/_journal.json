@@ -71,6 +71,13 @@
       "when": 1790585320974,
       "tag": "0009_graph_change_capture",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1790624344185,
+      "tag": "0010_iot_leased_consumer",
+      "breakpoints": true
     }
   ]
 }

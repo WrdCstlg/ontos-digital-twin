@@ -1,10 +1,10 @@
 /**
- * Insights and IoT connectors on a real MySQL, around migration 0009.
- * Reconciliations that run at once (a scan beside telemetry) keep one insight
- * per rule, in place; the migration first removes the duplicates concurrent
- * reconciliations made before, keeping the newest, so its unique key can hold
- * on a database that has them; and it switches on the connectors that were
- * meant to run.
+ * Insights and IoT connectors on a real MySQL, around migration
+ * 0010_iot_leased_consumer. Reconciliations that run at once (a scan beside
+ * telemetry) keep one insight per rule, in place; the migration first removes
+ * the duplicates concurrent reconciliations made before, keeping the newest,
+ * so its unique key can hold on a database that has them; and it switches on
+ * the connectors that were meant to run.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -29,10 +29,10 @@ beforeEach(async () => {
 });
 afterAll(() => closeDb());
 
-const migration = readFileSync(path.resolve(import.meta.dirname, "../../../db/migrations/0009_iot_leased_consumer.sql"), "utf8").split("--> statement-breakpoint");
+const migration = readFileSync(path.resolve(import.meta.dirname, "../../../db/migrations/0010_iot_leased_consumer.sql"), "utf8").split("--> statement-breakpoint");
 const statement = (pattern: RegExp) => {
   const found = migration.find((s) => pattern.test(s));
-  if (!found) throw new Error(`migration 0009 has no statement matching ${pattern}`);
+  if (!found) throw new Error(`migration 0010 has no statement matching ${pattern}`);
   return found;
 };
 
