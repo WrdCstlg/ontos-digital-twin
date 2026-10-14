@@ -1,0 +1,432 @@
+# SHACL rules for the Cross-Functional Core (xfn), cycle 1.
+# Written by hand from section 4.3 of docs/specs/2026-10-14-xfn-semantic-layer-cycle-1-rerun.md.
+# Each constraint node is one rule unit; its message begins with the unit's ID in brackets.
+# No app code reads this file: the tests in app/api/__tests__/xfnSemanticLayer.test.ts do.
+
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xfn:  <https://ontos.dev/ontology/xfn/> .
+@prefix hr:   <https://ontos.dev/ontology/hr/> .
+
+# -------------------------------------------------------------------------
+# Every record: the envelope (12 units)
+# -------------------------------------------------------------------------
+xfn:RecordShape a sh:NodeShape ;
+  sh:targetClass xfn:AttributedRecord , xfn:Variable , xfn:Outcome , xfn:Decision ,
+                 xfn:EffectClaim , xfn:Commitment , xfn:TermDeviation , xfn:EvidenceItem ,
+                 xfn:MetricVersion , xfn:VariableOperationalisation , xfn:MetricBinding ;
+  sh:property [
+    sh:path xfn:attributedTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+    sh:message "[XR-03a] A record names exactly one attributedTo, and it is an IRI." ;
+  ] ;
+  sh:property [
+    sh:path xfn:recordedBy ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+    sh:message "[XR-03b] A record names exactly one recordedBy, and it is an IRI." ;
+  ] ;
+  sh:property [
+    sh:path xfn:recordedAt ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:dateTime ;
+    sh:message "[XR-03c] A record has exactly one recordedAt, typed xsd:dateTime." ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-05a] A record marked privileged names a privilegeHolder." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this WHERE { $this xfn:accessClass "privileged" . FILTER NOT EXISTS { $this xfn:privilegeHolder ?h } }
+    """ ;
+  ] ;
+  sh:property [
+    sh:path xfn:privilegeHolder ; sh:maxCount 1 ; sh:class xfn:Position ;
+    sh:message "[XR-05b] A record has at most one privilegeHolder, and it is a Position." ;
+  ] ;
+  sh:property [
+    sh:path xfn:accessClass ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "open" "restricted" "privileged" ) ;
+    sh:message "[XR-06] A record has exactly one accessClass: open, restricted or privileged." ;
+  ] ;
+  sh:property [
+    sh:path xfn:recordStatus ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "draft" "asserted" "withdrawn" ) ;
+    sh:message "[XR-07] A record has exactly one recordStatus: draft, asserted or withdrawn." ;
+  ] ;
+  sh:property [
+    sh:path xfn:revises ; sh:maxCount 1 ;
+    sh:message "[XR-08a] A record revises at most one earlier record." ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-08b] A record revises only a node that shares a type with it." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this ?r WHERE { $this xfn:revises ?r . FILTER NOT EXISTS { $this a ?t . ?r a ?t } }
+    """ ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-08c] No record revises itself, directly or through a chain of revises." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this WHERE { $this xfn:revises+ $this }
+    """ ;
+  ] ;
+  sh:property [
+    sh:path xfn:citesEvidence ; sh:class xfn:EvidenceItem ;
+    sh:message "[XR-16f] Each citesEvidence is an EvidenceItem." ;
+  ] ;
+  sh:property [
+    sh:path xfn:statement ; sh:maxCount 1 ;
+    sh:message "[XR-20] A record has at most one statement." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# Variable (2 units)
+# -------------------------------------------------------------------------
+xfn:VariableShape a sh:NodeShape ;
+  sh:targetClass xfn:Variable ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-01] No triple links a Variable to another Variable, except xfn:revises." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this ?p ?o WHERE { $this ?p ?o . ?o a xfn:Variable . FILTER (?p != xfn:revises) }
+    """ ;
+  ] ;
+  sh:property [
+    sh:path xfn:variableDefinition ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "[XR-15d] A Variable has exactly one variableDefinition." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# Outcome (9 units)
+# -------------------------------------------------------------------------
+xfn:OutcomeShape a sh:NodeShape ;
+  sh:targetClass xfn:Outcome ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-02a] An Outcome with constituents states a compositionKind." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT DISTINCT $this WHERE { $this xfn:hasConstituent ?c . FILTER NOT EXISTS { $this xfn:compositionKind ?k } }
+    """ ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-02b] An Outcome with constituents states a unitDimension." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT DISTINCT $this WHERE { $this xfn:hasConstituent ?c . FILTER NOT EXISTS { $this xfn:unitDimension ?u } }
+    """ ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-02c] Each constituent Outcome states a unitDimension." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this ?c WHERE { $this xfn:hasConstituent ?c . ?c a xfn:Outcome . FILTER NOT EXISTS { ?c xfn:unitDimension ?u } }
+    """ ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-02d] A constituent Outcome states the same unitDimension as its total." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this ?c WHERE { $this xfn:hasConstituent ?c ; xfn:unitDimension ?pu . ?c a xfn:Outcome ; xfn:unitDimension ?cu . FILTER (?pu != ?cu) }
+    """ ;
+  ] ;
+  sh:property [
+    sh:path xfn:compositionKind ; sh:in ( "additive" ) ;
+    sh:message "[XR-02e] Every compositionKind is additive." ;
+  ] ;
+  sh:property [
+    sh:path xfn:unitDimension ; sh:maxCount 1 ;
+    sh:message "[XR-02f] An Outcome has at most one unitDimension." ;
+  ] ;
+  sh:property [
+    sh:path xfn:statedOver ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:Variable ;
+    sh:message "[XR-15a] An Outcome is stated over exactly one Variable." ;
+  ] ;
+  sh:property [
+    sh:path xfn:inRemitOf ; sh:minCount 1 ; sh:class xfn:BusinessFunction ;
+    sh:message "[XR-15b] An Outcome is in the remit of at least one BusinessFunction." ;
+  ] ;
+  sh:property [
+    sh:path xfn:hasConstituent ; sh:class xfn:Outcome ;
+    sh:message "[XR-15c] Each hasConstituent is an Outcome." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# Decision (5 units)
+# -------------------------------------------------------------------------
+xfn:DecisionShape a sh:NodeShape ;
+  sh:targetClass xfn:Decision ;
+  sh:property [
+    sh:path xfn:decidedBy ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+    sh:message "[XR-12a] A Decision names exactly one decidedBy, an IRI." ;
+  ] ;
+  sh:property [
+    sh:path xfn:decidedInCapacityOf ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:Position ;
+    sh:message "[XR-12b] A Decision names exactly one decidedInCapacityOf, a Position." ;
+  ] ;
+  sh:property [
+    sh:path xfn:decidedOn ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:date ;
+    sh:message "[XR-12c] A Decision has exactly one decidedOn, an xsd:date." ;
+  ] ;
+  sh:property [
+    sh:path xfn:intervenesOn ; sh:minCount 1 ; sh:class xfn:Variable ;
+    sh:message "[XR-12d] A Decision intervenes on at least one Variable." ;
+  ] ;
+  sh:property [
+    sh:path xfn:statement ; sh:minCount 1 ;
+    sh:message "[XR-12e] A Decision states what was decided." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# EffectClaim (8 units)
+# -------------------------------------------------------------------------
+xfn:EffectClaimShape a sh:NodeShape ;
+  sh:targetClass xfn:EffectClaim ;
+  sh:property [
+    sh:path xfn:claimedCause ; sh:minCount 1 ; sh:class xfn:Variable ;
+    sh:message "[XR-09a] An EffectClaim has at least one claimedCause, each a Variable." ;
+  ] ;
+  sh:property [
+    sh:path xfn:claimedEffect ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:Variable ;
+    sh:message "[XR-09b] An EffectClaim has exactly one claimedEffect, a Variable." ;
+  ] ;
+  sh:property [
+    sh:path xfn:viaDecision ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:Decision ;
+    sh:message "[XR-09c] An EffectClaim has exactly one viaDecision, a Decision." ;
+  ] ;
+  sh:property [
+    sh:path xfn:onBehalfOf ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:BusinessFunction ;
+    sh:message "[XR-09d] An EffectClaim speaks on behalf of exactly one BusinessFunction." ;
+  ] ;
+  sh:property [
+    sh:path xfn:statement ; sh:minCount 1 ;
+    sh:message "[XR-09e] An EffectClaim states the claim." ;
+  ] ;
+  sh:property [
+    sh:path xfn:claimedMediator ; sh:class xfn:Variable ;
+    sh:message "[XR-09f] Each claimedMediator is a Variable." ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-10] Each claimedCause is a Variable that the claim's decision intervenes on." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this ?c WHERE { $this xfn:claimedCause ?c ; xfn:viaDecision ?d . ?c a xfn:Variable . ?d a xfn:Decision . FILTER NOT EXISTS { ?d xfn:intervenesOn ?c } }
+    """ ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-11] The claimedEffect is not one of the claim's causes." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this ?v WHERE { $this xfn:claimedCause ?v ; xfn:claimedEffect ?v . }
+    """ ;
+  ] .
+
+# -------------------------------------------------------------------------
+# Commitment (11 units)
+# -------------------------------------------------------------------------
+xfn:CommitmentShape a sh:NodeShape ;
+  sh:targetClass xfn:Commitment ;
+  sh:property [
+    sh:path xfn:commitmentDirection ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "given" "received" ) ;
+    sh:message "[XR-13a] A Commitment has exactly one commitmentDirection: given or received." ;
+  ] ;
+  sh:property [
+    sh:path xfn:promisedBy ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+    sh:message "[XR-13b] A Commitment names exactly one promisedBy, an IRI." ;
+  ] ;
+  sh:property [
+    sh:path xfn:promisedOn ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:date ;
+    sh:message "[XR-13c] A Commitment has exactly one promisedOn, an xsd:date." ;
+  ] ;
+  sh:property [
+    sh:path xfn:commitmentCounterparty ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+    sh:message "[XR-13d] A Commitment names exactly one commitmentCounterparty, an IRI." ;
+  ] ;
+  sh:property [
+    sh:path xfn:capturedIn ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:in ( "contract" "order-form" "price-file" "email" "slide" "verbal" "tool-configuration" "none" ) ;
+    sh:message "[XR-13e] A Commitment states exactly one capturedIn from the list." ;
+  ] ;
+  sh:property [
+    sh:path xfn:statement ; sh:minCount 1 ;
+    sh:message "[XR-13f] A Commitment states the promise in the words given." ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-13g] A commitment the company gave names a promisedInCapacityOf." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this WHERE { $this xfn:commitmentDirection "given" . FILTER NOT EXISTS { $this xfn:promisedInCapacityOf ?s } }
+    """ ;
+  ] ;
+  sh:property [
+    sh:path xfn:promisedInCapacityOf ; sh:maxCount 1 ; sh:class xfn:Position ;
+    sh:message "[XR-13h] A Commitment has at most one promisedInCapacityOf, a Position." ;
+  ] ;
+  sh:property [
+    sh:path xfn:attributedTo ; sh:class hr:Person ;
+    sh:message "[XR-13i] A Commitment's attributedTo is an hr:Person." ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-14a] A commitment captured in a contract has an evidencedIn." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this WHERE { $this xfn:capturedIn "contract" . FILTER NOT EXISTS { $this xfn:evidencedIn ?e } }
+    """ ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-14b] A commitment captured anywhere but a contract cites evidence." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT DISTINCT $this WHERE { $this xfn:capturedIn ?k . FILTER (?k != "contract") FILTER NOT EXISTS { $this xfn:citesEvidence ?e } }
+    """ ;
+  ] .
+
+# -------------------------------------------------------------------------
+# TermDeviation (3 units)
+# -------------------------------------------------------------------------
+xfn:TermDeviationShape a sh:NodeShape ;
+  sh:targetClass xfn:TermDeviation ;
+  sh:property [
+    sh:path xfn:deviationInContract ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+    sh:message "[XR-16a] A TermDeviation names exactly one deviationInContract, an IRI." ;
+  ] ;
+  sh:property [
+    sh:path xfn:termKind ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:in ( "indemnity" "liability-cap" "warranty" "termination-right" "payment-terms" "sla" "data-processing" "other" ) ;
+    sh:message "[XR-16b] A TermDeviation states exactly one termKind from the list." ;
+  ] ;
+  sh:property [
+    sh:path xfn:deviationDirection ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:in ( "more-favourable" "equivalent" "less-favourable" "absent" ) ;
+    sh:message "[XR-16c] A TermDeviation states exactly one deviationDirection from the list." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# EvidenceItem (2 units)
+# -------------------------------------------------------------------------
+xfn:EvidenceItemShape a sh:NodeShape ;
+  sh:targetClass xfn:EvidenceItem ;
+  sh:property [
+    sh:path xfn:evidenceSummary ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "[XR-16d] An EvidenceItem has exactly one evidenceSummary." ;
+  ] ;
+  sh:property [
+    sh:path xfn:evidenceSourceSystem ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "[XR-16e] An EvidenceItem has exactly one evidenceSourceSystem." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# MetricDefinition (2 units)
+# -------------------------------------------------------------------------
+xfn:MetricDefinitionShape a sh:NodeShape ;
+  sh:targetClass xfn:MetricDefinition ;
+  sh:property [
+    sh:path xfn:metricName ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "[XR-17a] A MetricDefinition has exactly one metricName." ;
+  ] ;
+  sh:property [
+    sh:path xfn:definedByFunction ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:BusinessFunction ;
+    sh:message "[XR-17b] A MetricDefinition is defined by exactly one BusinessFunction." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# MetricVersion (2 units)
+# -------------------------------------------------------------------------
+xfn:MetricVersionShape a sh:NodeShape ;
+  sh:targetClass xfn:MetricVersion ;
+  sh:property [
+    sh:path xfn:versionOf ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:MetricDefinition ;
+    sh:message "[XR-17c] A MetricVersion is a version of exactly one MetricDefinition." ;
+  ] ;
+  sh:property [
+    sh:path xfn:definitionText ; sh:minCount 1 ; sh:maxCount 1 ;
+    sh:message "[XR-17d] A MetricVersion has exactly one definitionText." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# VariableOperationalisation (2 units)
+# -------------------------------------------------------------------------
+xfn:VariableOperationalisationShape a sh:NodeShape ;
+  sh:targetClass xfn:VariableOperationalisation ;
+  sh:property [
+    sh:path xfn:operationalises ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:Variable ;
+    sh:message "[XR-18a] A VariableOperationalisation names exactly one Variable." ;
+  ] ;
+  sh:property [
+    sh:path xfn:measuredBy ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:MetricVersion ;
+    sh:message "[XR-18b] A VariableOperationalisation names exactly one MetricVersion." ;
+  ] .
+
+# -------------------------------------------------------------------------
+# MetricBinding (4 units)
+# -------------------------------------------------------------------------
+xfn:MetricBindingShape a sh:NodeShape ;
+  sh:targetClass xfn:MetricBinding ;
+  sh:property [
+    sh:path xfn:holder ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:Position ;
+    sh:message "[XR-18c] A MetricBinding names exactly one holder, a Position." ;
+  ] ;
+  sh:property [
+    sh:path xfn:bindsMetric ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:MetricDefinition ;
+    sh:message "[XR-18d] A MetricBinding binds exactly one MetricDefinition." ;
+  ] ;
+  sh:property [
+    sh:path xfn:boundVersion ; sh:minCount 1 ; sh:maxCount 1 ; sh:class xfn:MetricVersion ;
+    sh:message "[XR-18e] A MetricBinding pins exactly one boundVersion, a MetricVersion." ;
+  ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-18f] A MetricBinding's boundVersion is a version of its bindsMetric." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this ?v ?m WHERE { $this xfn:bindsMetric ?m ; xfn:boundVersion ?v . ?m a xfn:MetricDefinition . ?v a xfn:MetricVersion . FILTER NOT EXISTS { ?v xfn:versionOf ?m } }
+    """ ;
+  ] .
+
+# -------------------------------------------------------------------------
+# Refused vocabulary (3 units)
+# -------------------------------------------------------------------------
+xfn:ExposureGapShape a sh:NodeShape ;
+  sh:targetClass xfn:ExposureGap ;
+  sh:property [
+    sh:path rdf:type ; sh:maxCount 0 ;
+    sh:message "[XR-04] ExposureGap is not stored in this layer." ;
+  ] .
+
+xfn:RefusedClassShape a sh:NodeShape ;
+  sh:targetClass xfn:ControlledTerm , xfn:AnalyticAgent , xfn:Deliberation , xfn:BoundaryObject ,
+                 xfn:LegalEntity , xfn:Perspective , xfn:PerspectiveCorrespondence , xfn:Handoff ,
+                 xfn:Transfer , xfn:AccountabilityAssertion , xfn:DecisionRight , xfn:Answerability ,
+                 xfn:DecisionDomain , xfn:DimensionBinding , xfn:GrainDimension , xfn:Claim ,
+                 xfn:ProxyClaim , xfn:DivergenceClaim , xfn:ForecastClaim , xfn:Appraisal ,
+                 xfn:Reading , xfn:InterventionSetting , xfn:VariableCorrespondence ,
+                 xfn:BoundaryConcept , xfn:BoundaryInstance , xfn:BoundaryMedium ,
+                 xfn:SeatOccupancy , xfn:SeatRelation , xfn:DecisionQuestion ;
+  sh:property [
+    sh:path rdf:type ; sh:maxCount 0 ;
+    sh:message "[XR-19a] This class is outside this cycle's vocabulary." ;
+  ] .
+
+xfn:AbstractRecordShape a sh:NodeShape ;
+  sh:targetClass xfn:AttributedRecord ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "[XR-19b] A record is one of the ten attributed concrete classes, not only AttributedRecord." ;
+    sh:prefixes [ sh:declare [ sh:prefix "xfn" ; sh:namespace "https://ontos.dev/ontology/xfn/"^^xsd:anyURI ] ] ;
+    sh:select """
+      SELECT $this WHERE { $this a xfn:AttributedRecord .
+        FILTER NOT EXISTS { $this a xfn:Variable } FILTER NOT EXISTS { $this a xfn:Outcome }
+        FILTER NOT EXISTS { $this a xfn:Decision } FILTER NOT EXISTS { $this a xfn:EffectClaim }
+        FILTER NOT EXISTS { $this a xfn:Commitment } FILTER NOT EXISTS { $this a xfn:TermDeviation }
+        FILTER NOT EXISTS { $this a xfn:EvidenceItem } FILTER NOT EXISTS { $this a xfn:MetricVersion }
+        FILTER NOT EXISTS { $this a xfn:VariableOperationalisation } FILTER NOT EXISTS { $this a xfn:MetricBinding } }
+    """ ;
+  ] .

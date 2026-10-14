@@ -1,0 +1,17 @@
+# Class axioms for the Cross-Functional Core (xfn), cycle 1: the ten attributed classes of
+# section 4.1 of docs/specs/2026-10-14-xfn-semantic-layer-cycle-1-rerun.md, and nothing else.
+# Loading another hierarchy in their place would make xfn-shapes.ttl wrong (spec 4.1).
+
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xfn:  <https://ontos.dev/ontology/xfn/> .
+
+xfn:Variable                   rdfs:subClassOf xfn:AttributedRecord .
+xfn:Outcome                    rdfs:subClassOf xfn:AttributedRecord .
+xfn:Decision                   rdfs:subClassOf xfn:AttributedRecord .
+xfn:EffectClaim                rdfs:subClassOf xfn:AttributedRecord .
+xfn:Commitment                 rdfs:subClassOf xfn:AttributedRecord .
+xfn:TermDeviation              rdfs:subClassOf xfn:AttributedRecord .
+xfn:EvidenceItem               rdfs:subClassOf xfn:AttributedRecord .
+xfn:MetricVersion              rdfs:subClassOf xfn:AttributedRecord .
+xfn:VariableOperationalisation rdfs:subClassOf xfn:AttributedRecord .
+xfn:MetricBinding              rdfs:subClassOf xfn:AttributedRecord .
