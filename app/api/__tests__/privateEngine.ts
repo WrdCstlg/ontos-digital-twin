@@ -10,7 +10,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-export type PrivateEngine = { url: string; stop: () => Promise<void> };
+export type PrivateEngine = { url: string; binary: string; stop: () => Promise<void> };
 
 function engineBinary(): string {
   const candidates = [
@@ -36,12 +36,13 @@ function freePort(): Promise<number> {
 
 export async function startPrivateEngine(): Promise<PrivateEngine> {
   const port = await freePort();
+  const binary = engineBinary();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ontos-engine-test-"));
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: dataDir, USERPROFILE: dataDir };
   delete env.OPEN_ONTOLOGIES_STORAGE_MODE;
   delete env.OPEN_ONTOLOGIES_TOKEN;
   const child: ChildProcess = spawn(
-    engineBinary(),
+    binary,
     ["--data-dir", dataDir, "serve-http", "--config", path.join(dataDir, "config.toml"), "--host", "127.0.0.1", "--port", String(port)],
     { env, stdio: "ignore", windowsHide: true },
   );
@@ -66,7 +67,7 @@ export async function startPrivateEngine(): Promise<PrivateEngine> {
   while (Date.now() < deadline) {
     if (child.exitCode !== null) break;
     const up = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1_000) }).then((r) => r.ok, () => false);
-    if (up) return { url, stop };
+    if (up) return { url, binary, stop };
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   await stop();
