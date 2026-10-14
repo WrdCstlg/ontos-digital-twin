@@ -50,6 +50,7 @@ import { createHash } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../api/queries/connection";
 import { recordGraphReplaced } from "../api/services/graphChanges";
+import { SEED_SHACL } from "./seedShacl";
 import {
   actionSubmissions,
   actionTypeVersions,
@@ -298,49 +299,6 @@ const PROP_DEFS: Record<string, PropDef[]> = {
   ],
 };
 
-/* SHACL constraints for key classes */
-const SHACL: Record<string, unknown> = {
-  "hr:Person": {
-    shape: "hr:PersonShape",
-    constraints: [
-      { path: "hr:fullName", minCount: 1, maxCount: 1, datatype: "xsd:string", severity: "Violation" },
-      { path: "hr:email", minCount: 1, pattern: "^[^@]+@acme\\.com$", severity: "Violation" },
-    ],
-  },
-  "hr:EmploymentContract": {
-    shape: "hr:EmploymentContractShape",
-    constraints: [
-      { path: "hr:hireDate", minCount: 1, datatype: "xsd:date", severity: "Violation" },
-      { path: "hr:endDate", sparql: "endDate >= startDate", severity: "Violation" },
-    ],
-  },
-  "lgl:Contract": {
-    shape: "lgl:ContractShape",
-    constraints: [
-      { path: "lgl:contractNumber", minCount: 1, maxCount: 1, severity: "Violation" },
-      { path: "lgl:withParty", minCount: 1, severity: "Warning" },
-    ],
-  },
-  "cmp:Control": {
-    shape: "cmp:ControlShape",
-    constraints: [
-      { path: "cmp:controlId", minCount: 1, pattern: "^CMP-\\d{3}$", severity: "Violation" },
-      { path: "cmp:hasEvidence", minCount: 1, severity: "Warning", message: "Evidence must be refreshed every 90 days" },
-    ],
-  },
-  "fin:Transaction": {
-    shape: "fin:TransactionShape",
-    constraints: [
-      { path: "fin:amount", minCount: 1, datatype: "xsd:decimal", severity: "Violation" },
-      { path: "fin:bookedTo", minCount: 1, severity: "Warning" },
-    ],
-  },
-  "log:Shipment": {
-    shape: "log:ShipmentShape",
-    constraints: [{ path: "log:trackingId", minCount: 1, maxCount: 1, severity: "Violation" }],
-  },
-};
-
 /* Action types: governed edits. Two of them resolve planted insights:
  * reassign-manager gives an orphan (anomaly b) a manager, and renew-contract
  * moves an expiring contract's end date out of the 30-day window (anomaly h). */
@@ -579,7 +537,7 @@ async function main() {
           definition: def,
           isCustom: m.key === "hr" && label === "Contractor",
           deprecated: m.key === "hr" && label === "TempAgreement",
-          shaclJson: SHACL[iri] ?? null,
+          shaclJson: SEED_SHACL[iri] ?? null,
           createdAt: daysAgo(label === "Contractor" ? 6 : 28),
         })
         .$returningId();

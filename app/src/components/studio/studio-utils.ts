@@ -70,6 +70,7 @@ export interface ShaclConstraint {
   maxCount?: number;
   datatype?: string;
   pattern?: string;
+  lessThanOrEquals?: string;
   sparql?: string;
   severity?: 'Violation' | 'Warning' | 'Info';
   message?: string;
@@ -180,6 +181,7 @@ export function buildClassTree(classes: StudioClass[]): ClassTreeNode[] {
 
 export function constraintType(c: ShaclConstraint): string {
   if (c.sparql) return 'custom SPARQL';
+  if (c.lessThanOrEquals) return 'lessThanOrEquals';
   if (c.pattern) return 'pattern';
   if (c.datatype) return 'datatype';
   if (c.minCount != null || c.maxCount != null) return 'minCount';
@@ -188,6 +190,7 @@ export function constraintType(c: ShaclConstraint): string {
 
 export function constraintValue(c: ShaclConstraint): string {
   if (c.sparql) return c.sparql;
+  if (c.lessThanOrEquals) return `≤ ${c.lessThanOrEquals}`;
   if (c.pattern) return c.pattern;
   if (c.datatype) return c.datatype;
   const parts: string[] = [];
@@ -216,6 +219,7 @@ export function shaclToTurtle(cls: StudioClass): string {
     if (c.maxCount != null) lines.push(`    sh:maxCount ${c.maxCount} ;`);
     if (c.datatype) lines.push(`    sh:datatype ${c.datatype} ;`);
     if (c.pattern) lines.push(`    sh:pattern "${c.pattern}" ;`);
+    if (c.lessThanOrEquals) lines.push(`    sh:lessThanOrEquals ${c.lessThanOrEquals} ;`);
     if (c.sparql) lines.push(`    sh:sparql [ sh:select """${c.sparql}""" ] ;`);
     lines.push(`    sh:severity sh:${c.severity ?? 'Violation'} ;`);
     if (c.message) lines.push(`    sh:message "${c.message}" ;`);

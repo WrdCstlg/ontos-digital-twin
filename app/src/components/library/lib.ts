@@ -28,6 +28,7 @@ export interface ShaclConstraint {
   maxCount?: number;
   datatype?: string;
   pattern?: string;
+  lessThanOrEquals?: string;
   sparql?: string;
   severity?: string;
   message?: string;
@@ -171,6 +172,7 @@ export function shaclToTurtle(shape: ShaclShape, prefix: string): string {
     if (c.maxCount != null) lines.push(`    sh:maxCount ${c.maxCount} ;`);
     if (c.datatype) lines.push(`    sh:datatype ${c.datatype} ;`);
     if (c.pattern) lines.push(`    sh:pattern "${c.pattern}" ;`);
+    if (c.lessThanOrEquals) lines.push(`    sh:lessThanOrEquals ${c.lessThanOrEquals} ;`);
     if (c.sparql) lines.push(`    sh:sparql """${c.sparql}""" ;`);
     if (c.severity) lines.push(`    sh:severity sh:${c.severity} ;`);
     if (c.message) lines.push(`    sh:message "${c.message}" ;`);

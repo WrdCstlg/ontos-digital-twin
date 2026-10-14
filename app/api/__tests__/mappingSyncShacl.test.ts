@@ -423,3 +423,26 @@ describe("an import whose class cannot be found", () => {
     expect(rows(kgNodes)).toEqual([]);
   });
 });
+
+// A stored rule the compiler cannot write is refused, not dropped (docs/DECISIONS.md, D-032):
+// the import treats it as shapes it cannot read (D-035).
+describe("an import whose class stores a rule the compiler cannot write", () => {
+  const UNWRITABLE = { constraints: [{ path: "hr:manager", sparql: "manager is set" }] };
+
+  it("fails for good when its mapping blocks, naming the class, path and key, and asks no engine", async () => {
+    setUp("block", UNWRITABLE);
+    const refused = run();
+    await expect(refused).rejects.toBeInstanceOf(PermanentJobError);
+    await expect(refused).rejects.toThrow(/hr:Person.*hr:manager.*"sparql"/);
+    expect(rows(kgNodes)).toEqual([]);
+    expect(semanticEngine.validateShacl).not.toHaveBeenCalled();
+  });
+
+  it("imports when its mapping warns, and says in its record which rule was not checked", async () => {
+    setUp("warn", UNWRITABLE);
+    const result = await run();
+    expect(result.nodesUpserted).toBe(2);
+    expect(result.shacl).toBeNull();
+    expect(vi.mocked(writeAudit).mock.calls[0][0].payload).toMatchObject({ shacl: null, shaclNotChecked: expect.stringMatching(/hr:Person.*hr:manager.*"sparql"/) });
+  });
+});
