@@ -20,7 +20,7 @@ import { withDeadlockRetry } from "../lib/mysqlErrors";
 import { writeAudit } from "./audit";
 import { recordGraphChange } from "./graphChanges";
 import { EngineRequestError, semanticEngine, type ShaclValidationResult } from "./semanticEngine";
-import { buildPrefixMap, expandIri, knowledgeGraphSubjects, modulePrefixes, shaclJsonToTurtle } from "./rdfBridge";
+import { buildPrefixMap, expandIri, knowledgeGraphSubjects, modulePrefixes, ShaclCompileError, shaclJsonToTurtle } from "./rdfBridge";
 import { scratchShacl, workspaceGraphs } from "./workspaceGraph";
 import { workspaceDatatypeRanges } from "./datatypeRanges";
 import { explainShaclReport, type ExplainedShaclReport } from "./explainableShacl";
@@ -244,7 +244,7 @@ export type ImportShaclCheck =
    * to another process mid-check; a timeout. A later try may be.
    */
   | { kind: "unchecked"; reason: string }
-  /** The engine answered that it cannot check this import (data it cannot parse, shapes it cannot read). */
+  /** This import cannot be checked: the engine cannot parse its data or read its shapes, or a stored rule cannot be compiled. */
   | { kind: "uncheckable"; reason: string };
 
 /** How many IRIs one lookup names at most, well under MySQL's placeholder limit. */
@@ -279,7 +279,14 @@ export async function checkImportShacl(
   if (!targetClass.shaclJson) return { kind: "none" };
   const mods = await db.select().from(ontologyModules).where(eq(ontologyModules.workspaceId, workspaceId));
   const prefixMap = buildPrefixMap(mods);
-  const shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);
+  let shapesTtl: string;
+  try {
+    shapesTtl = shaclJsonToTurtle([targetClass], prefixMap);
+  } catch (err) {
+    // A stored rule the compiler cannot write: shapes nobody can check this import against, now or later.
+    if (err instanceof ShaclCompileError) return { kind: "uncheckable", reason: err.message };
+    throw err;
+  }
   if (!shapesTtl.trim()) return { kind: "none" };
 
   const own = new Map<string, { label: string; props: Record<string, string> }>();

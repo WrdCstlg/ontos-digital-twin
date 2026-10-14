@@ -487,3 +487,137 @@ needs the owner, or the next cycle's ENGINEER spec, to decide:
 - **Alternatives rejected:** opening the pull request and leaving the merge to the owner; not
   pushing yet.
 - **APPROVED BY:** the owner, 2026-10-14, choosing "Push, PR, merge when green (Recommended)".
+
+## D-032 — 2026-10-14 — How the dropped HR rule is fixed (carries out D-025)
+
+- **Decided:**
+  1. **The compiler refuses a key it cannot write.** When `shaclJsonToTurtle` meets a stored
+     constraint key it cannot write, it throws an error that names the class, the path and the
+     key. It no longer drops the key without saying so.
+  2. **The date rule gets a real form.** It becomes the SHACL core constraint
+     `sh:lessThanOrEquals`: on an employment contract, the start date is not after the end
+     date. The compiler learns that one key. First, a probe shows that the engine supports it.
+  3. **The `hireDate` mismatch is a separate finding.** The HR shape requires `hr:hireDate` on
+     EmploymentContract, while the seed puts `hireDate` on Person and `startDate` on contracts.
+     It is recorded on its own entry once a validation run shows it, and is not fixed here.
+     The date rule uses the property the seeded contracts carry, `hr:startDate`.
+  4. **A data migration repairs stored rows.** Migration 0012 rewrites the stored rule in
+     databases already seeded, since the seed only inserts.
+- **Evidence (read 2026-10-14):**
+  - Dropped key: `rdfBridge.ts` lines 449-470 write only `minCount`, `maxCount`, `datatype`,
+    `class`, `pattern`, `severity` and `message`. `seed.ts` line 314 stores
+    `{ path: "hr:endDate", sparql: "endDate >= startDate" }`.
+  - UI: `src/components/library/lib.ts` line 174 shows that rule as `sh:sparql`.
+  - Who writes class rules: only the two seeds, at `seed.ts` line 582 and `seed-twins.ts`
+    line 165. No API route writes them, and the seed inserts and never updates.
+  - Keys in use: across both seeds' rules, `sparql` is the only key the compiler cannot
+    write. `seed.ts` has 11 constraints; the twin rules are in `twinModels.ts` lines 51-67.
+    So refusing breaks no other stored rule.
+- **Alternatives rejected:** compiling the rest and reporting what was dropped; removing the
+  date rule; folding the `hireDate` mismatch into this fix; fixing the seed only and leaving
+  existing databases to be reseeded by hand.
+- **APPROVED BY:** the owner, 2026-10-14, choosing "Refuse, naming it", "Give it a real form",
+  "Separate finding" and "Data migration" (each marked Recommended).
+
+## D-033 — 2026-10-14 — Finding: the seeded employment contracts fail the HR shape's `hireDate` rule
+
+- **Decided:** recorded, not fixed (D-032 item 3). The seed's header counts every SHACL
+  violation its planted data should raise ("SHACL VIOLATION BUDGET"). This one is not on that
+  list, so by the header's own terms it is a modelling mistake to fix in a change of its own.
+- **Evidence:**
+  - The HR shape requires `hr:hireDate` on every EmploymentContract (`db/seedShacl.ts`), and
+    `seed.ts` declares `hireDate` on EmploymentContract as "Start date" (line 243 on master
+    `7d2c57b`; line 244 after D-034 moves the seed's rules out).
+  - The seed instead sets `hireDate` on Person nodes (master line 730; 688 after D-034). Its
+    EmploymentContract nodes carry `startDate` and `type` only (master line 768; 726 after
+    D-034).
+  - On 2026-10-14 a contract built the way those EmploymentContract nodes are built was validated on a private
+    engine (binary SHA-256 `431bcd0d…a629387d`). Data came from `knowledgeGraphToTurtle` and
+    shapes from `shaclJsonToTurtle`. The contract does not conform: one `minCount` result on
+    `hr:hireDate`. The same contract with a `hireDate` conforms.
+  - The seed builds up to 90 such contracts; their exact number is not counted here.
+- **Alternatives rejected:** folding it into the date-rule fix (the owner chose a separate
+  finding).
+- **APPROVED BY:** the owner, 2026-10-14, choosing "Separate finding (Recommended)".
+
+## D-034 — 2026-10-14 — The HR date rule is enforced; how D-032 was carried out
+
+- **Decided:**
+  1. **Compiler.** `shaclJsonToTurtle` refuses any constraint key outside the set it writes,
+     naming the class, the path and the key. It now also writes `sh:lessThanOrEquals`. The
+     `sparql` field is gone from `ShaclConstraintJson`.
+  2. **Seed rule.** The seed stores the date rule as
+     `{ path: "hr:startDate", lessThanOrEquals: "hr:endDate", severity: "Violation" }` with a
+     message. The seed's rules move unchanged into `db/seedShacl.ts`, because importing
+     `seed.ts` runs the seed and the tests must read the rule the seed stores.
+  3. **Migration.** `db/migrations/0012_hr_date_rule.sql` replaces exactly the old stored
+     constraint with the new one, in every workspace.
+  4. **UI.** The Library's and the Studio's read-only Turtle, and the Studio's constraint
+     list, show `lessThanOrEquals`. Without this, the UI would hide an enforced rule, the
+     reverse of the bug.
+- **Evidence** (2026-10-14; every engine a private one):
+  - **Engine probe:** `sh:lessThanOrEquals` refuses an end date before the start date
+    (component `lessThanOrEquals`). It accepts equal dates, a later end date and no end date.
+    Without the rule, the same data conforms.
+  - **Fail-first, before the fix:** 7 of the 11 new unit and engine tests failed. Among them,
+    a contract ending before it starts conformed on a real engine (`expected [] to deeply
+    equal [{…}]`).
+  - **Fail-first, guard:** with the refusal in and the seed unchanged, "compiles every rule
+    the seeds store" failed, naming `hr:EmploymentContract`, `hr:endDate` and `"sparql"`.
+  - **Fail-first, migration** (MySQL 8.4): a no-op 0012 failed the rewrite test; an
+    over-broad one failed "leaves every other rule as it is"; one that changes something on
+    every run failed "changes nothing when run again".
+  - **After the fix:**
+    - The new tests pass.
+    - The MySQL suite: 15 files, 105 passed, 0 failed, 3 skipped (`iotHandover`, which needs
+      an MQTT broker).
+    - The unit suite: 98 files, 1,298 passed, 0 failed, 1 skipped.
+    - `tsc -b` exit 0; eslint on the 10 changed files exit 0.
+- **Alternatives rejected:** a copy of the rule in the tests instead of the seed's own, which
+  would let the two drift; leaving the UI unchanged.
+- **APPROVED BY:** items 1-3: the owner's choices in D-032. Item 4 and the move of the seed's
+  rules: nobody — pending.
+
+## D-035 — 2026-10-14 — An import treats a rule the compiler refuses as one it cannot check
+
+- **Decided:** the compiler's refusal is a `ShaclCompileError`. The import's SHACL check
+  (`checkImportShacl`, `services/mappingSync.ts`) maps it to `uncheckable`, the result the
+  module already gives shapes it cannot read:
+  - In `block` mode, the job fails once and is not retried, naming the class, the path and the
+    key.
+  - In `warn` mode, the job imports, and its record says which rule was not checked.
+- **Evidence:**
+  - **The bug, from a read-only review of this change before it was pushed:** three reviewers
+    each took one area, and a fourth checked their claims.
+    - Without this mapping, a refusal was a plain `Error`. The job queue retried it twice more
+      (`jobs/worker.ts` line 321; `queue.ts` line 42), re-reading the source each time.
+    - In `warn` mode the import failed outright.
+  - **Fail-first:** the two new tests in `mappingSyncShacl.test.ts` failed against that code.
+    The block-mode test got a plain `Error` where it expected a `PermanentJobError`, and the
+    warn-mode import threw.
+  - **The other upheld points, fixed before commit:**
+    - In D-033, `seed.ts` line numbers read on master would have pointed at other code after
+      this change. They are now given for both trees.
+    - An assertion in `shaclCompile.test.ts` could not fail. It is replaced by one that counts
+      the compiled shapes, which was seen failing when the compiler was made to drop a class.
+    - The README now says "constraint key".
+- **Alternatives rejected:** failing the job once in both modes, so that nothing is imported
+  under a rule that cannot be enforced, even when the mapping is set to warn.
+- **APPROVED BY:** the owner, 2026-10-14, choosing "Treat as 'cannot check' (Recommended)".
+
+## D-036 — 2026-10-14 — The HR fix goes in by pull request, merged only when CI and the Gate are green
+
+- **Decided:** the files staged on `fix/hr-date-rule` are committed without an AI trailer and
+  pushed to the public repository, and a pull request is opened. It is squash-merged when CI
+  and the Gate are green, and master is then mirrored to the private copy. If anything fails,
+  the work stops there and is reported, not merged.
+- **Evidence:** before pushing, on 2026-10-14: the branch came from master `7d2c57b`, which
+  both remotes also held, and `gh repo view` read the public repository as PUBLIC.
+  - Staged: 16 files, +538 / -52.
+  - A pattern scan of the staged blobs for keys, tokens, home paths, account names, email,
+    export-control wording and AI-tool attribution found 0 hits.
+  - Unit suite: 1,300 passed, 0 failed, 1 skipped. MySQL suite: 105 passed, 0 failed,
+    3 skipped. Both ran on a private engine.
+- **Alternatives rejected:** opening the pull request and leaving the merge to the owner; not
+  pushing yet.
+- **APPROVED BY:** the owner, 2026-10-14, choosing "Push, PR, merge when green (Recommended)".

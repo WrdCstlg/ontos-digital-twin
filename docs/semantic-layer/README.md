@@ -90,9 +90,11 @@ than the spec asks, which the owner has yet to accept (D-026, D-027).
 - **Upstream properties the draft assumes do not exist** in `app/db/seed.ts` (read
   2026-10-14): no `log:orderLineItem` from PurchaseOrder to InventoryItem, and no seeded
   `status` or `contractSide` property on `lgl:Contract`.
-- **An HR rule the product never enforces.** `seed.ts` declares a rule on
-  `hr:EmploymentContractShape` whose `sparql` value is not a query, and the compiler drops it
-  without saying so (D-020). It is being fixed apart from `xfn` (D-025).
+- **The HR date rule is fixed apart from `xfn`.** The seed stored it as a `sparql` value that
+  is not a query, and the compiler dropped it without saying so (D-020). It is now
+  `sh:lessThanOrEquals`, and the compiler refuses any constraint key it cannot write (D-034). A related
+  finding stays open: the seeded employment contracts fail the HR shape's `hireDate` rule
+  (D-033).
 - **The tests start an engine of their own** (D-010), so they never touch the engine on the
   default port.
 

@@ -16,10 +16,19 @@ export type ShaclConstraintJson = {
   datatype?: string;
   class?: string;
   pattern?: string;
+  /** Another property every value of `path` must be less than or equal to (sh:lessThanOrEquals). */
+  lessThanOrEquals?: string;
   severity?: "Violation" | "Warning" | "Info";
   message?: string;
-  sparql?: string;
 };
+
+/** The constraint keys shaclJsonToTurtle writes. It refuses any other. */
+const WRITTEN_KEYS = new Set<string>(["path", "minCount", "maxCount", "datatype", "class", "pattern", "lessThanOrEquals", "severity", "message"]);
+
+/** A stored SHACL rule shaclJsonToTurtle cannot write. It will not compile however often it is tried. */
+export class ShaclCompileError extends Error {
+  override name = "ShaclCompileError";
+}
 
 export type ClassShaclJson = {
   shape?: string;
@@ -411,7 +420,9 @@ export function packTurtle(prefixMap: Map<string, string>, subjects: TurtleSubje
 }
 
 /**
- * Compiles class shaclJson declarations into W3C SHACL Turtle shapes.
+ * Compiles class shaclJson declarations into W3C SHACL Turtle shapes. A stored
+ * constraint key it cannot write is refused, with the class, path and key: a
+ * rule dropped without a word would look present and never be enforced.
  */
 export function shaclJsonToTurtle(
   classes: OntologyClass[],
@@ -440,6 +451,12 @@ export function shaclJsonToTurtle(
 
     for (let i = 0; i < constraints.length; i++) {
       const cst = constraints[i];
+      const unwritten = Object.keys(cst).filter((key) => !WRITTEN_KEYS.has(key));
+      if (unwritten.length > 0) {
+        throw new ShaclCompileError(
+          `The SHACL rule on ${c.iri}, path ${cst.path}, has ${unwritten.map((k) => `"${k}"`).join(", ")}, which the compiler cannot write: it would not be enforced`,
+        );
+      }
       const isLast = i === constraints.length - 1;
       const pathIri = formatIri(cst.path, prefixMap);
 
@@ -461,6 +478,9 @@ export function shaclJsonToTurtle(
       }
       if (cst.pattern) {
         lines.push(`    sh:pattern "${escapeTurtleLiteral(cst.pattern)}" ;`);
+      }
+      if (cst.lessThanOrEquals) {
+        lines.push(`    sh:lessThanOrEquals ${formatIri(cst.lessThanOrEquals, prefixMap)} ;`);
       }
       if (cst.severity) {
         lines.push(`    sh:severity sh:${cst.severity} ;`);

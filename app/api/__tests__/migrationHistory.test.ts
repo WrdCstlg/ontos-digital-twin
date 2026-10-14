@@ -38,6 +38,7 @@ const RELEASED: Record<string, string> = {
   "0009_graph_change_capture": "0be8cc5240754d49cc9a433f5a2e97ca76ed3332399e9968a4f0958ba99cc08d",
   "0010_iot_leased_consumer": "c02057415e97b84b8028c6b8c0c0c9718fae147df048f1fb2553e969464c52ed",
   "0011_rate_limit_windows": "bda708ed8482e3c1f644690a0a863d9d6b72d8fa096c53f4df51d5dc48b83d41",
+  "0012_hr_date_rule": "73c7975ef16bf875528e1e9ca601d8de6b955f1c9abb8169a55b0009cd9270ff",
 };
 
 describe("the migration history", () => {
