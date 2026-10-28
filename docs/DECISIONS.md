@@ -621,3 +621,106 @@ needs the owner, or the next cycle's ENGINEER spec, to decide:
 - **Alternatives rejected:** opening the pull request and leaving the merge to the owner; not
   pushing yet.
 - **APPROVED BY:** the owner, 2026-10-14, choosing "Push, PR, merge when green (Recommended)".
+
+## D-037 — 2026-10-26 — The next major version is built around governed AI agents
+
+- **Decided:** the next major version of Ontos lets AI agents work on the ontology under its
+  governance: agents read through the existing interfaces and change data only through action
+  types, under a token's role and module scopes, with what an agent proposes held for a person
+  to approve and audited under the agent's name. It is a new feature, so it starts with a cycle
+  of the Adversarial Persona Loop, and code is written only from ENGINEER's spec once the owner
+  approves it. The work happens on `feat/governed-agents`, cut from the public repository's
+  master `9d4b036`, not from the local master, which carries an unpublished checkpoint.
+- **Evidence:**
+  - The capability comparison (`app/src/lib/landscape.ts`) rates "AI on the ontology" as
+    partial: the LLM gateway turns questions into read-only SPARQL and "cannot write".
+  - The Ontology API already admits writes only through action types, with tokens that carry
+    a role, scopes and a module scope (README, "Ontology API"), so the governance an agent would
+    act under exists.
+  - `git ls-remote`, 2026-10-26: the public master is `9d4b036`; the private copy's master is
+    one commit ahead of it.
+- **Alternatives rejected:**
+  - `xfn` cycle 2, the cross-functional layer brought into the app.
+  - Scale, measured: the benchmark, replica gate worlds and module checks on the engine host.
+  - Logic on the ontology: insight rules and derived properties as user-defined rules.
+- **APPROVED BY:** the owner, 2026-10-26, choosing "Governed AI agents (Recommended)".
+
+## D-038 — 2026-10-27 — The personas for the governed-agents cycle
+
+- **Decided:** cycle 1 of governed agents runs with a persona set of its own, beside the one
+  D-016 approved for `xfn`:
+  - **BUILDER:** the repository owner, by role (as D-016).
+  - **USER:** the head of procurement operations at a mid-size manufacturer (invented), with
+    140 supplier contracts up for renewal this quarter and a team of three keying renewals and
+    vendor changes by hand from email, told by the CIO to use AI. The tool fails them if an
+    agent renews the wrong contract or changes a supplier's bank details, and the SOX auditor
+    finds the change unapproved.
+  - **VETO:** the chief information security officer, concerned with prompt injection and
+    excessive agency (OWASP Top 10 for LLM Applications), logical access and change management
+    (SOC 2), and segregation of duties and change management among SOX IT general controls.
+    Legal authorities and standards named in the cycle are the persona's concerns, not legal
+    statements.
+  - **ENGINEER:** the full-stack ontologist and systems architect who owns the spec (as D-016).
+- **Evidence:** D-016's USER, a chief operating officer in the supplier-switch dispute, would
+  likely pivot an agent cycle to `xfn`'s one-page view under the protocol's rule 4; the protocol
+  asks for the VETO most likely to block shipping, which for agents that write is the CISO.
+- **Alternatives rejected:** the new USER with D-016's General Counsel and Chief Risk Officer as
+  VETO; D-016's set unchanged.
+- **APPROVED BY:** the owner, choosing "New USER, CISO as VETO (Recommended)".
+
+## D-039 — 2026-10-27 — Correction to D-036: the count was taken before D-036 was written
+
+- **Corrects:** D-036 records the staged change as 16 files, +538 / -52. The commit tested and
+  merged is 16 files, +555 / -52 (`git show --shortstat` of `4c1159c` and of `9d4b036`, whose
+  trees are identical, `783d696`). The 17 lines between are D-036 itself, from the blank line
+  before its heading to the end of the file: it was counted before it was appended.
+- **APPROVED BY:** nobody — pending. This corrects the record; it decides nothing.
+
+## D-040 — 2026-10-28 — Governed agents, cycle 1: ENGINEER chooses (b); the spec awaits the owner
+
+- **State:** cycle 1 of governed agents was run under the protocol with the D-038 personas,
+  one agent per persona, each turn checked. VETO, the CISO, stopped BUILDER's proposal on three
+  grounds: segregation of duties, excessive agency over untrusted input, and approval evidence.
+  ENGINEER chose (b), a smaller feature:
+  - governance set on classes by workspace admins ("approval required", "people only"),
+    inherited by subclasses and binding every caller through whatever action type touches the
+    class;
+  - changes approved by a person other than their maker, applying exactly the hashed change set
+    the approver was shown, or nothing;
+  - token proposals as drafts that only the token's creator, signed in, can adopt;
+  - token grants pinned to action types and versions, and draft-only tokens;
+  - refusal records for tokens, and one exported list of changes.
+
+  The agent-facing MCP server is not built this cycle. USER's remit-to change detector is
+  logged as the next cycle's priority. The spec is
+  `docs/specs/2026-10-28-governed-agents-cycle-1.md` (revision r4). Independent reviewers
+  checked it in four rounds; its Appendices A and B record what they found and where the spec
+  answers it.
+- **Owner decisions inside the spec:** its section 6, 22 questions. Among them: (b) or (c) given
+  the residuals in its section 3.3 (Q2); whether to merge before VETO's next turn (Q13); whether
+  it is one feature under the protocol's rule 1 (Q18); the reading of rule 4 (Q1); and
+  publication (Q15).
+- **Not done:** nothing is built. No test has run. VETO's grounds are not cleared; only VETO can
+  clear them, in a later cycle.
+- **APPROVED BY:** nobody — pending (the owner approves or rejects the spec).
+
+## D-041 — 2026-10-28 — The governed-agents cycle-1 spec is approved as (b) (resolves D-040)
+
+- **Decided:**
+  - `docs/specs/2026-10-28-governed-agents-cycle-1.md` is approved as (b), with ENGINEER's
+    recommendations on the questions of its section 6 that the owner was not asked separately.
+  - Code is written from it in the three pull requests of its section 4.15, each refusal test
+    seen failing first against its named break.
+  - Each pull request is merged when CI and the Gate are green, before VETO's next turn (Q13).
+  - The spec is one feature under the protocol's rule 1 (Q18).
+  - The spec and D-037 to D-041 go to the public repository in one pull request, without the
+    earlier drafts or the reviewers' working files (Q15).
+- **Evidence:** the spec as approved is revision r4. Its appendices record the four review rounds.
+  VETO's grounds stay open until VETO's next turn.
+- **Alternatives rejected:**
+  - (c), keeping the spec as a design and building nothing until VETO's next turn;
+  - holding merges until VETO's next turn;
+  - splitting token grants, draft-only tokens and refusal records into the next cycle;
+  - keeping the spec local until the code is ready.
+- **APPROVED BY:** the owner, 2026-10-28, choosing "Approve as (b) (Recommended)", "Merge when
+  green (Recommended)", "One feature (Recommended)" and "Commit via PR (Recommended)".
