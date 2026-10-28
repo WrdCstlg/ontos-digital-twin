@@ -724,3 +724,26 @@ needs the owner, or the next cycle's ENGINEER spec, to decide:
   - keeping the spec local until the code is ready.
 - **APPROVED BY:** the owner, 2026-10-28, choosing "Approve as (b) (Recommended)", "Merge when
   green (Recommended)", "One feature (Recommended)" and "Commit via PR (Recommended)".
+
+## D-042 — 2026-10-28 — The spec goes in by pull request; the private copy is not mirrored yet
+
+- **Decided:**
+  - The branch `docs/governed-agents-spec` is pushed to the public repository without an AI
+    trailer, and a pull request is opened.
+  - It is squash-merged when CI and the Gate are green. If anything fails, the work stops there
+    and is reported, not merged.
+  - The merged master is not mirrored to the private copy for now. The private copy's master
+    holds an unpublished checkpoint commit that the public master lacks, so the usual mirror push
+    would not fast-forward. What becomes of that commit is decided separately.
+- **Evidence:** before pushing, on 2026-10-28:
+  - The branch is one commit on `9d4b036`, which `git ls-remote` read as the public master.
+  - `gh repo view` read the public repository as PUBLIC.
+  - `git status --short` was clean.
+  - Staged: 2 files, +2,292 lines, of which this entry is not part.
+  - A pattern scan of the added lines for keys, tokens, home paths, account names, email,
+    export-control wording and AI-tool attribution found 2 hits. Both are the HTTP header name
+    `x-iot-api-key` in the spec's text.
+- **Alternatives rejected:** opening the pull request and leaving the merge to the owner; not
+  pushing yet; mirroring the merged master to a side branch of the private copy.
+- **APPROVED BY:** the owner, 2026-10-28, choosing "Push, PR, merge when green (Recommended)" and
+  "Skip mirror for now (Recommended)".
